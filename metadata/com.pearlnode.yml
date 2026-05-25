@@ -1,0 +1,25 @@
+Categories:
+  - Remote Controller
+License: MIT
+SourceCode: https://github.com/vandah/pearlnode
+IssueTracker: https://github.com/vandah/pearlnode/issues
+
+AutoName: Pearlnode
+AuthorName: Vanda Hendrychová
+AuthorEmail: vandah@users.noreply.github.com
+
+RepoType: git
+Repo: https://github.com/vandah/pearlnode
+
+Builds:
+  - versionName: '1.0'
+    versionCode: 1
+    commit: v1.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '1.0'
+CurrentVersionCode: 1
