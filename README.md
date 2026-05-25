@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" width="128" alt="Pearlnode icon">
+</p>
+
 # Pearlnode
 
 A local-only Android app for controlling Shelly smart home devices. No cloud account or internet required.
