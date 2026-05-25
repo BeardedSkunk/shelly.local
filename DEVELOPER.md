@@ -489,18 +489,19 @@ Main dependencies and their roles:
 
 **Install dependencies:**
 ```bash
-sudo apt install opensc yubico-piv-tool
+sudo apt install yubico-piv-tool ykcs11
 ```
 
-**Generate the signing key directly on the YubiKey** (it never leaves the device):
+**Generate the signing key directly on the YubiKey** (it never leaves the device).
+`--pin-policy=never` is required — `apksigner` opens multiple PKCS#11 sessions and the key must be usable without per-operation PIN re-auth:
 ```bash
-yubico-piv-tool -a generate -s 9c -A RSA2048 -o pubkey.pem
+yubico-piv-tool -a generate -s 9c -A RSA2048 --pin-policy=never -o pubkey.pem
 ```
+The warning "The private key and the X509Certificate in slot 9c do not match" is expected if a key already existed — ignore it.
 
 **Create a self-signed certificate and load it onto the YubiKey:**
 ```bash
-yubico-piv-tool -a verify-pin -a selfsign-certificate \
-  -s 9c -S "/CN=Pearlnode/" -i pubkey.pem -o cert.pem
+yubico-piv-tool -a selfsign-certificate -s 9c -S "/CN=Pearlnode/" -i pubkey.pem -o cert.pem
 yubico-piv-tool -a import-certificate -s 9c -i cert.pem
 ```
 
@@ -521,9 +522,9 @@ Share `pearlnode.cer` with F-Droid as part of the reproducible builds setup. It 
 | Item | Where | Why |
 |---|---|---|
 | The YubiKey itself | Physical device | Private key lives here and never leaves |
-| PIN | Password manager | Required to sign every release |
+| PIN | Password manager | Required for token login when signing |
 | PUK | Password manager | Used to unblock the YubiKey if PIN is entered wrong 3 times |
-| `cert.pem` / `pearlnode.cer` | Anywhere (public) | Public certificate — needed if you ever re-register with F-Droid |
+| `pearlnode.cer` | Anywhere (public) | Public certificate — needed if you ever re-register with F-Droid |
 
 **What you do NOT need** (unlike a traditional keystore):
 - No `.jks` or `.p12` keystore file
@@ -536,62 +537,35 @@ If you lose the YubiKey you will need to generate a new key and re-register with
 
 ### Prerequisites
 
-- `openjdk-17-jdk` installed (`sudo apt install openjdk-17-jdk`)
-- `zipalign` from Android SDK build-tools 36 — the script expects it at `~/Android/Sdk/build-tools/36.0.0/zipalign`; override with `ZIPALIGN=/path/to/zipalign ./release.sh` if your SDK is elsewhere
-- Signing uses `jarsigner` (built into the JDK) — `apksigner` has unfixable PKCS#11 session issues with YubiKey
-- `opensc` installed: `sudo apt install opensc`
-- YubiKey with PIV signing key set up in slot 9c
+- `openjdk-17-jdk` installed: `sudo apt install openjdk-17-jdk`
+- `ykcs11` installed: `sudo apt install ykcs11`
+- `apksigner` from Android SDK build-tools 36 — the script expects it at `~/Android/Sdk/build-tools/36.0.0/apksigner`; override with `APKSIGNER=/path/to/apksigner ./release.sh` if your SDK is elsewhere
+- YubiKey with PIV signing key set up in slot 9c (see above)
 - `pkcs11.cfg` in the repo root (already committed):
   ```
-  name = OpenSC
-  library = /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so
+  name = YubiKey
+  library = /usr/lib/x86_64-linux-gnu/libykcs11.so
   ```
 
 ### Steps
 
-**1. Bump the version in `app/build.gradle.kts`:**
-```kotlin
-versionCode = <previous + 1>
-versionName = "<new version>"
-```
-
-**2. Add a changelog entry:**
+Just run:
 ```bash
-echo "What changed in this release." > fastlane/metadata/android/en-US/changelogs/<versionCode>.txt
+./release.sh
 ```
 
-**3. Build the unsigned APK:**
+Or to re-sign the current version without bumping:
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-./gradlew assembleRelease
+./release.sh --skip-bump
 ```
 
-**4. Sign with YubiKey:**
+The script will prompt for the YubiKey PIN for token login, then produce `pearlnode-v<version>.apk`.
+
+**After the script completes:**
 ```bash
-# Sign (jarsigner will prompt for YubiKey PIN)
-jarsigner \
-  -J--add-exports=jdk.crypto.cryptoki/sun.security.pkcs11=ALL-UNNAMED \
-  -keystore NONE -storetype PKCS11 \
-  -providerClass sun.security.pkcs11.SunPKCS11 \
-  -providerArg pkcs11.cfg \
-  -sigalg SHA256withRSA -digestalg SHA-256 \
-  -signedjar app-signed-v1.apk \
-  app/build/outputs/apk/release/app-release-unsigned.apk \
-  "X.509 Certificate for Digital Signature"
-
-# Align
-~/Android/Sdk/build-tools/36.0.0/zipalign -v 4 app-signed-v1.apk pearlnode-v<version>.apk
-rm app-signed-v1.apk
+gh release create v<version> pearlnode-v<version>.apk \
+  --title "Pearlnode <version>" \
+  --notes "What changed in this release."
 ```
-
-**5. Commit, tag, and push:**
-```bash
-git add app/build.gradle.kts fastlane/metadata/android/en-US/changelogs/
-git commit -m "Release v<version>"
-git tag v<version>
-git push origin main --tags
-```
-
-**6. Create a GitHub release** for the new tag and attach the signed APK (`pearlnode-v<version>.apk`). F-Droid requires the signed APK for reproducible build verification.
 
 F-Droid's bot will detect the new tag automatically and open an MR in fdroiddata to update the version — no manual changes to that repo are needed.
