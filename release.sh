@@ -62,6 +62,9 @@ JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED" \
     --ks "$KEYSTORE" \
     --ks-key-alias pearlnode \
     --ks-pass "pass:$KS_PASS" \
+    --v1-signing-enabled false \
+    --v2-signing-enabled true \
+    --v3-signing-enabled true \
     --out "$SIGNED" \
     "$UNSIGNED"
 unset KS_PASS
