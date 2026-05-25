@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Credentials are Keystore-bound and cannot be restored to a different device -->
+    <exclude domain="sharedpref" path="shelly_credentials.xml"/>
+</full-backup-content>

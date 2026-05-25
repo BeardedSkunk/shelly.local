@@ -1,0 +1,23 @@
+package com.pearlnode.data.db
+
+import androidx.room.*
+import com.pearlnode.model.Device
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface DeviceDao {
+    @Query("SELECT * FROM devices ORDER BY sortOrder ASC, name ASC")
+    fun observeAll(): Flow<List<Device>>
+
+    @Query("SELECT * FROM devices ORDER BY sortOrder ASC, name ASC")
+    suspend fun getAll(): List<Device>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(device: Device)
+
+    @Delete
+    suspend fun delete(device: Device)
+
+    @Query("UPDATE devices SET generation = :gen WHERE id = :id")
+    suspend fun updateGeneration(id: String, gen: String)
+}

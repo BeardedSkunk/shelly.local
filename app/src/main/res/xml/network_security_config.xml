@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Shelly devices communicate over plain HTTP on the local network with no HTTPS
+        support in most firmware versions. Cleartext is allowed globally for this reason,
+        but the one internet host the app contacts is locked down to HTTPS only.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
+
+    <!-- Firmware update server must always use HTTPS -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">shelly.cloud</domain>
+    </domain-config>
+</network-security-config>

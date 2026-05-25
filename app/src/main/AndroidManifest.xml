@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Alarm sync: discover clock app content providers on Android 11+ -->
+    <queries>
+        <package android:name="com.android.deskclock" />
+        <package android:name="com.google.android.deskclock" />
+        <package android:name="com.sec.android.app.clockpackage" />
+    </queries>
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- WiFi state for detecting current subnet (no location permission needed) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Public Downloads folder on Android 8/9; not needed on 10+ -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+
+    <!-- Bluetooth (BLE discovery, API 31+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
+        tools:targetApi="s" />
+    <!-- Bluetooth legacy (pre-API 31) -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <!-- BLE scanning requires location on Android 8-10 (neverForLocation flag only available from API 31) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <application
+        android:name=".PearlnodeApp"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Pearlnode"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:ignore="GoogleAppIndexingWarning">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Multi-device home screen widget -->
+        <receiver
+            android:name=".ui.widget.ShellyWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_multi_device" />
+        </receiver>
+
+        <!-- Per-device home screen widget -->
+        <receiver
+            android:name=".ui.widget.ShellyDeviceWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_single_device" />
+        </receiver>
+
+        <activity
+            android:name=".ui.widget.ShellyDeviceWidgetConfigActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Alarm sync: reacts to phone alarm changes to update device schedules -->
+        <receiver
+            android:name=".alarmSync.AlarmChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.app.action.NEXT_ALARM_CLOCK_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

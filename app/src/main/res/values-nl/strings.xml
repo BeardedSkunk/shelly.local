@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pearlnode</string>
+    <string name="widget_description">Bedien Shelly-apparaten vanaf het startscherm</string>
+    <string name="widget_device_description">Bedien één Shelly-apparaat vanaf het startscherm</string>
+
+    <!-- Common -->
+    <string name="cancel">Annuleren</string>
+    <string name="save">Opslaan</string>
+    <string name="add">Toevoegen</string>
+    <string name="ok">OK</string>
+    <string name="done">Klaar</string>
+    <string name="retry">Opnieuw proberen</string>
+    <string name="delete">Verwijderen</string>
+    <string name="search">Zoeken…</string>
+    <string name="offline">Offline</string>
+    <string name="stop">Stoppen</string>
+    <string name="scan">Scannen</string>
+
+    <!-- Settings / language -->
+    <string name="settings">Instellingen</string>
+    <string name="language">Taal</string>
+    <string name="language_system">Systeemtaal</string>
+    <string name="language_en">English</string>
+    <string name="language_de">Deutsch</string>
+    <string name="language_cs">Čeština</string>
+    <string name="language_sk">Slovenčina</string>
+    <string name="language_pl">Polski</string>
+    <string name="language_fr">Français</string>
+    <string name="language_it">Italiano</string>
+    <string name="language_es">Español</string>
+    <string name="language_nl">Nederlands</string>
+
+    <!-- Device list -->
+    <string name="no_devices_title">Geen apparaten</string>
+    <string name="no_devices_hint">Tik op + om een apparaat te ontdekken of toe te voegen</string>
+    <string name="delete_device_title">%1$s verwijderen?</string>
+    <string name="delete_device_message">Dit verwijdert het apparaat en de opgeslagen inloggegevens uit de app. Het fysieke apparaat wordt niet beïnvloed.</string>
+    <string name="fw_out_of_date">FW verouderd</string>
+
+    <!-- Add / edit device -->
+    <string name="edit_device">Apparaat bewerken</string>
+    <string name="add_device">Apparaat toevoegen</string>
+    <string name="device_not_found_hint">Apparaat niet gevonden? Toevoegen via IP-adres</string>
+    <string name="ip_address">IP-adres</string>
+    <string name="ip_placeholder">192.168.1.100</string>
+    <string name="device_name">Apparaatnaam</string>
+    <string name="device_name_hint">bijv. Stopcontact woonkamer</string>
+    <string name="device_type">Apparaattype</string>
+    <string name="device_type_hint">Automatisch gedetecteerd of tik om te kiezen</string>
+    <string name="auth_optional">Verificatie (optioneel)</string>
+    <string name="auth_hint">Inloggegevens worden versleuteld op het apparaat opgeslagen en nooit naar de cloud gestuurd.</string>
+    <string name="username">Gebruikersnaam</string>
+    <string name="password">Wachtwoord</string>
+    <string name="autofill_hint">Tik op 🔍 om naam en type automatisch in te vullen vanuit het apparaat</string>
+    <string name="save_changes">Wijzigingen opslaan</string>
+    <string name="add_device_button">Apparaat toevoegen</string>
+    <string name="networks_to_scan">Te scannen netwerken</string>
+    <string name="range_from">Van</string>
+    <string name="range_to">Tot</string>
+    <string name="add_network">Netwerk toevoegen</string>
+    <string name="ble_only">Alleen BLE – maak eerst verbinding met het hotspot van het apparaat</string>
+    <string name="select_device_type">Apparaattype selecteren</string>
+    <string name="tap_scan_hint">Tik op Scannen om apparaten op uw netwerk te ontdekken</string>
+
+    <!-- Device control -->
+    <string name="device_offline">Apparaat offline</string>
+    <string name="power">Voeding</string>
+    <string name="channel_n">Kanaal %1$d</string>
+    <string name="trigger">Activeren</string>
+    <string name="trigger_door">Deur / poort activeren</string>
+    <string name="color">Kleur</string>
+    <string name="brightness">Helderheid</string>
+    <string name="device_info">Apparaatinformatie</string>
+    <string name="open_web_ui">Webinterface openen</string>
+    <string name="password_copied">Wachtwoord gekopieerd – gebruikersnaam: %1$s</string>
+
+    <!-- Schedules -->
+    <string name="schedules">Schema\'s</string>
+    <string name="no_schedules">Geen schema\'s. Tik op + om er een toe te voegen.</string>
+    <string name="add_schedule">Schema toevoegen</string>
+    <string name="edit_schedule">Schema bewerken</string>
+    <string name="time_label">Tijd:</string>
+    <string name="repeat_on">Herhalen op (geen = elke dag):</string>
+    <string name="action_label">Actie:</string>
+    <string name="action_turn_on">Inschakelen</string>
+    <string name="action_turn_off">Uitschakelen</string>
+    <string name="action_turn_on_timer">X seconden inschakelen, dan automatisch uitschakelen</string>
+    <string name="action_turn_off_timer">X seconden uitschakelen, dan automatisch inschakelen</string>
+    <string name="action_turn_on_timer_label">Inschakelen voor %1$s</string>
+    <string name="action_turn_off_timer_label">Uitschakelen voor %1$s</string>
+    <string name="action_set_color">Kleur instellen</string>
+    <string name="duration_label">Duur:</string>
+    <string name="seconds">seconden</string>
+    <string name="timer_hint">bijv. 1–2 s voor een deurimpuls, 1800 s = 30 min</string>
+    <string name="every_day">Elke dag</string>
+    <string name="pulse_duration_title">Impulsduur</string>
+    <string name="pulse_duration_desc">Hoe lang het relais ingedrukt houden voor terugkeer.</string>
+    <string name="pulse_duration_typical">Typische deurimpuls: 0,5–2 seconden</string>
+
+    <!-- Firmware -->
+    <string name="firmware">Firmware</string>
+    <string name="firmware_checking">Controleren op updates…</string>
+    <string name="firmware_current">Huidig: %1$s</string>
+    <string name="firmware_update_available">Update beschikbaar</string>
+    <string name="firmware_update_button">Bijwerken</string>
+    <string name="firmware_up_to_date">Up-to-date (%1$s)</string>
+    <string name="firmware_channel_stable">Stabiel</string>
+    <string name="firmware_channel_beta">Beta</string>
+    <string name="firmware_updating_title">Firmware bijwerken</string>
+    <string name="firmware_downloading">Downloaden… %1$d%%</string>
+    <string name="firmware_uploading">Uploaden naar apparaat… %1$d%%</string>
+    <string name="firmware_rebooting">Apparaat opnieuw opstarten…</string>
+    <string name="firmware_ready_title">Firmware gereed</string>
+    <string name="firmware_ready_message">Firmware gedownload naar uw apparaat:</string>
+    <string name="firmware_ready_hint">Open de webinterface van het apparaat en gebruik de updatepagina om het te installeren.</string>
+    <string name="firmware_updated_title">Firmware bijgewerkt</string>
+    <string name="firmware_updated_message">Het apparaat is bijgewerkt en succesvol opnieuw opgestart.</string>
+    <string name="firmware_update_failed">Update mislukt</string>
+
+    <!-- Alarm Sync -->
+    <string name="alarm_sync">Wekker synchroniseren</string>
+    <string name="alarm_sync_subtitle">Apparaat uitvoeren relatief aan telefonische wekker</string>
+    <string name="alarm_sync_offset_label">Voorsprong:</string>
+    <string name="alarm_sync_minutes">min</string>
+    <string name="alarm_sync_offset_before">%1$d min voor de wekker</string>
+    <string name="alarm_sync_offset_at">Op wektijd</string>
+    <string name="alarm_sync_offset_after">%1$d min na de wekker</string>
+    <string name="alarm_sync_now">Nu synchroniseren</string>
+    <string name="alarm_sync_syncing">Synchroniseren…</string>
+    <string name="alarm_sync_status_ok">%1$d schema(\'s) gesynchroniseerd</string>
+    <string name="alarm_sync_no_alarm">Geen actieve wekker gevonden</string>
+    <string name="alarm_sync_error">Synchronisatie mislukt: %1$s</string>
+</resources>

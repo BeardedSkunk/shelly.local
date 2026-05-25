@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pearlnode</string>
+    <string name="widget_description">Toggle Shelly devices from your home screen</string>
+    <string name="widget_device_description">Control a single Shelly device from your home screen</string>
+    <string name="widget_tap_to_configure">Tap to configure</string>
+    <string name="widget_choose_device">Choose device for widget</string>
+
+    <!-- Common -->
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="add">Add</string>
+    <string name="ok">OK</string>
+    <string name="done">Done</string>
+    <string name="retry">Retry</string>
+    <string name="delete">Delete</string>
+    <string name="search">Search…</string>
+    <string name="offline">Offline</string>
+    <string name="stop">Stop</string>
+    <string name="scan">Scan</string>
+
+    <!-- Settings / language -->
+    <string name="settings">Settings</string>
+    <string name="language">Language</string>
+    <string name="language_system">System default</string>
+    <string name="language_en">English</string>
+    <string name="language_de">Deutsch</string>
+    <string name="language_cs">Čeština</string>
+    <string name="language_sk">Slovenčina</string>
+    <string name="language_pl">Polski</string>
+    <string name="language_fr">Français</string>
+    <string name="language_it">Italiano</string>
+    <string name="language_es">Español</string>
+    <string name="language_nl">Nederlands</string>
+
+    <!-- Device list -->
+    <string name="no_devices_title">No devices yet</string>
+    <string name="no_devices_hint">Tap + to discover or add a device</string>
+    <string name="delete_device_title">Delete %1$s?</string>
+    <string name="delete_device_message">This removes the device and its saved credentials from the app. The physical device is not affected.</string>
+    <string name="fw_out_of_date">FW out of date</string>
+
+    <!-- Add / edit device -->
+    <string name="edit_device">Edit Device</string>
+    <string name="add_device">Add Device</string>
+    <string name="device_not_found_hint">Device not found? Add by IP address</string>
+    <string name="ip_address">IP address</string>
+    <string name="ip_placeholder">192.168.1.100</string>
+    <string name="device_name">Device name</string>
+    <string name="device_name_hint">e.g. Living room plug</string>
+    <string name="device_type">Device type</string>
+    <string name="device_type_hint">Auto-detected or tap to choose</string>
+    <string name="auth_optional">Authentication (optional)</string>
+    <string name="auth_hint">Credentials are encrypted on-device and never sent to any cloud.</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="autofill_hint">Tap 🔍 to auto-fill name and type from the device</string>
+    <string name="save_changes">Save changes</string>
+    <string name="add_device_button">Add device</string>
+    <string name="networks_to_scan">Networks to scan</string>
+    <string name="range_from">From</string>
+    <string name="range_to">To</string>
+    <string name="add_network">Add network</string>
+    <string name="ble_only">BLE only (connect to device hotspot first)</string>
+    <string name="select_device_type">Select device type</string>
+    <string name="tap_scan_hint">Tap Scan to discover devices on your network</string>
+
+    <!-- Device control -->
+    <string name="device_offline">Device is offline</string>
+    <string name="power">Power</string>
+    <string name="channel_n">Channel %1$d</string>
+    <string name="trigger">Trigger</string>
+    <string name="trigger_door">Trigger door / gate</string>
+    <string name="color">Color</string>
+    <string name="brightness">Brightness</string>
+    <string name="device_info">Device info</string>
+    <string name="open_web_ui">Open Web UI</string>
+    <string name="password_copied">Password copied, username: %1$s</string>
+
+    <!-- Schedules -->
+    <string name="schedules">Schedules</string>
+    <string name="no_schedules">No schedules. Tap + to add one.</string>
+    <string name="add_schedule">Add schedule</string>
+    <string name="edit_schedule">Edit schedule</string>
+    <string name="time_label">Time:</string>
+    <string name="repeat_on">Repeat on (none = every day):</string>
+    <string name="action_label">Action:</string>
+    <string name="action_turn_on">Turn ON</string>
+    <string name="action_turn_off">Turn OFF</string>
+    <string name="action_turn_on_timer">Turn ON for X seconds, then auto-OFF</string>
+    <string name="action_turn_off_timer">Turn OFF for X seconds, then auto-ON</string>
+    <string name="action_turn_on_timer_label">Turn ON for %1$s</string>
+    <string name="action_turn_off_timer_label">Turn OFF for %1$s</string>
+    <string name="action_set_color">Set color</string>
+    <string name="duration_label">Duration:</string>
+    <string name="seconds">seconds</string>
+    <string name="timer_hint">e.g. 1–2s for a door pulse, 1800s = 30 min</string>
+    <string name="every_day">Every day</string>
+    <string name="pulse_duration_title">Pulse duration</string>
+    <string name="pulse_duration_desc">How long to hold the relay before reverting.</string>
+    <string name="pulse_duration_typical">Typical door trigger: 0.5–2 seconds</string>
+
+    <!-- Firmware -->
+    <string name="firmware">Firmware</string>
+    <string name="firmware_checking">Checking for updates…</string>
+    <string name="firmware_current">Current: %1$s</string>
+    <string name="firmware_update_available">Update available</string>
+    <string name="firmware_update_button">Update</string>
+    <string name="firmware_up_to_date">Up to date (%1$s)</string>
+    <string name="firmware_channel_stable">Stable</string>
+    <string name="firmware_channel_beta">Beta</string>
+    <string name="firmware_updating_title">Updating firmware</string>
+    <string name="firmware_downloading">Downloading… %1$d%%</string>
+    <string name="firmware_uploading">Uploading to device… %1$d%%</string>
+    <string name="firmware_rebooting">Rebooting device…</string>
+    <string name="firmware_ready_title">Firmware ready</string>
+    <string name="firmware_ready_message">Firmware downloaded to your device:</string>
+    <string name="firmware_ready_hint">Open the device web UI and use its firmware upload page to apply it.</string>
+    <string name="firmware_updated_title">Firmware updated</string>
+    <string name="firmware_updated_message">The device was updated and has rebooted successfully.</string>
+    <string name="firmware_update_failed">Update failed</string>
+
+    <!-- Alarm Sync -->
+    <string name="alarm_sync">Alarm Sync</string>
+    <string name="alarm_sync_subtitle">Run device relative to phone alarm</string>
+    <string name="alarm_sync_offset_label">Offset:</string>
+    <string name="alarm_sync_minutes">min</string>
+    <string name="alarm_sync_offset_before">%1$d min before alarm</string>
+    <string name="alarm_sync_offset_at">At alarm time</string>
+    <string name="alarm_sync_offset_after">%1$d min after alarm</string>
+    <string name="alarm_sync_now">Sync Now</string>
+    <string name="alarm_sync_syncing">Syncing…</string>
+    <string name="alarm_sync_status_ok">Synced %1$d schedule(s)</string>
+    <string name="alarm_sync_no_alarm">No active alarm found</string>
+    <string name="alarm_sync_error">Sync failed: %1$s</string>
+</resources>

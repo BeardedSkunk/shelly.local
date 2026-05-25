@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pearlnode</string>
+    <string name="widget_description">Prepínanie zariadení Shelly z domovskej obrazovky</string>
+    <string name="widget_device_description">Ovládanie jedného zariadenia Shelly z domovskej obrazovky</string>
+
+    <!-- Common -->
+    <string name="cancel">Zrušiť</string>
+    <string name="save">Uložiť</string>
+    <string name="add">Pridať</string>
+    <string name="ok">OK</string>
+    <string name="done">Hotovo</string>
+    <string name="retry">Skúsiť znovu</string>
+    <string name="delete">Odstrániť</string>
+    <string name="search">Hľadať…</string>
+    <string name="offline">Offline</string>
+    <string name="stop">Zastaviť</string>
+    <string name="scan">Skenovať</string>
+
+    <!-- Settings / language -->
+    <string name="settings">Nastavenia</string>
+    <string name="language">Jazyk</string>
+    <string name="language_system">Predvolený systémový</string>
+    <string name="language_en">English</string>
+    <string name="language_de">Deutsch</string>
+    <string name="language_cs">Čeština</string>
+    <string name="language_sk">Slovenčina</string>
+    <string name="language_pl">Polski</string>
+    <string name="language_fr">Français</string>
+    <string name="language_it">Italiano</string>
+    <string name="language_es">Español</string>
+    <string name="language_nl">Nederlands</string>
+
+    <!-- Device list -->
+    <string name="no_devices_title">Zatiaľ žiadne zariadenia</string>
+    <string name="no_devices_hint">Klepnutím na + objavíte alebo pridáte zariadenie</string>
+    <string name="delete_device_title">Odstrániť %1$s?</string>
+    <string name="delete_device_message">Tým sa zariadenie a jeho uložené prihlasovacie údaje odstránia z aplikácie. Fyzické zariadenie nebude ovplyvnené.</string>
+    <string name="fw_out_of_date">FW zastaraný</string>
+
+    <!-- Add / edit device -->
+    <string name="edit_device">Upraviť zariadenie</string>
+    <string name="add_device">Pridať zariadenie</string>
+    <string name="device_not_found_hint">Zariadenie nenájdené? Pridať podľa IP adresy</string>
+    <string name="ip_address">IP adresa</string>
+    <string name="ip_placeholder">192.168.1.100</string>
+    <string name="device_name">Názov zariadenia</string>
+    <string name="device_name_hint">napr. Zástrčka v obývačke</string>
+    <string name="device_type">Typ zariadenia</string>
+    <string name="device_type_hint">Automaticky zistené alebo vyberte klepnutím</string>
+    <string name="auth_optional">Overenie (voliteľné)</string>
+    <string name="auth_hint">Prihlasovacie údaje sú šifrovane uložené v zariadení a nikdy nie sú odosielané do cloudu.</string>
+    <string name="username">Používateľské meno</string>
+    <string name="password">Heslo</string>
+    <string name="autofill_hint">Klepnutím na 🔍 automaticky vyplníte názov a typ zo zariadenia</string>
+    <string name="save_changes">Uložiť zmeny</string>
+    <string name="add_device_button">Pridať zariadenie</string>
+    <string name="networks_to_scan">Siete na skenovanie</string>
+    <string name="range_from">Od</string>
+    <string name="range_to">Do</string>
+    <string name="add_network">Pridať sieť</string>
+    <string name="ble_only">Iba BLE – najprv sa pripojte k hotspotu zariadenia</string>
+    <string name="select_device_type">Vybrať typ zariadenia</string>
+    <string name="tap_scan_hint">Klepnutím na Skenovať objavíte zariadenia v sieti</string>
+
+    <!-- Device control -->
+    <string name="device_offline">Zariadenie je offline</string>
+    <string name="power">Napájanie</string>
+    <string name="channel_n">Kanál %1$d</string>
+    <string name="trigger">Spustiť</string>
+    <string name="trigger_door">Spustiť dvere / bránu</string>
+    <string name="color">Farba</string>
+    <string name="brightness">Jas</string>
+    <string name="device_info">Informácie o zariadení</string>
+    <string name="open_web_ui">Otvoriť webové rozhranie</string>
+    <string name="password_copied">Heslo skopírované – používateľské meno: %1$s</string>
+
+    <!-- Schedules -->
+    <string name="schedules">Časové plány</string>
+    <string name="no_schedules">Žiadne časové plány. Klepnutím na + pridáte.</string>
+    <string name="add_schedule">Pridať časový plán</string>
+    <string name="edit_schedule">Upraviť časový plán</string>
+    <string name="time_label">Čas:</string>
+    <string name="repeat_on">Opakovať v (žiadne = každý deň):</string>
+    <string name="action_label">Akcia:</string>
+    <string name="action_turn_on">Zapnúť</string>
+    <string name="action_turn_off">Vypnúť</string>
+    <string name="action_turn_on_timer">Zapnúť na X sekúnd, potom automaticky vypnúť</string>
+    <string name="action_turn_off_timer">Vypnúť na X sekúnd, potom automaticky zapnúť</string>
+    <string name="action_turn_on_timer_label">Zapnúť na %1$s</string>
+    <string name="action_turn_off_timer_label">Vypnúť na %1$s</string>
+    <string name="action_set_color">Nastaviť farbu</string>
+    <string name="duration_label">Trvanie:</string>
+    <string name="seconds">sekúnd</string>
+    <string name="timer_hint">napr. 1–2 s pre impulz dverí, 1800 s = 30 min</string>
+    <string name="every_day">Každý deň</string>
+    <string name="pulse_duration_title">Trvanie impulzu</string>
+    <string name="pulse_duration_desc">Ako dlho pridržať relé pred návratom.</string>
+    <string name="pulse_duration_typical">Typický impulz dverí: 0,5–2 sekundy</string>
+
+    <!-- Firmware -->
+    <string name="firmware">Firmware</string>
+    <string name="firmware_checking">Kontrola aktualizácií…</string>
+    <string name="firmware_current">Aktuálne: %1$s</string>
+    <string name="firmware_update_available">K dispozícii je aktualizácia</string>
+    <string name="firmware_update_button">Aktualizovať</string>
+    <string name="firmware_up_to_date">Aktuálne (%1$s)</string>
+    <string name="firmware_channel_stable">Stabilné</string>
+    <string name="firmware_channel_beta">Beta</string>
+    <string name="firmware_updating_title">Aktualizácia firmwaru</string>
+    <string name="firmware_downloading">Sťahovanie… %1$d%%</string>
+    <string name="firmware_uploading">Nahrávanie do zariadenia… %1$d%%</string>
+    <string name="firmware_rebooting">Reštartovanie zariadenia…</string>
+    <string name="firmware_ready_title">Firmware pripravený</string>
+    <string name="firmware_ready_message">Firmware stiahnutý do vášho zariadenia:</string>
+    <string name="firmware_ready_hint">Otvorte webové rozhranie zariadenia a nahrajte firmware cez stránku aktualizácie.</string>
+    <string name="firmware_updated_title">Firmware aktualizovaný</string>
+    <string name="firmware_updated_message">Zariadenie bolo aktualizované a úspešne reštartované.</string>
+    <string name="firmware_update_failed">Aktualizácia zlyhala</string>
+
+    <!-- Alarm Sync -->
+    <string name="alarm_sync">Synchronizácia budíka</string>
+    <string name="alarm_sync_subtitle">Spustiť zariadenie relatívne k budíku telefónu</string>
+    <string name="alarm_sync_offset_label">Posun:</string>
+    <string name="alarm_sync_minutes">min</string>
+    <string name="alarm_sync_offset_before">%1$d min pred budíkom</string>
+    <string name="alarm_sync_offset_at">V čase budenia</string>
+    <string name="alarm_sync_offset_after">%1$d min po budení</string>
+    <string name="alarm_sync_now">Synchronizovať teraz</string>
+    <string name="alarm_sync_syncing">Synchronizácia…</string>
+    <string name="alarm_sync_status_ok">Synchronizované %1$d časový/časové plán/plány</string>
+    <string name="alarm_sync_no_alarm">Nenašiel sa žiadny aktívny budík</string>
+    <string name="alarm_sync_error">Synchronizácia zlyhala: %1$s</string>
+</resources>

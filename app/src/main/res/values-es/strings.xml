@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pearlnode</string>
+    <string name="widget_description">Controla dispositivos Shelly desde la pantalla de inicio</string>
+    <string name="widget_device_description">Controla un dispositivo Shelly desde la pantalla de inicio</string>
+
+    <!-- Common -->
+    <string name="cancel">Cancelar</string>
+    <string name="save">Guardar</string>
+    <string name="add">Añadir</string>
+    <string name="ok">OK</string>
+    <string name="done">Hecho</string>
+    <string name="retry">Reintentar</string>
+    <string name="delete">Eliminar</string>
+    <string name="search">Buscar…</string>
+    <string name="offline">Sin conexión</string>
+    <string name="stop">Detener</string>
+    <string name="scan">Escanear</string>
+
+    <!-- Settings / language -->
+    <string name="settings">Ajustes</string>
+    <string name="language">Idioma</string>
+    <string name="language_system">Idioma del sistema</string>
+    <string name="language_en">English</string>
+    <string name="language_de">Deutsch</string>
+    <string name="language_cs">Čeština</string>
+    <string name="language_sk">Slovenčina</string>
+    <string name="language_pl">Polski</string>
+    <string name="language_fr">Français</string>
+    <string name="language_it">Italiano</string>
+    <string name="language_es">Español</string>
+    <string name="language_nl">Nederlands</string>
+
+    <!-- Device list -->
+    <string name="no_devices_title">Sin dispositivos</string>
+    <string name="no_devices_hint">Pulsa + para descubrir o añadir un dispositivo</string>
+    <string name="delete_device_title">¿Eliminar %1$s?</string>
+    <string name="delete_device_message">Esto elimina el dispositivo y sus credenciales guardadas de la app. El dispositivo físico no se ve afectado.</string>
+    <string name="fw_out_of_date">FW desactualizado</string>
+
+    <!-- Add / edit device -->
+    <string name="edit_device">Editar dispositivo</string>
+    <string name="add_device">Añadir dispositivo</string>
+    <string name="device_not_found_hint">¿Dispositivo no encontrado? Añadir por dirección IP</string>
+    <string name="ip_address">Dirección IP</string>
+    <string name="ip_placeholder">192.168.1.100</string>
+    <string name="device_name">Nombre del dispositivo</string>
+    <string name="device_name_hint">p. ej. Enchufe del salón</string>
+    <string name="device_type">Tipo de dispositivo</string>
+    <string name="device_type_hint">Detectado automáticamente o pulsa para elegir</string>
+    <string name="auth_optional">Autenticación (opcional)</string>
+    <string name="auth_hint">Las credenciales se almacenan cifradas en el dispositivo y nunca se envían a la nube.</string>
+    <string name="username">Nombre de usuario</string>
+    <string name="password">Contraseña</string>
+    <string name="autofill_hint">Pulsa 🔍 para rellenar automáticamente el nombre y tipo desde el dispositivo</string>
+    <string name="save_changes">Guardar cambios</string>
+    <string name="add_device_button">Añadir dispositivo</string>
+    <string name="networks_to_scan">Redes a escanear</string>
+    <string name="range_from">Desde</string>
+    <string name="range_to">Hasta</string>
+    <string name="add_network">Añadir red</string>
+    <string name="ble_only">Solo BLE – conéctate primero al punto de acceso del dispositivo</string>
+    <string name="select_device_type">Seleccionar tipo de dispositivo</string>
+    <string name="tap_scan_hint">Pulsa Escanear para descubrir dispositivos en tu red</string>
+
+    <!-- Device control -->
+    <string name="device_offline">Dispositivo sin conexión</string>
+    <string name="power">Alimentación</string>
+    <string name="channel_n">Canal %1$d</string>
+    <string name="trigger">Activar</string>
+    <string name="trigger_door">Activar puerta / portón</string>
+    <string name="color">Color</string>
+    <string name="brightness">Brillo</string>
+    <string name="device_info">Información del dispositivo</string>
+    <string name="open_web_ui">Abrir interfaz Web</string>
+    <string name="password_copied">Contraseña copiada – nombre de usuario: %1$s</string>
+
+    <!-- Schedules -->
+    <string name="schedules">Programaciones</string>
+    <string name="no_schedules">Sin programaciones. Pulsa + para añadir una.</string>
+    <string name="add_schedule">Añadir programación</string>
+    <string name="edit_schedule">Editar programación</string>
+    <string name="time_label">Hora:</string>
+    <string name="repeat_on">Repetir el (ninguno = todos los días):</string>
+    <string name="action_label">Acción:</string>
+    <string name="action_turn_on">Encender</string>
+    <string name="action_turn_off">Apagar</string>
+    <string name="action_turn_on_timer">Encender durante X segundos, luego apagar automáticamente</string>
+    <string name="action_turn_off_timer">Apagar durante X segundos, luego encender automáticamente</string>
+    <string name="action_turn_on_timer_label">Encender durante %1$s</string>
+    <string name="action_turn_off_timer_label">Apagar durante %1$s</string>
+    <string name="action_set_color">Establecer color</string>
+    <string name="duration_label">Duración:</string>
+    <string name="seconds">segundos</string>
+    <string name="timer_hint">p. ej. 1–2 s para un pulso de puerta, 1800 s = 30 min</string>
+    <string name="every_day">Todos los días</string>
+    <string name="pulse_duration_title">Duración del pulso</string>
+    <string name="pulse_duration_desc">Tiempo que se mantiene el relé antes de volver.</string>
+    <string name="pulse_duration_typical">Pulso de puerta típico: 0,5–2 segundos</string>
+
+    <!-- Firmware -->
+    <string name="firmware">Firmware</string>
+    <string name="firmware_checking">Comprobando actualizaciones…</string>
+    <string name="firmware_current">Actual: %1$s</string>
+    <string name="firmware_update_available">Actualización disponible</string>
+    <string name="firmware_update_button">Actualizar</string>
+    <string name="firmware_up_to_date">Actualizado (%1$s)</string>
+    <string name="firmware_channel_stable">Estable</string>
+    <string name="firmware_channel_beta">Beta</string>
+    <string name="firmware_updating_title">Actualizando firmware</string>
+    <string name="firmware_downloading">Descargando… %1$d%%</string>
+    <string name="firmware_uploading">Enviando al dispositivo… %1$d%%</string>
+    <string name="firmware_rebooting">Reiniciando dispositivo…</string>
+    <string name="firmware_ready_title">Firmware listo</string>
+    <string name="firmware_ready_message">Firmware descargado en tu dispositivo:</string>
+    <string name="firmware_ready_hint">Abre la interfaz Web del dispositivo y usa la página de actualización para instalarlo.</string>
+    <string name="firmware_updated_title">Firmware actualizado</string>
+    <string name="firmware_updated_message">El dispositivo se ha actualizado y reiniciado correctamente.</string>
+    <string name="firmware_update_failed">Error en la actualización</string>
+
+    <!-- Alarm Sync -->
+    <string name="alarm_sync">Sincronizar alarma</string>
+    <string name="alarm_sync_subtitle">Ejecutar el dispositivo relativo a la alarma del teléfono</string>
+    <string name="alarm_sync_offset_label">Adelanto:</string>
+    <string name="alarm_sync_minutes">min</string>
+    <string name="alarm_sync_offset_before">%1$d min antes de la alarma</string>
+    <string name="alarm_sync_offset_at">A la hora de la alarma</string>
+    <string name="alarm_sync_offset_after">%1$d min después de la alarma</string>
+    <string name="alarm_sync_now">Sincronizar ahora</string>
+    <string name="alarm_sync_syncing">Sincronizando…</string>
+    <string name="alarm_sync_status_ok">%1$d programación(es) sincronizada(s)</string>
+    <string name="alarm_sync_no_alarm">No se encontró ninguna alarma activa</string>
+    <string name="alarm_sync_error">Error de sincronización: %1$s</string>
+</resources>
