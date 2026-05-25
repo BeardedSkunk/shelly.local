@@ -65,6 +65,7 @@ JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED" \
     --v1-signing-enabled false \
     --v2-signing-enabled true \
     --v3-signing-enabled true \
+    --alignment-preserved \
     --out "$SIGNED" \
     "$UNSIGNED"
 unset KS_PASS
