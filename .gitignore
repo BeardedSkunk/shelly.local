@@ -27,6 +27,11 @@ app/release/
 *.keystore
 *.p12
 
+# YubiKey signing artifacts
+cert.pem
+pubkey.pem
+*.idsig
+
 # Build outputs
 *.apk
 *.aab
