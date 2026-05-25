@@ -84,7 +84,7 @@ echo "  fastlane/.../icon.png"
 
 echo "Generating GitHub README icon..."
 mkdir -p "$SCRIPT_DIR/assets"
-render 256 "$SCRIPT_DIR/assets/icon.png"
+circle_crop 256 "$SCRIPT_DIR/assets/icon.png"
 echo "  assets/icon.png"
 
 echo ""
