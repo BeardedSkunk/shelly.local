@@ -485,67 +485,31 @@ Main dependencies and their roles:
 
 ## 16. Releasing a new version
 
-### YubiKey setup (one-time)
+### Keystore setup (one-time)
 
-**Install dependencies:**
-```bash
-sudo apt install yubico-piv-tool ykcs11
-```
+Generate a PKCS12 keystore and store it somewhere safe (**never commit it to git**):
 
-**Generate the signing key directly on the YubiKey** (it never leaves the device).
-`--pin-policy=never` is required — `apksigner` opens multiple PKCS#11 sessions and the key must be usable without per-operation PIN re-auth:
 ```bash
-yubico-piv-tool -a generate -s 9c -A RSA2048 --pin-policy=never -o pubkey.pem
+keytool -genkey -v \
+  -keystore ~/pearlnode.p12 -storetype PKCS12 \
+  -alias pearlnode -keyalg RSA -keysize 2048 \
+  -validity 10000
 ```
-The warning "The private key and the X509Certificate in slot 9c do not match" is expected if a key already existed — ignore it.
-
-**Create a self-signed certificate and load it onto the YubiKey:**
-```bash
-yubico-piv-tool -a selfsign-certificate -s 9c -S "/CN=Pearlnode/" -i pubkey.pem -o cert.pem
-yubico-piv-tool -a import-certificate -s 9c -i cert.pem
-```
-
-**Change the default PIN and PUK** (defaults are `123456` / `12345678`):
-```bash
-yubico-piv-tool -a change-pin
-yubico-piv-tool -a change-puk
-```
-
-**Export the public certificate for F-Droid reproducible builds:**
-```bash
-openssl x509 -in cert.pem -outform DER -out pearlnode.cer
-```
-Share `pearlnode.cer` with F-Droid as part of the reproducible builds setup. It contains only the public key — safe to share.
 
 **What to keep safe:**
 
-| Item | Where | Why |
-|---|---|---|
-| The YubiKey itself | Physical device | Private key lives here and never leaves |
-| PIN | Password manager | Required for token login when signing |
-| PUK | Password manager | Used to unblock the YubiKey if PIN is entered wrong 3 times |
-| `pearlnode.cer` | Anywhere (public) | Public certificate — needed if you ever re-register with F-Droid |
+| Item | Where |
+|---|---|
+| `~/pearlnode.p12` | Password manager (as a file attachment) + encrypted backup |
+| Keystore password | Password manager |
 
-**What you do NOT need** (unlike a traditional keystore):
-- No `.jks` or `.p12` keystore file
-- No signing credentials in `~/.gradle/gradle.properties`
-- No key backup — the key is generated on the YubiKey and cannot be exported by design
-
-If you lose the YubiKey you will need to generate a new key and re-register with F-Droid (existing installs cannot be updated silently — users will need to reinstall).
-
----
+If you lose the keystore you cannot sign future updates. Existing users will have to reinstall.
 
 ### Prerequisites
 
 - `openjdk-17-jdk` installed: `sudo apt install openjdk-17-jdk`
-- `ykcs11` installed: `sudo apt install ykcs11`
-- `apksigner` from Android SDK build-tools 36 — the script expects it at `~/Android/Sdk/build-tools/36.0.0/apksigner`; override with `APKSIGNER=/path/to/apksigner ./release.sh` if your SDK is elsewhere
-- YubiKey with PIV signing key set up in slot 9c (see above)
-- `pkcs11.cfg` in the repo root (already committed):
-  ```
-  name = YubiKey
-  library = /usr/lib/x86_64-linux-gnu/libykcs11.so
-  ```
+- `apksigner` from Android SDK build-tools 36. The script expects it at `~/Android/Sdk/build-tools/36.0.0/apksigner`; override with `APKSIGNER=/path/to/apksigner ./release.sh` if your SDK is elsewhere
+- `~/pearlnode.p12` keystore generated (see above)
 
 ### Steps
 
@@ -559,7 +523,7 @@ Or to re-sign the current version without bumping:
 ./release.sh --skip-bump
 ```
 
-The script will prompt for the YubiKey PIN for token login, then produce `pearlnode-v<version>.apk`.
+The script will prompt for the keystore password, then produce `pearlnode-v<version>.apk`.
 
 **After the script completes:**
 ```bash
@@ -568,4 +532,4 @@ gh release create v<version> pearlnode-v<version>.apk \
   --notes "What changed in this release."
 ```
 
-F-Droid's bot will detect the new tag automatically and open an MR in fdroiddata to update the version — no manual changes to that repo are needed.
+F-Droid's bot will detect the new tag automatically and open an MR in fdroiddata to update the version. No manual changes to that repo are needed.

@@ -10,7 +10,7 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PKCS11_CFG="$SCRIPT_DIR/pkcs11.cfg"
+KEYSTORE="${KEYSTORE:-$HOME/pearlnode.p12}"
 
 # Read current version from build.gradle.kts
 CURRENT_CODE=$(grep 'versionCode' "$SCRIPT_DIR/app/build.gradle.kts" | grep -v '//' | grep -oP '\d+')
@@ -54,19 +54,17 @@ cd "$SCRIPT_DIR"
 UNSIGNED="$SCRIPT_DIR/app/build/outputs/apk/release/app-release-unsigned.apk"
 SIGNED="$SCRIPT_DIR/pearlnode-v$NEW_NAME.apk"
 
-read -rsp "YubiKey PIN: " YUBIKEY_PIN
+read -rsp "Keystore password: " KS_PASS
 echo ""
 echo "Signing..."
-JAVA_TOOL_OPTIONS="--add-exports=jdk.crypto.cryptoki/sun.security.pkcs11=ALL-UNNAMED --enable-native-access=ALL-UNNAMED" \
+JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED" \
 "$APKSIGNER" sign \
-    --provider-class sun.security.pkcs11.SunPKCS11 \
-    --provider-arg "$PKCS11_CFG" \
-    --ks NONE --ks-type PKCS11 \
-    --ks-pass "pass:$YUBIKEY_PIN" \
-    --ks-key-alias "X.509 Certificate for Digital Signature" \
+    --ks "$KEYSTORE" \
+    --ks-key-alias pearlnode \
+    --ks-pass "pass:$KS_PASS" \
     --out "$SIGNED" \
     "$UNSIGNED"
-unset YUBIKEY_PIN
+unset KS_PASS
 
 if ! $SKIP_BUMP; then
     echo "Committing and tagging..."
