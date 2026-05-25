@@ -1,3 +1,7 @@
+// EncryptedSharedPreferences/MasterKey were deprecated in security-crypto 1.1.0-alpha07 in favour
+// of a Jetpack DataStore-based API that is still in alpha. Suppress until a stable replacement ships.
+@file:Suppress("DEPRECATION")
+
 package com.pearlnode.security
 
 import android.content.Context
@@ -5,9 +9,6 @@ import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-// EncryptedSharedPreferences/MasterKey were deprecated in security-crypto 1.1.0-alpha07 in favour
-// of a Jetpack DataStore-based API that is still in alpha. Suppress until a stable replacement ships.
-@Suppress("DEPRECATION")
 class CredentialStore(context: Context) {
 
     private val masterKey = MasterKey.Builder(context)

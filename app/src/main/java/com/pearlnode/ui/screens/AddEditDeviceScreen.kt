@@ -422,6 +422,7 @@ private fun DiscoveredDeviceRow(device: DiscoveredDevice, onAdd: () -> Unit) {
                 when (device.source) {
                     DiscoverySource.MDNS   -> Icons.Default.Wifi
                     DiscoverySource.SUBNET -> Icons.Default.NetworkWifi
+                    DiscoverySource.BLE    -> Icons.Default.Bluetooth
                 },
                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
             )
