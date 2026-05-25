@@ -1,0 +1,1 @@
+Control Shelly smart home devices on your local network. No cloud, no account.

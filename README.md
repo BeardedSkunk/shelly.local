@@ -126,4 +126,4 @@ All communication is over HTTP on the local network. No data leaves your device.
 
 ## License
 
-[MIT](LICENSE), © 2026 Pearlnode Contributors
+[MIT](LICENSE), © 2026 Vanda Hendrychová
