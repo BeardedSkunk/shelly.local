@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Overrides the launcher label so a debug install is tellable apart from a
+         release build sitting next to it on the same device. -->
+    <string name="app_name">Pearlnode (Debug)</string>
+</resources>

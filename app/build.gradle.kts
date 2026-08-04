@@ -19,6 +19,14 @@ android {
     }
 
     buildTypes {
+        // Debug builds carry their own application id so they install alongside a
+        // release build from F-Droid or Play instead of replacing it. The two
+        // signatures differ anyway, so without this a debug install would force an
+        // uninstall of the release app and take its devices with it.
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
