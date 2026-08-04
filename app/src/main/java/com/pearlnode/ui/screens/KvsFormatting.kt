@@ -9,8 +9,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import android.content.Context
+import android.provider.Settings
 import android.text.format.DateFormat
 import java.text.Normalizer
+import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -151,11 +153,36 @@ private fun formatEpoch(raw: Long, context: Context): String? {
         // pattern follows the locale alone and would print "12:05 PM" on an
         // English phone even when the user asked for a 24-hour clock.
         val moment = Date(millis)
-        val date = DateFormat.getDateFormat(context).format(moment)
+        val date = customDate(moment, context) ?: DateFormat.getDateFormat(context).format(moment)
         val time = DateFormat.getTimeFormat(context).format(moment)
         // Held together so a line break cannot split date from time.
         "$date, $time".replace(' ', NBSP)
     }.getOrNull()
+}
+
+/**
+ * The date as spelled by the `date_format` system setting, or null when it is
+ * unset or unusable.
+ *
+ * Android has no setting for the order of day, month and year -- it follows the
+ * locale, so wanting an English phone with a European date is not expressible.
+ * The `date_format` key is the remnant of a setting that once did exactly that.
+ * The platform stopped reading it long ago, but the key still exists and still
+ * holds whatever is written to it:
+ *
+ *     adb shell settings put system date_format dd.MM.yyyy
+ *     adb shell settings delete system date_format
+ *
+ * Reading it here costs nothing and gives anyone who wants that control a way
+ * to take it, without a preference screen for a single format string. An unset
+ * key or a pattern SimpleDateFormat rejects both fall back to the locale.
+ */
+private fun customDate(moment: Date, context: Context): String? {
+    // The Settings.System.DATE_FORMAT constant is deprecated; the key it names
+    // is not, so name it directly and avoid the warning.
+    val pattern = Settings.System.getString(context.contentResolver, "date_format")
+    if (pattern.isNullOrBlank()) return null
+    return runCatching { SimpleDateFormat(pattern, Locale.getDefault()).format(moment) }.getOrNull()
 }
 
 /** Glues a summary together where a line break would read badly. */
