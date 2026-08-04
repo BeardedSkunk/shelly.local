@@ -39,8 +39,8 @@ curl -s http://192.168.178.21/rpc/KVS.Get?key=pj/current
 ```
 
 ```json
-{"version":1,"start_time":1785870000,"duration_sec":1800,
- "energy_mwh":1750,"meter_total_mwh":184800,"watt":3.5}
+{"version":1,"start_time":1785870000,"duration_sec":1800,"energy_mwh":1750,
+ "meter_total_mwh":184800,"watt":3.5,"reference_watt":3.6}
 ```
 
 - `energy_mwh` — what **this block** has drawn.
@@ -51,9 +51,27 @@ curl -s http://192.168.178.21/rpc/KVS.Get?key=pj/current
 - `watt` — the block's **average**, not the current draw. A live value would
   mean a flash write every ten seconds. Whoever wants it reads
   `Switch.GetStatus`, which costs nothing.
+- `reference_watt` — the level the block was **opened** at, from `apower`.
 - `duration_sec` — how much of the elapsed time is already accounted for in
   `energy_mwh`. The entry can be up to half an hour old, so without it a reader
   could not tell.
+
+### Why there are two watt values
+
+`aenergy.total` does not advance continuously on this plug. It stands still for
+minutes and then jumps — measured on the device at about 207 mWh a step, well
+over two minutes apart. So a young block has counted no energy yet and its
+average honestly reads 0 W for the first minutes, while `reference_watt` is
+right immediately.
+
+That is not just cosmetic. A block resumed after a script restart has to get
+its reference back from somewhere, and a reference of zero on a live load would
+disagree with the very next sample and split the block in three. So the level
+is stored rather than inferred from the average.
+
+Over any real distance the counter is exact: the first block archived on the
+device came out at 413 mWh over 423 s — 3.51 W against 3.5–3.6 W measured. The
+average simply converges from below, never short by more than one step's worth.
 
 A null block — nothing drawn — needs none of that and says so by leaving it
 out:
@@ -200,5 +218,20 @@ Measured on a Plug M Gen3, `S3PL-30110EU`, firmware 2.0.0.
 | KVS value | **253** characters exactly |
 | script code | 20480 bytes, comments included |
 | script memory | about 25 KB; a 932 byte page costs 5.5 KB parsed |
-| `aenergy.total` | Wh with three decimals, so whole mWh |
+| `aenergy.total` | Wh with three decimals, so whole mWh — but it jumps, roughly 207 mWh at a time, minutes apart |
 | `JSON.parse` on bad input | uncatchable, kills the script |
+
+## Verified on the device
+
+Running on `192.168.178.21` with a phone charging through it. Switching the
+plug off and back on over RPC produced, on real hardware:
+
+```
+page   1785879118|423,413|50
+```
+
+The 423 second block at 413 mWh is 3.51 W, against the 3.5–3.6 W the plug was
+reporting. The `50` after it is the fifty second null block while the plug was
+off — a bare number, no second field. The page moved from slot `p0` to `p1` as
+it was rewritten, the generation went 1 → 2, and `archive_end` landed exactly
+on the next block's start, so the archive stayed gapless across the switch.

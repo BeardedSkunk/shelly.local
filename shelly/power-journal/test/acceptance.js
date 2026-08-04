@@ -396,6 +396,43 @@ test('14  the read out endpoint answers', () => {
   check('an unknown page is refused', bad.error !== undefined, JSON.stringify(bad));
 });
 
+test('16  a counter that jumps instead of running does not split a block', () => {
+  // The real plug holds aenergy.total still for minutes at a time, so a young
+  // block has counted no energy at all and its average reads 0 W. Restarting
+  // there must not make it disagree with its own load.
+  const plug = createPlug({ watt: 3.6, meterStepSec: 600, verbose: VERBOSE });
+  plug.boot();
+  plug.feed(3.6, 12); // two minutes: the counter has not moved once
+
+  const entry = plug.kvs['pj/current'];
+  check('the average is still zero', entry.watt === 0, JSON.stringify(entry));
+  check('but the level was recorded', near(entry.reference_watt, 3.6, 0.05),
+    'reference_watt=' + entry.reference_watt);
+
+  const start = entry.start_time;
+  plug.restartScript();
+  plug.boot();
+  plug.feed(3.6, 6);
+
+  check('the block survived the restart', plug.kvs['pj/current'].start_time === start,
+    plug.kvs['pj/current'].start_time + ' vs ' + start);
+  check('and was not split', plug.archive().length === 0, JSON.stringify(plug.archive()));
+
+  plug.feed(3.6, 900); // long enough for the counter to jump many times
+  const later = JSON.parse(plug.request('').body).current;
+  // The average always trails, because the elapsed time is current while the
+  // energy is as old as the last jump. It converges from below and can never
+  // be short by more than one step's worth -- that bound is the guarantee.
+  const floor = (3.6 * (later.duration_sec - 600)) / later.duration_sec;
+  check('the average converges from below as the counter catches up',
+    later.watt <= 3.61 && later.watt >= floor,
+    'watt=' + later.watt + ' floor=' + floor.toFixed(3));
+  check('no energy went missing',
+    later.energy_mwh >= (3.6 * 1000 * (later.duration_sec - 600)) / 3600 &&
+    later.energy_mwh <= (3.6 * 1000 * later.duration_sec) / 3600,
+    'energy=' + later.energy_mwh + ' over ' + later.duration_sec + ' s');
+});
+
 test('15  a failed KVS write is retried, not booked as done', () => {
   const plug = steadyPlug(3.5);
   plug.kvsFail = true;

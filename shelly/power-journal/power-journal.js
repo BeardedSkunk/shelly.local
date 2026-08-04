@@ -313,6 +313,14 @@ function archiveAppend(startTime, durationSec, energyMwh, isZero) {
 // a flash write every ten seconds; whoever wants it reads Switch.GetStatus,
 // which costs nothing.
 //
+// reference_watt is the level the block was opened at, measured from apower.
+// It is not decoration: this plug advances aenergy.total in jumps rather than
+// continuously, so a young block has drawn no counted energy yet and its
+// average reads 0 W for the first minutes. The reference is right immediately,
+// and it is what a restart has to restore -- a block resumed with a reference
+// of zero would disagree with its own load on the very next sample and split
+// itself in three.
+//
 // A null block needs none of this and says so by leaving it out:
 //
 //   {"version":1,"start_time":1785870000,"watt":0}
@@ -329,6 +337,7 @@ function kvsPayload(now) {
   payload.energy_mwh = block.energy;
   payload.meter_total_mwh = block.meter;
   payload.watt = Math.round(block.energy * 3600 / duration) / 1000;
+  payload.reference_watt = block.ref / 1000;
   return payload;
 }
 
@@ -560,7 +569,9 @@ function curParse(value) {
     dur: value.duration_sec,
     energy: value.energy_mwh,
     meter: value.meter_total_mwh,
-    watt: value.watt
+    watt: value.watt,
+    // Entries written before reference_watt existed only have the average.
+    reference: isNum(value.reference_watt) ? value.reference_watt : value.watt
   };
 }
 
@@ -584,6 +595,7 @@ function waitForTime() {
 function recover(now) {
   let sw = Shelly.getComponentStatus('switch:' + CFG.switch_id);
   let meter = sw && sw.aenergy && isNum(sw.aenergy.total) ? Math.round(sw.aenergy.total * 1000) : 0;
+  let power = sw && isNum(sw.apower) && sw.output !== false ? Math.max(0, Math.round(sw.apower * 1000)) : 0;
   let bootTs = now - Math.floor(Shelly.getUptimeMs() / 1000);
   let cur = ST.cur;
 
@@ -603,16 +615,13 @@ function recover(now) {
     log(2, 'continuing the null block that started at ' + cur.start);
   } else if (cur.start + cur.dur >= bootTs - 5) {
     // The checkpoint is younger than this boot, so the script restarted but
-    // the device did not: the block never actually stopped. Its reference is
-    // not stored, so the average it was last written with stands in -- for a
-    // block that held steady those are the same number.
-    ST.blk = {
-      start: cur.start,
-      ref: Math.round(cur.watt * 1000),
-      energy: cur.energy,
-      meter: cur.meter,
-      zero: false
-    };
+    // the device did not: the block never actually stopped.
+    let ref = Math.round(cur.reference * 1000);
+    // An entry written before the counter had moved carries no usable level.
+    // Taking what is being drawn right now beats resuming with a reference of
+    // zero, which would disagree with the load immediately.
+    if (ref <= 0) ref = power;
+    ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, zero: false };
     accumulate(ST.blk, meter);
     log(2, 'script restart, continuing the block that started at ' + cur.start);
     kvsWrite(now, 'recovery');
@@ -629,7 +638,12 @@ function recover(now) {
 // measured energy is preserved either way -- only the moment it stopped is a
 // guess, and it is bounded by the boot.
 function recoverAfterReboot(now, bootTs, cur, meter) {
-  let refMw = Math.round(cur.watt * 1000);
+  let refMw = Math.round(cur.reference * 1000);
+  let averageMw = Math.round(cur.watt * 1000);
+  // The average is the honest rate to divide the leftover energy by. Early in
+  // a block it can still be zero because the counter had not moved yet, and
+  // then the level the block opened at is the better guess.
+  let rateMw = averageMw > 0 ? averageMw : refMw;
   let checkpoint = cur.start + cur.dur;
   let endTs = checkpoint;
   let energy = cur.energy;
@@ -637,8 +651,8 @@ function recoverAfterReboot(now, bootTs, cur, meter) {
   if (meter >= cur.meter) {
     let delta = meter - cur.meter;
     energy += delta;
-    if (refMw > 0) {
-      endTs = checkpoint + Math.round(delta * 3600 / refMw);
+    if (rateMw > 0) {
+      endTs = checkpoint + Math.round(delta * 3600 / rateMw);
       if (endTs > bootTs) endTs = bootTs;
       if (endTs < checkpoint) endTs = checkpoint;
     }

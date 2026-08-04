@@ -29,6 +29,13 @@ function createPlug(options) {
     // Rounding on the way in instead would make the simulated plug run a few
     // percent fast at low power and quietly poison every average in here.
     meterExact: opt.meterMwh || 0,
+    // What the device is currently willing to report. The real plug does not
+    // advance aenergy.total continuously -- it stands still for minutes and
+    // then jumps -- so meterStepSec holds the reported value back until that
+    // long has passed. Zero means a counter that keeps up.
+    meterVisible: opt.meterMwh || 0,
+    meterStepSec: opt.meterStepSec || 0,
+    lastStepAt: opt.unixtime || 1785870000,
     watt: opt.watt === undefined ? 0 : opt.watt,
     output: opt.output === undefined ? true : opt.output,
     storage: Object.assign({}, opt.storage),
@@ -77,7 +84,7 @@ function createPlug(options) {
         return {
           output: plug.output,
           apower: plug.output ? plug.watt : 0,
-          aenergy: { total: Math.floor(plug.meterExact) / 1000 },
+          aenergy: { total: Math.floor(plug.meterVisible) / 1000 },
         };
       }
       return null;
@@ -149,16 +156,21 @@ function createPlug(options) {
     plug.uptimeMs += seconds * 1000;
     const drawn = plug.output ? plug.watt : 0;
     plug.meterExact += (drawn * 1000 * seconds) / 3600;
+    if (!plug.meterStepSec || plug.unixtime - plug.lastStepAt >= plug.meterStepSec) {
+      plug.lastStepAt = plug.unixtime;
+      plug.meterVisible = plug.meterExact;
+    }
   }
 
   // What the script would read right now.
   function meter() {
-    return Math.floor(plug.meterExact);
+    return Math.floor(plug.meterVisible);
   }
 
   // A counter that was reset, or replaced by a device that does not keep it.
   function setMeter(mwh) {
     plug.meterExact = mwh;
+    plug.meterVisible = mwh;
   }
 
   // Runs the one-shot timers the startup path sets, advancing the clock by
