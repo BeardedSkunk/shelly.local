@@ -112,9 +112,16 @@ class Gen2Client(
     }
 
     /** Primitives are shown as-is, objects and arrays keep their JSON source. */
-    private fun kvsEntry(key: String, value: JsonElement): KvsEntry = when (value) {
-        is JsonPrimitive -> KvsEntry(key, value.contentOrNull ?: value.toString(), isStructured = false)
-        else -> KvsEntry(key, value.toString(), isStructured = true)
+    private fun kvsEntry(key: String, value: JsonElement): KvsEntry {
+        if (value !is JsonPrimitive) return KvsEntry(key, value.toString(), isStructured = true)
+
+        // Scripts routinely store a serialised object rather than an object, so
+        // what arrives is JSON inside a JSON string. Left as a primitive it would
+        // be shown raw, braces, quoted keys and all, with nothing to expand.
+        val text = value.contentOrNull ?: value.toString()
+        val nested = runCatching { Json.parseToJsonElement(text) }.getOrNull()
+        val structured = nested is JsonObject || nested is JsonArray
+        return KvsEntry(key, text, isStructured = structured)
     }
 
     override fun toggle(channel: Int, on: Boolean) {

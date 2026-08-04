@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
@@ -55,6 +56,18 @@ private val UNIT_KEYS = setOf(
     "eenheid",        // Dutch
 )
 
+/** Keys whose number is a percentage and needs no spelling out. */
+private val PERCENT_KEYS = setOf(
+    "percent", "percentage", "pct",   // English
+    "prozent",                        // German
+    "procento",                       // Czech
+    "percento",                       // Slovak
+    "procent",                        // Polish, Dutch
+    "pourcentage",                    // French
+    "percentuale",                    // Italian
+    "porcentaje",                     // Spanish
+)
+
 /** Keys that may carry a point in time. */
 private val TIME_KEYS = setOf(
     "ts", "time", "timestamp", "date", "datetime",
@@ -103,11 +116,28 @@ private fun summarizeObject(obj: JsonObject, context: Context): String {
         val unit = soleUnit(obj)
         return if (unit.isNullOrBlank()) value else "$value$unit"
     }
+    // A single time in an object needs no naming -- it is plainly the time.
+    val soleTimeKey = obj.keys.singleOrNull { it.looksLikeTime() }
     // The space after a comma is the only ordinary one in the result, so a line
     // break lands between pairs rather than between a label and its value.
     return obj.entries.joinToString(", ") { (key, value) ->
-        "$key:$NBSP${renderScalar(key, value, context) ?: summarize(value, context)}"
+        renderPair(key, value, key == soleTimeKey, context)
     }
+}
+
+/** One `key: value` of a summary, dropping the label where it says nothing. */
+private fun renderPair(key: String, value: JsonElement, isSoleTime: Boolean, context: Context): String {
+    if (value is JsonPrimitive) {
+        // A flag that is set says everything by being named. An unset one has to
+        // say so, since its name alone would read as the opposite.
+        if (value.booleanOrNull == true) return key
+        if (isSoleTime) return renderScalar(key, value, context) ?: key
+        // "percent: 32" is three characters longer than "32%" and no clearer.
+        if (key.normalizeKey() in PERCENT_KEYS && value.doubleOrNull != null) {
+            return "${value.content}%"
+        }
+    }
+    return "$key:$NBSP${renderScalar(key, value, context) ?: summarize(value, context)}"
 }
 
 /** The value of the one and only value-like key, or null if there is not exactly one. */
@@ -127,6 +157,9 @@ private fun renderScalar(key: String, value: JsonElement, context: Context): Str
     if (key.looksLikeTime()) {
         val epoch = value.longOrNull ?: value.doubleOrNull?.toLong()
         if (epoch != null) formatEpoch(epoch, context)?.let { return it }
+        // A time already spelled out keeps its own wording, but its spaces must
+        // not turn into line breaks.
+        value.contentOrNull?.let { return it.replace(' ', NBSP) }
     }
     return value.contentOrNull ?: value.toString()
 }
