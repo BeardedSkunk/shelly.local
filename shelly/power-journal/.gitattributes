@@ -1,0 +1,4 @@
+# The script is uploaded straight from the working copy, and every byte counts
+# against the device's 20480 byte limit. CRLF would spend a few hundred of them
+# on nothing.
+* text eol=lf
