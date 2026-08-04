@@ -100,10 +100,12 @@ private fun summarize(element: JsonElement): String = when (element) {
 private fun summarizeObject(obj: JsonObject): String {
     soleValue(obj)?.let { value ->
         val unit = soleUnit(obj)
-        return if (unit.isNullOrBlank()) value else "$value $unit"
+        return if (unit.isNullOrBlank()) value else "$value$unit"
     }
+    // The space after a comma is the only ordinary one in the result, so a line
+    // break lands between pairs rather than between a label and its value.
     return obj.entries.joinToString(", ") { (key, value) ->
-        "$key: ${renderScalar(key, value) ?: summarize(value)}"
+        "$key:$NBSP${renderScalar(key, value) ?: summarize(value)}"
     }
 }
 
@@ -149,8 +151,14 @@ private fun formatEpoch(raw: Long): String? {
             .withLocale(Locale.getDefault())
             .withZone(ZoneId.systemDefault())
             .format(Instant.ofEpochMilli(millis))
+            // Several locales put a comma and a space between date and time.
+            // Holding them together keeps a line break from splitting the two.
+            .replace(' ', NBSP)
     }.getOrNull()
 }
+
+/** Glues a summary together where a line break would read badly. */
+private const val NBSP = ' '
 
 /** Lowercased, stripped of accents and of separators, so key sets stay readable. */
 private fun String.normalizeKey(): String =

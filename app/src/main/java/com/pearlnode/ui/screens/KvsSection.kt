@@ -131,7 +131,11 @@ private fun KvsRow(entry: KvsEntry) {
                     if (entry.isStructured) summarizeKvsValue(entry.value) else entry.value,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    // Two lines fit most summaries. Breaks land after a comma
+                    // where they can, since the summary holds no other ordinary
+                    // space -- and mid-word where they cannot, which still beats
+                    // cutting the line short.
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
