@@ -32,11 +32,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pearlnode.R
 import com.pearlnode.model.KvsEntry
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 /** How many entries the card shows before it has to be expanded. */
 private const val COLLAPSED_ENTRY_COUNT = 3
@@ -133,7 +128,7 @@ private fun KvsRow(entry: KvsEntry) {
                 )
             } else {
                 Text(
-                    entry.value,
+                    if (entry.isStructured) summarizeKvsValue(entry.value) else entry.value,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -153,27 +148,3 @@ private fun KvsRow(entry: KvsEntry) {
         }
     }
 }
-
-private val prettyJson = Json { prettyPrint = true; prettyPrintIndent = "  " }
-
-/**
- * Lays a JSON value out over several lines.
- *
- * A JSON object loses its outer braces and contributes one line per member;
- * members that are themselves objects or arrays are pretty-printed below their
- * key. Anything else -- a top-level array, or text that is not JSON at all --
- * is returned pretty-printed as a whole, or unchanged if it does not parse.
- */
-internal fun formatKvsValue(raw: String): String {
-    val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull() ?: return raw
-    if (element !is JsonObject || element.isEmpty()) return prettyOrRaw(element, raw)
-    return element.entries.joinToString("\n") { (key, value) -> "$key:${renderMember(value)}" }
-}
-
-private fun renderMember(value: JsonElement): String = when (value) {
-    is JsonPrimitive -> " " + (value.contentOrNull ?: value.toString())
-    else -> "\n" + prettyJson.encodeToString(JsonElement.serializer(), value).prependIndent("  ")
-}
-
-private fun prettyOrRaw(element: JsonElement, raw: String): String =
-    runCatching { prettyJson.encodeToString(JsonElement.serializer(), element) }.getOrDefault(raw)
