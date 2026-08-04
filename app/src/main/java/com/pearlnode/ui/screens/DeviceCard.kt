@@ -108,7 +108,11 @@ fun DeviceCard(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            FirmwareLine(firmware, firmwareLoading, firmwareError, channel, onFirmwareRetry)
+                            FirmwareLine(
+                                firmware, firmwareLoading, firmwareError, channel,
+                                onRetry = onFirmwareRetry,
+                                onUpdate = onUpdate,
+                            )
                         }
                     }
                 }
@@ -157,6 +161,7 @@ private fun FirmwareLine(
     error: String?,
     channel: FirmwareChannel,
     onRetry: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
     when {
         loading -> Row(
@@ -185,6 +190,9 @@ private fun FirmwareLine(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
+                // An offered update is worth acting on where it is announced,
+                // without opening the card first to reach the button.
+                modifier = if (hasUpdate) Modifier.clickable(onClick = onUpdate) else Modifier,
             ) {
                 if (!hasUpdate) {
                     Icon(
@@ -279,7 +287,9 @@ private fun FirmwareDetails(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
+                            // Same reach as the button beside it, for anyone who
+                            // taps the announcement rather than the control.
+                            Column(Modifier.clickable(onClick = onUpdate)) {
                                 Text(
                                     stringResource(R.string.firmware_update_available),
                                     style = MaterialTheme.typography.bodySmall,
