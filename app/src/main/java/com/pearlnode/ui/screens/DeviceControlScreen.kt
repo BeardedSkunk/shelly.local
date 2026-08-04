@@ -68,6 +68,19 @@ fun DeviceControlScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // The address on the device card is the way to the web UI. Opening it also
+    // puts the password on the clipboard, since the browser will ask for it.
+    val openWebUi = {
+        uiState.webUiCredentials?.let { (user, pass) ->
+            val clipboard = context.getSystemService(ClipboardManager::class.java)
+            clipboard.setPrimaryClip(ClipData.newPlainText("Shelly password", pass))
+            scope.launch {
+                snackbarHostState.showSnackbar(context.getString(R.string.password_copied, user))
+            }
+        }
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uiState.webUiUrl)))
+    }
+
     // Poll only while the screen is actually in front of someone. Left running,
     // it would fail its way into a backoff against a sleeping wifi radio and
     // greet whoever unlocks the phone with a stale error.
@@ -84,22 +97,6 @@ fun DeviceControlScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cancel))
-                    }
-                },
-                actions = {
-                    if (uiState.webUiUrl.isNotEmpty()) {
-                        IconButton(onClick = {
-                            uiState.webUiCredentials?.let { (user, pass) ->
-                                val clipboard = context.getSystemService(ClipboardManager::class.java)
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Shelly password", pass))
-                                scope.launch {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.password_copied, user))
-                                }
-                            }
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uiState.webUiUrl)))
-                        }) {
-                            Icon(Icons.Default.OpenInBrowser, contentDescription = stringResource(R.string.open_web_ui))
-                        }
                     }
                 },
             )
@@ -203,39 +200,26 @@ fun DeviceControlScreen(
                     )
                 }
 
-                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
-                        Text("IP: ${device.ipAddress}", style = MaterialTheme.typography.bodySmall)
-                        Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
-                        // The device's own answer wins; the stored value only says
-                        // which protocol family it belongs to and calls every one of
-                        // them GEN2.
-                        val generation = uiState.reportedGeneration?.let { "GEN$it" }
-                            ?: device.generation.name
-                        Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+                val firmwareChannel by vm.firmwareChannel.collectAsStateWithLifecycle()
+                val fwContext = LocalContext.current
+                DeviceCard(
+                    device             = device,
+                    reportedGeneration = uiState.reportedGeneration,
+                    firmware           = uiState.firmwareInfo,
+                    firmwareLoading    = uiState.firmwareLoading,
+                    firmwareError      = uiState.firmwareError,
+                    channel            = firmwareChannel,
+                    onChannelChange    = { vm.setFirmwareChannel(it) },
+                    onFirmwareRetry    = { vm.loadFirmwareInfo() },
+                    onUpdate           = { vm.startFirmwareUpdate(fwContext) },
+                    onOpenWebUi        = { openWebUi() },
+                )
 
                 KvsSection(
                     entries = uiState.kvs,
                     loading = uiState.kvsLoading,
                     error   = uiState.kvsError,
                     onRetry = { vm.loadKvs() },
-                )
-
-                val firmwareChannel by vm.firmwareChannel.collectAsStateWithLifecycle()
-                val fwContext = LocalContext.current
-                FirmwareSection(
-                    info          = uiState.firmwareInfo,
-                    loading       = uiState.firmwareLoading,
-                    error         = uiState.firmwareError,
-                    channel       = firmwareChannel,
-                    progress      = uiState.firmwareUpdateProgress,
-                    onChannelChange = { vm.setFirmwareChannel(it) },
-                    onRetry       = { vm.loadFirmwareInfo() },
-                    onUpdate      = { vm.startFirmwareUpdate(fwContext) },
-                    onDismiss     = { vm.dismissFirmwareResult() },
                 )
 
                 SchedulesSection(
@@ -259,6 +243,11 @@ fun DeviceControlScreen(
             }
         }
     }
+
+    FirmwareProgressDialogs(
+        progress  = uiState.firmwareUpdateProgress,
+        onDismiss = { vm.dismissFirmwareResult() },
+    )
 
     if (showAddSchedule) {
         ScheduleEditorDialog(
@@ -713,153 +702,6 @@ fun formatDays(days: Set<DayOfWeek>): String {
         .joinToString(", ") { it.getDisplayName(TextStyle.SHORT_STANDALONE, Locale.getDefault()) }
 }
 
-// Firmware section
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FirmwareSection(
-    info: FirmwareInfo?,
-    loading: Boolean,
-    error: String?,
-    channel: FirmwareChannel,
-    progress: FirmwareUpdateProgress,
-    onChannelChange: (FirmwareChannel) -> Unit,
-    onRetry: () -> Unit,
-    onUpdate: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.firmware), style = MaterialTheme.typography.titleMedium)
-                ChannelDropdown(channel, onChannelChange)
-            }
-
-            when {
-                loading -> {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text(stringResource(R.string.firmware_checking), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                error != null -> {
-                    Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = onRetry, contentPadding = PaddingValues(0.dp)) {
-                        Text(stringResource(R.string.retry), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                info != null -> {
-                    fun String.display(): String {
-                        val ver  = substringAfterLast('/').ifBlank { this }
-                        val date = firmwareDate()
-                        return if (date != null) "$ver ($date)" else ver
-                    }
-
-                    Text(stringResource(R.string.firmware_current, info.currentVersion.display()),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-                    val targetVersion = info.targetVersion(channel).display()
-
-                    if (info.hasUpdate(channel)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text(stringResource(R.string.firmware_update_available),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary)
-                                Text(targetVersion, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Button(onClick = onUpdate) { Text(stringResource(R.string.firmware_update_button)) }
-                        }
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                            Text(stringResource(R.string.firmware_up_to_date, targetVersion),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    when (progress) {
-        is FirmwareUpdateProgress.Downloading,
-        is FirmwareUpdateProgress.Uploading,
-        FirmwareUpdateProgress.Rebooting -> {
-            AlertDialog(
-                onDismissRequest = {},
-                title = { Text(stringResource(R.string.firmware_updating_title)) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        when (progress) {
-                            is FirmwareUpdateProgress.Downloading -> {
-                                Text(stringResource(R.string.firmware_downloading, progress.percent))
-                                LinearProgressIndicator(progress = { progress.percent / 100f },
-                                    modifier = Modifier.fillMaxWidth())
-                            }
-                            is FirmwareUpdateProgress.Uploading -> {
-                                Text(stringResource(R.string.firmware_uploading, progress.percent))
-                                LinearProgressIndicator(progress = { progress.percent / 100f },
-                                    modifier = Modifier.fillMaxWidth())
-                            }
-                            FirmwareUpdateProgress.Rebooting -> {
-                                Text(stringResource(R.string.firmware_rebooting))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                            else -> {}
-                        }
-                    }
-                },
-                confirmButton = {},
-            )
-        }
-        is FirmwareUpdateProgress.ReadyToInstall -> {
-            val ctx = LocalContext.current
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                title = { Text(stringResource(R.string.firmware_ready_title)) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(stringResource(R.string.firmware_ready_message))
-                        Text(progress.filePath, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(stringResource(R.string.firmware_ready_hint))
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(progress.webUiUrl)))
-                    }) { Text(stringResource(R.string.open_web_ui)) }
-                },
-                dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.done)) } },
-            )
-        }
-        is FirmwareUpdateProgress.Success -> {
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                title = { Text(stringResource(R.string.firmware_updated_title)) },
-                text  = { Text(stringResource(R.string.firmware_updated_message)) },
-                confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
-            )
-        }
-        is FirmwareUpdateProgress.Error -> {
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                title = { Text(stringResource(R.string.firmware_update_failed)) },
-                text  = { Text(progress.message) },
-                confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
-            )
-        }
-        FirmwareUpdateProgress.Idle -> {}
-    }
-}
 
 @Composable
 private fun ScheduleAction.localizedLabel(): String = when (this) {
@@ -868,30 +710,4 @@ private fun ScheduleAction.localizedLabel(): String = when (this) {
     is ScheduleAction.TurnOnTimer -> stringResource(R.string.action_turn_on_timer_label, formatDuration(durationSeconds))
     is ScheduleAction.TurnOffTimer -> stringResource(R.string.action_turn_off_timer_label, formatDuration(durationSeconds))
     is ScheduleAction.SetColor -> stringResource(R.string.action_set_color)
-}
-
-@Composable
-private fun ChannelDropdown(current: FirmwareChannel, onSelect: (FirmwareChannel) -> Unit) {
-    val stableLabel = stringResource(R.string.firmware_channel_stable)
-    val betaLabel   = stringResource(R.string.firmware_channel_beta)
-    fun FirmwareChannel.label() = if (this == FirmwareChannel.STABLE) stableLabel else betaLabel
-
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }) {
-            Text(current.label(), style = MaterialTheme.typography.labelMedium)
-            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            FirmwareChannel.entries.forEach { ch ->
-                DropdownMenuItem(
-                    text = { Text(ch.label()) },
-                    onClick = { onSelect(ch); expanded = false },
-                    leadingIcon = if (ch == current) {
-                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    } else null,
-                )
-            }
-        }
-    }
 }
