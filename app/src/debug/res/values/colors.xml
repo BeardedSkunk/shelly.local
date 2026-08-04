@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- The debug launcher icon is a blue house on white, so the adaptive icon's
-         background plate is white rather than the release build's dark teal. -->
-    <color name="ic_launcher_background">#FFFFFF</color>
-</resources>
