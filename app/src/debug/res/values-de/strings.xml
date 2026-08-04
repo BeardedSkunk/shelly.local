@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A hostname reads the same in every language, but upstream translates
+         app_name, so each of those locales needs the debug override too. -->
+    <string name="app_name">shelly.local</string>
+</resources>
