@@ -74,6 +74,12 @@
     <string name="color">Color</string>
     <string name="brightness">Brightness</string>
     <string name="device_info">Device info</string>
+    <string name="kvs_title">Key-value store</string>
+    <string name="kvs_show_all">Show all entries</string>
+    <string name="kvs_show_fewer">Show fewer entries</string>
+    <string name="kvs_expand_value">Expand value</string>
+    <string name="kvs_collapse_value">Collapse value</string>
+    <string name="kvs_more">%1$d more</string>
     <string name="open_web_ui">Open Web UI</string>
     <string name="password_copied">Password copied, username: %1$s</string>
 

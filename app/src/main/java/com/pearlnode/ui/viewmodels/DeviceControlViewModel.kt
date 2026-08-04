@@ -18,6 +18,7 @@ import com.pearlnode.model.ChannelState
 import com.pearlnode.model.Device
 import com.pearlnode.model.FirmwareChannel
 import com.pearlnode.model.FirmwareInfo
+import com.pearlnode.model.KvsEntry
 import com.pearlnode.model.RgbColor
 import com.pearlnode.model.ScheduleAction
 import com.pearlnode.model.ShellyGeneration
@@ -39,6 +40,10 @@ data class ControlUiState(
     val schedules: List<ShellySchedule> = emptyList(),
     val schedulesLoading: Boolean = false,
     val schedulesError: String? = null,
+    // Key-value store
+    val kvs: List<KvsEntry> = emptyList(),
+    val kvsLoading: Boolean = false,
+    val kvsError: String? = null,
     // Pulse config
     val pulseDurationSeconds: Double = 1.0,
     // Web UI
@@ -115,6 +120,7 @@ class DeviceControlViewModel(
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
             var failCount = 0
+            var tick = 0
             while (true) {
                 runCatching { repo.getStatus(device) }
                     .onSuccess { state ->
@@ -131,8 +137,27 @@ class DeviceControlViewModel(
                         failCount++
                         _uiState.update { it.copy(isOnline = false, controlError = e.message) }
                     }
+                // Scripts write the KVS at their own, much slower pace, so it only
+                // rides along on every tenth poll (roughly every 30 seconds) and
+                // without the spinner that a manual reload shows.
+                if (failCount == 0 && tick % 10 == 0) loadKvs(showLoading = false)
+                tick++
                 delay(if (failCount >= 3) 15_000L else 3_000L)
             }
+        }
+    }
+
+    fun loadKvs(showLoading: Boolean = true) {
+        val device = currentDevice ?: return
+        viewModelScope.launch {
+            if (showLoading) _uiState.update { it.copy(kvsLoading = true, kvsError = null) }
+            runCatching { repo.getKvs(device) }
+                .onSuccess { entries ->
+                    _uiState.update { it.copy(kvs = entries, kvsLoading = false, kvsError = null) }
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(kvsLoading = false, kvsError = e.message) }
+                }
         }
     }
 

@@ -6,6 +6,7 @@ import com.pearlnode.data.db.DeviceDao
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceInfo
 import com.pearlnode.model.DeviceState
+import com.pearlnode.model.KvsEntry
 import com.pearlnode.model.RgbColor
 import com.pearlnode.model.ShellyGeneration
 import com.pearlnode.model.ShellySchedule
@@ -76,6 +77,10 @@ class DeviceRepository(
 
     suspend fun setColor(device: Device, color: RgbColor) = withContext(Dispatchers.IO) {
         clientFor(device).setColor(color.red, color.green, color.blue, color.brightness)
+    }
+
+    suspend fun getKvs(device: Device): List<KvsEntry> = withContext(Dispatchers.IO) {
+        clientFor(device).getKvs()
     }
 
     suspend fun getSchedules(device: Device): List<ShellySchedule> = withContext(Dispatchers.IO) {

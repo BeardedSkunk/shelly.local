@@ -4,6 +4,7 @@ import com.pearlnode.model.ChannelState
 import com.pearlnode.model.DeviceCapability
 import com.pearlnode.model.DeviceInfo
 import com.pearlnode.model.DeviceState
+import com.pearlnode.model.KvsEntry
 import com.pearlnode.model.ShellyGeneration
 import com.pearlnode.model.DeviceType
 import com.pearlnode.model.RgbColor
@@ -88,6 +89,32 @@ class Gen2Client(
                 DeviceState(deviceId, channels.ifEmpty { listOf(ChannelState(0, false)) })
             }
         }
+    }
+
+    override fun getKvs(): List<KvsEntry> {
+        val items = rpc("KVS.GetMany")["items"] ?: return emptyList()
+        val entries = when (items) {
+            // Seen on a Plug M Gen3: a list of objects that carry their own key.
+            is JsonArray -> items.mapNotNull { element ->
+                val obj = element as? JsonObject ?: return@mapNotNull null
+                val key = obj["key"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val value = obj["value"] ?: return@mapNotNull null
+                kvsEntry(key, value)
+            }
+            // Also documented: an object indexed by key, the value either wrapped
+            // in {"value": ...} or stored directly.
+            is JsonObject -> items.map { (key, element) ->
+                kvsEntry(key, (element as? JsonObject)?.get("value") ?: element)
+            }
+            else -> emptyList()
+        }
+        return entries.sortedBy { it.key }
+    }
+
+    /** Primitives are shown as-is, objects and arrays keep their JSON source. */
+    private fun kvsEntry(key: String, value: JsonElement): KvsEntry = when (value) {
+        is JsonPrimitive -> KvsEntry(key, value.contentOrNull ?: value.toString(), isStructured = false)
+        else -> KvsEntry(key, value.toString(), isStructured = true)
     }
 
     override fun toggle(channel: Int, on: Boolean) {

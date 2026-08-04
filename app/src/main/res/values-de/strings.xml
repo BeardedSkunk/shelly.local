@@ -72,6 +72,12 @@
     <string name="color">Farbe</string>
     <string name="brightness">Helligkeit</string>
     <string name="device_info">Geräteinformationen</string>
+    <string name="kvs_title">Schlüssel-Wert-Speicher</string>
+    <string name="kvs_show_all">Alle Einträge anzeigen</string>
+    <string name="kvs_show_fewer">Weniger Einträge anzeigen</string>
+    <string name="kvs_expand_value">Wert aufklappen</string>
+    <string name="kvs_collapse_value">Wert zuklappen</string>
+    <string name="kvs_more">%1$d weitere</string>
     <string name="open_web_ui">Web-UI öffnen</string>
     <string name="password_copied">Passwort kopiert – Benutzername: %1$s</string>
 

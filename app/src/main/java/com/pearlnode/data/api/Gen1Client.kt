@@ -4,6 +4,7 @@ import com.pearlnode.model.ChannelState
 import com.pearlnode.model.DeviceCapability
 import com.pearlnode.model.DeviceInfo
 import com.pearlnode.model.DeviceState
+import com.pearlnode.model.KvsEntry
 import com.pearlnode.model.ShellyGeneration
 import com.pearlnode.model.DeviceType
 import com.pearlnode.model.RgbColor
@@ -79,6 +80,9 @@ class Gen1Client(
             }
         }
     }
+
+    /** Gen1 devices have no key-value store. */
+    override fun getKvs(): List<KvsEntry> = emptyList()
 
     override fun toggle(channel: Int, on: Boolean) {
         val endpoint = when (deviceType.capability) {

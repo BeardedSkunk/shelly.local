@@ -186,6 +186,13 @@ fun DeviceControlScreen(
                 }
             }
 
+            KvsSection(
+                entries = uiState.kvs,
+                loading = uiState.kvsLoading,
+                error   = uiState.kvsError,
+                onRetry = { vm.loadKvs() },
+            )
+
             val firmwareChannel by vm.firmwareChannel.collectAsStateWithLifecycle()
             val fwContext = LocalContext.current
             FirmwareSection(
