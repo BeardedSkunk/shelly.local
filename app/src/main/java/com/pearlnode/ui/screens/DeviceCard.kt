@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -47,6 +49,9 @@ import com.pearlnode.model.FirmwareInfo
 import com.pearlnode.model.firmwareDate
 import com.pearlnode.ui.viewmodels.FirmwareUpdateProgress
 
+/** Half a line of air, on top of the 4dp rhythm the card is otherwise on. */
+private val HALF_LINE = 6.dp
+
 /**
  * What the device is and what it runs, in one card.
  *
@@ -78,8 +83,9 @@ fun DeviceCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
                     if (expanded) {
-                        Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(HALF_LINE))
                         Row {
                             Text("IP: ", style = MaterialTheme.typography.bodySmall)
                             IpLink(device.ipAddress, onOpenWebUi)
@@ -109,6 +115,7 @@ fun DeviceCard(
             }
 
             if (expanded) {
+                Spacer(Modifier.height(HALF_LINE))
                 FirmwareDetails(
                     info = firmware,
                     loading = firmwareLoading,
@@ -302,9 +309,26 @@ private fun ChannelDropdown(current: FirmwareChannel, onSelect: (FirmwareChannel
 
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }) {
-            Text(current.label(), style = MaterialTheme.typography.labelMedium)
-            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+        // A plain clickable row rather than a TextButton: a button's padding
+        // would make this line taller than the text around it and tear a hole
+        // between the device details and the firmware block.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clickable { expanded = true }
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            Text(
+                current.label(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Icon(
+                Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             FirmwareChannel.entries.forEach { ch ->
