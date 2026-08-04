@@ -49,8 +49,14 @@ import com.pearlnode.model.FirmwareInfo
 import com.pearlnode.model.firmwareDate
 import com.pearlnode.ui.viewmodels.FirmwareUpdateProgress
 
-/** Half a line of air, on top of the 4dp rhythm the card is otherwise on. */
-private val HALF_LINE = 6.dp
+/** Between a section title and what it heads: half a line. */
+private val TITLE_GAP = 8.dp
+
+/** Between the device details and the firmware section: a line and a half. */
+private val SECTION_GAP = 24.dp
+
+/** Between lines that belong together. */
+private val LINE_GAP = 4.dp
 
 /**
  * What the device is and what it runs, in one card.
@@ -80,28 +86,30 @@ fun DeviceCard(
     val generation = reportedGeneration?.let { "GEN$it" } ?: device.generation.name
 
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f)) {
                     Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
-                    if (expanded) {
-                        Spacer(Modifier.height(HALF_LINE))
-                        Row {
-                            Text("IP: ", style = MaterialTheme.typography.bodySmall)
-                            IpLink(device.ipAddress, onOpenWebUi)
+                    Spacer(Modifier.height(TITLE_GAP))
+                    Column(verticalArrangement = Arrangement.spacedBy(LINE_GAP)) {
+                        if (expanded) {
+                            Row {
+                                Text("IP: ", style = MaterialTheme.typography.bodySmall)
+                                IpLink(device.ipAddress, onOpenWebUi)
+                            }
+                            Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
+                            Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IpLink(device.ipAddress, onOpenWebUi)
+                                Text(
+                                    " · ${device.type.label} · $generation",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            FirmwareLine(firmware, firmwareLoading, firmwareError, channel, onFirmwareRetry)
                         }
-                        Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
-                        Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IpLink(device.ipAddress, onOpenWebUi)
-                            Text(
-                                " · ${device.type.label} · $generation",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        FirmwareLine(firmware, firmwareLoading, firmwareError, channel, onFirmwareRetry)
                     }
                 }
                 IconButton(onClick = { expanded = !expanded }) {
@@ -115,7 +123,7 @@ fun DeviceCard(
             }
 
             if (expanded) {
-                Spacer(Modifier.height(HALF_LINE))
+                Spacer(Modifier.height(SECTION_GAP))
                 FirmwareDetails(
                     info = firmware,
                     loading = firmwareLoading,
@@ -187,21 +195,26 @@ private fun FirmwareLine(
                     )
                 }
                 Text(
-                    info.currentVersion.displayVersion(),
+                    if (hasUpdate) stringResource(R.string.firmware_update_available) + ":"
+                    else stringResource(R.string.firmware_up_to_date_short) + ":",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (hasUpdate) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    // The version the verdict is about: the one running when it is
+                    // current, the one on offer when it is not. Naming the
+                    // installed version after "update available" would read as if
+                    // that were the update.
+                    if (hasUpdate) info.targetVersion(channel).displayVersion()
+                    else info.currentVersion.displayVersion(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    // The verdict matters more than the full version string, so
-                    // the version is what gives way when the line runs out.
+                    // The verdict matters more than the digits, so the version is
+                    // what gives way when the line runs out.
                     modifier = Modifier.weight(1f, fill = false),
-                )
-                Text(
-                    if (hasUpdate) "· " + stringResource(R.string.firmware_update_available)
-                    else "· " + stringResource(R.string.firmware_up_to_date_short),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (hasUpdate) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -219,7 +232,7 @@ private fun FirmwareDetails(
     onRetry: () -> Unit,
     onUpdate: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -228,72 +241,75 @@ private fun FirmwareDetails(
             Text(stringResource(R.string.firmware), style = MaterialTheme.typography.titleSmall)
             ChannelDropdown(channel, onChannelChange)
         }
+        Spacer(Modifier.height(TITLE_GAP))
 
-        when {
-            loading -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                Text(
-                    stringResource(R.string.firmware_checking),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            error != null -> {
-                Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = onRetry) {
-                    Text(stringResource(R.string.retry), style = MaterialTheme.typography.bodySmall)
+        Column(verticalArrangement = Arrangement.spacedBy(LINE_GAP)) {
+            when {
+                loading -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(
+                        stringResource(R.string.firmware_checking),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-            }
 
-            info != null -> {
-                Text(
-                    stringResource(R.string.firmware_current, info.currentVersion.displayVersion()),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                error != null -> {
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.retry), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
 
-                val targetVersion = info.targetVersion(channel).displayVersion()
+                info != null -> {
+                    Text(
+                        stringResource(R.string.firmware_current, info.currentVersion.displayVersion()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
 
-                if (info.hasUpdate(channel)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(
-                                stringResource(R.string.firmware_update_available),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
+                    val targetVersion = info.targetVersion(channel).displayVersion()
+
+                    if (info.hasUpdate(channel)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(
+                                    stringResource(R.string.firmware_update_available),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    targetVersion,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Button(onClick = onUpdate) { Text(stringResource(R.string.firmware_update_button)) }
+                        }
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
                             )
                             Text(
-                                targetVersion,
+                                stringResource(R.string.firmware_up_to_date, targetVersion),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Button(onClick = onUpdate) { Text(stringResource(R.string.firmware_update_button)) }
-                    }
-                } else {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            stringResource(R.string.firmware_up_to_date, targetVersion),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
