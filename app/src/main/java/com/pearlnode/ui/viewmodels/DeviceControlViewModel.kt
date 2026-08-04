@@ -51,6 +51,8 @@ data class ControlUiState(
     val webUiCredentials: Pair<String, String>? = null,
     // Firmware
     val firmwareInfo: FirmwareInfo? = null,
+    /** What the device calls its own generation; null until it has been asked. */
+    val reportedGeneration: Int? = null,
     val firmwareChannel: FirmwareChannel = FirmwareChannel.STABLE,
     val firmwareLoading: Boolean = false,
     val firmwareError: String? = null,
@@ -342,13 +344,22 @@ class DeviceControlViewModel(
             _uiState.update { it.copy(firmwareLoading = true, firmwareError = null) }
             runCatching {
                 val info = repo.getDeviceInfo(device)
-                if (device.generation == ShellyGeneration.GEN2) {
+                val firmware = if (device.generation == ShellyGeneration.GEN2) {
                     firmwareRepo.resolveUpdate(info)
                 } else {
                     FirmwareInfo(currentVersion = info.firmwareVersion, stableVersion = "", stableUrl = "")
                 }
+                info to firmware
             }
-                .onSuccess { fw -> _uiState.update { it.copy(firmwareInfo = fw, firmwareLoading = false) } }
+                .onSuccess { (info, fw) ->
+                    _uiState.update {
+                        it.copy(
+                            firmwareInfo = fw,
+                            firmwareLoading = false,
+                            reportedGeneration = info.reportedGeneration,
+                        )
+                    }
+                }
                 .onFailure { e -> _uiState.update { it.copy(firmwareLoading = false, firmwareError = e.message) } }
         }
     }

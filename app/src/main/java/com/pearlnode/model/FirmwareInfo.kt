@@ -2,7 +2,19 @@ package com.pearlnode.model
 
 enum class FirmwareChannel { STABLE, BETA }
 
-data class DeviceInfo(val shellyTypeId: String, val firmwareVersion: String, val generation: ShellyGeneration)
+data class DeviceInfo(
+    val shellyTypeId: String,
+    val firmwareVersion: String,
+    /** Which protocol family the device speaks -- Gen1 REST or Gen2-style RPC. */
+    val generation: ShellyGeneration,
+    /**
+     * The generation the device reports for itself, as the `gen` field of
+     * `/shelly`. Null on Gen1, which predates the field. Kept as a number rather
+     * than mapped onto [generation] so a Gen4 or Gen5 device names itself
+     * correctly without this app being taught about it first.
+     */
+    val reportedGeneration: Int? = null,
+)
 
 // Shelly versions can be "20230913-114532/v1.14.0-gcb84623" or just "v1.14.0-gcb84623".
 // Normalize to the part after the last '/' so comparisons work regardless of format.

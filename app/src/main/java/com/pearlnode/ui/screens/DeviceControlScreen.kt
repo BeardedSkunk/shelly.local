@@ -182,7 +182,12 @@ fun DeviceControlScreen(
                     Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
                     Text("IP: ${device.ipAddress}", style = MaterialTheme.typography.bodySmall)
                     Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
-                    Text("Generation: ${device.generation.name}", style = MaterialTheme.typography.bodySmall)
+                    // The device's own answer wins; the stored value only says
+                    // which protocol family it belongs to and calls every one of
+                    // them GEN2.
+                    val generation = uiState.reportedGeneration?.let { "GEN$it" }
+                        ?: device.generation.name
+                    Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
                 }
             }
 

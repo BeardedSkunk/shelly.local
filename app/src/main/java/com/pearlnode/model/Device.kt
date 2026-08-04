@@ -89,4 +89,12 @@ enum class DeviceType(
     UNKNOWN("Generic Switch", DeviceCapability.RELAY),
 }
 
+/**
+ * Which protocol a device speaks, not which generation it is. The split is
+ * binary -- Gen1 REST or the JSON-RPC that arrived with Gen2 -- so [GEN2] covers
+ * Gen2 and every generation after it. For the number a device reports for
+ * itself, see `DeviceInfo.reportedGeneration`.
+ *
+ * The names are persisted in the database, so renaming them is not free.
+ */
 enum class ShellyGeneration { GEN1, GEN2, UNKNOWN }

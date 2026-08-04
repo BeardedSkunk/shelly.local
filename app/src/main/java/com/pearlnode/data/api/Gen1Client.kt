@@ -197,6 +197,8 @@ class Gen1Client(
         val j    = get("/settings")
         val type = j["device"]?.jsonObject?.get("type")?.jsonPrimitive?.content ?: "UNKNOWN"
         val fw   = j["fw"]?.jsonPrimitive?.content ?: ""
+        // Gen1 predates the `gen` field, so there is no number to report and the
+        // absence is what identifies the generation in the first place.
         return DeviceInfo(type, fw, ShellyGeneration.GEN1)
     }
 

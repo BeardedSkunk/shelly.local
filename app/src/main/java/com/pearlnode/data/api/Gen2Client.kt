@@ -232,7 +232,10 @@ class Gen2Client(
             val j   = Json.parseToJsonElement(resp.body.string()).jsonObject
             val app = j["app"]?.jsonPrimitive?.content ?: "UNKNOWN"
             val fw  = j["fw_id"]?.jsonPrimitive?.content ?: ""
-            return DeviceInfo(app, fw, ShellyGeneration.GEN2)
+            // Straight from the device: a Plug M Gen3 answers gen=3 here. Passing
+            // the number on keeps a Gen4 from being announced as a Gen2.
+            val gen = j["gen"]?.jsonPrimitive?.content?.toIntOrNull()
+            return DeviceInfo(app, fw, ShellyGeneration.GEN2, gen)
         }
     }
 
