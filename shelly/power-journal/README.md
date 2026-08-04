@@ -58,11 +58,21 @@ curl -s http://192.168.178.21/rpc/KVS.Get?key=pj/current
 
 ### Why there are two watt values
 
-`aenergy.total` does not advance continuously on this plug. It stands still for
-minutes and then jumps — measured on the device at about 207 mWh a step, well
-over two minutes apart. So a young block has counted no energy yet and its
-average honestly reads 0 W for the first minutes, while `reference_watt` is
-right immediately.
+`aenergy.total` does not advance continuously on this plug. It books a fixed
+quantum of **206.694 mWh** at a time — the same figure every time, and the one
+that travels through the `by_minute` buffer — so the interval follows the load
+rather than the clock. At the 3.5 W measured here that worked out to a step
+every 210 to 260 seconds:
+
+```
+t= 40s  +206 mWh        t=510s  +207 mWh
+t=250s  +207 mWh        t=720s  +206 mWh
+```
+
+206.694 mWh in 210 s is 3.54 W, which is exactly what `apower` was reporting.
+
+So a young block has counted no energy yet and its average honestly reads 0 W
+for the first minutes, while `reference_watt` is right immediately.
 
 That is not just cosmetic. A block resumed after a script restart has to get
 its reference back from somewhere, and a reference of zero on a live load would
@@ -72,6 +82,12 @@ is stored rather than inferred from the average.
 Over any real distance the counter is exact: the first block archived on the
 device came out at 413 mWh over 423 s — 3.51 W against 3.5–3.6 W measured. The
 average simply converges from below, never short by more than one step's worth.
+
+The same quantum bounds how sharply a block boundary can divide energy. Total
+energy is never lost — it is a counter difference, so every mWh lands in some
+block — but a block shorter than a few quanta may take one too many or one too
+few from its neighbour. For the hours-long blocks this is built to record that
+is noise; for a two minute block it would be most of it.
 
 A null block — nothing drawn — needs none of that and says so by leaving it
 out:
