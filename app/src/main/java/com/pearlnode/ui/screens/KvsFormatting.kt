@@ -8,11 +8,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import android.content.Context
+import android.text.format.DateFormat
 import java.text.Normalizer
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -86,18 +85,18 @@ private val prettyJson = Json { prettyPrint = true; prettyPrintIndent = "  " }
  *
  * Returns the input unchanged when it is not JSON.
  */
-fun summarizeKvsValue(raw: String): String {
+fun summarizeKvsValue(raw: String, context: Context): String {
     val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull() ?: return raw
-    return summarize(element).ifBlank { raw }
+    return summarize(element, context).ifBlank { raw }
 }
 
-private fun summarize(element: JsonElement): String = when (element) {
+private fun summarize(element: JsonElement, context: Context): String = when (element) {
     is JsonPrimitive -> element.contentOrNull ?: element.toString()
-    is JsonArray -> element.joinToString(", ") { summarize(it) }
-    is JsonObject -> summarizeObject(element)
+    is JsonArray -> element.joinToString(", ") { summarize(it, context) }
+    is JsonObject -> summarizeObject(element, context)
 }
 
-private fun summarizeObject(obj: JsonObject): String {
+private fun summarizeObject(obj: JsonObject, context: Context): String {
     soleValue(obj)?.let { value ->
         val unit = soleUnit(obj)
         return if (unit.isNullOrBlank()) value else "$value$unit"
@@ -105,7 +104,7 @@ private fun summarizeObject(obj: JsonObject): String {
     // The space after a comma is the only ordinary one in the result, so a line
     // break lands between pairs rather than between a label and its value.
     return obj.entries.joinToString(", ") { (key, value) ->
-        "$key:$NBSP${renderScalar(key, value) ?: summarize(value)}"
+        "$key:$NBSP${renderScalar(key, value, context) ?: summarize(value, context)}"
     }
 }
 
@@ -121,11 +120,11 @@ private fun solePrimitive(obj: JsonObject, keys: Set<String>): String? {
 }
 
 /** Renders a primitive, turning epoch numbers under time-like keys into a date. */
-private fun renderScalar(key: String, value: JsonElement): String? {
+private fun renderScalar(key: String, value: JsonElement, context: Context): String? {
     if (value !is JsonPrimitive) return null
     if (key.looksLikeTime()) {
         val epoch = value.longOrNull ?: value.doubleOrNull?.toLong()
-        if (epoch != null) formatEpoch(epoch)?.let { return it }
+        if (epoch != null) formatEpoch(epoch, context)?.let { return it }
     }
     return value.contentOrNull ?: value.toString()
 }
@@ -140,20 +139,22 @@ private fun String.looksLikeTime(): Boolean {
  * The range check is what keeps an ordinary number under a key like `date` from
  * being mangled into a date.
  */
-private fun formatEpoch(raw: Long): String? {
+private fun formatEpoch(raw: Long, context: Context): String? {
     val millis = when (raw) {
         in EPOCH_MILLIS -> raw
         in EPOCH_SECONDS -> raw * 1000L
         else -> return null
     }
     return runCatching {
-        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-            .withLocale(Locale.getDefault())
-            .withZone(ZoneId.systemDefault())
-            .format(Instant.ofEpochMilli(millis))
-            // Several locales put a comma and a space between date and time.
-            // Holding them together keeps a line break from splitting the two.
-            .replace(' ', NBSP)
+        // android.text.format.DateFormat rather than java.time on purpose: it is
+        // the only one that honours the system's 24-hour setting. A java.time
+        // pattern follows the locale alone and would print "12:05 PM" on an
+        // English phone even when the user asked for a 24-hour clock.
+        val moment = Date(millis)
+        val date = DateFormat.getDateFormat(context).format(moment)
+        val time = DateFormat.getTimeFormat(context).format(moment)
+        // Held together so a line break cannot split date from time.
+        "$date, $time".replace(' ', NBSP)
     }.getOrNull()
 }
 
