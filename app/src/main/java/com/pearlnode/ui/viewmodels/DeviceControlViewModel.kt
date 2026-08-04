@@ -35,6 +35,8 @@ data class ControlUiState(
     val channels: List<ChannelState> = emptyList(),
     val color: RgbColor? = null,
     val isOnline: Boolean = true,
+    /** A refresh the user asked for, as opposed to the polling that just happens. */
+    val refreshing: Boolean = false,
     val controlError: String? = null,
     // Schedules
     val schedules: List<ShellySchedule> = emptyList(),
@@ -83,6 +85,9 @@ sealed class AlarmSyncStatus {
     data class Error(val message: String)      : AlarmSyncStatus()
 }
 
+/** How many failures in a row it takes before the device counts as unreachable. */
+private const val FAILURES_BEFORE_OFFLINE = 2
+
 class DeviceControlViewModel(
     private val repo: DeviceRepository,
     private val firmwareRepo: FirmwareRepository,
@@ -96,6 +101,7 @@ class DeviceControlViewModel(
 
     private var pollJob: Job? = null
     private var currentDevice: Device? = null
+    private var screenVisible = false
 
     init {
         viewModelScope.launch {
@@ -109,13 +115,44 @@ class DeviceControlViewModel(
                     webUiCredentials = if (isFirst) repo.getCredentials(deviceId) else it.webUiCredentials,
                 ) }
                 if (isFirst) {
-                    startPolling(device)
+                    if (screenVisible) startPolling(device)
                     loadSchedules()
                     loadFirmwareInfo()
                     loadAlarmSyncConfig()
                 }
             }
         }
+    }
+
+    /**
+     * The screen came into view. Polling starts over rather than resuming, which
+     * also clears any backoff the previous run had worked itself into.
+     */
+    fun onScreenVisible() {
+        screenVisible = true
+        val device = currentDevice ?: return
+        startPolling(device)
+    }
+
+    /**
+     * The screen went away. Polling stops with it: a phone with its screen off
+     * throttles wifi, so a loop left running would collect failures nobody is
+     * watching and leave a stale "not reachable" behind for whoever comes back.
+     */
+    fun onScreenHidden() {
+        screenVisible = false
+        pollJob?.cancel()
+        pollJob = null
+    }
+
+    /** Everything on the screen, at once, because the user asked. */
+    fun refresh() {
+        val device = currentDevice ?: return
+        _uiState.update { it.copy(refreshing = true) }
+        startPolling(device)
+        loadKvs()
+        loadSchedules()
+        loadFirmwareInfo()
     }
 
     private fun startPolling(device: Device) {
@@ -137,8 +174,15 @@ class DeviceControlViewModel(
                     }
                     .onFailure { e ->
                         failCount++
-                        _uiState.update { it.copy(isOnline = false, controlError = e.message) }
+                        // One dropped request is not an outage. Waiting for a
+                        // second keeps a single lost packet from throwing the
+                        // whole screen into an error state.
+                        if (failCount >= FAILURES_BEFORE_OFFLINE) {
+                            _uiState.update { it.copy(isOnline = false, controlError = e.message) }
+                        }
                     }
+                // The first pass of a fresh loop is what a pull was waiting for.
+                if (tick == 0) _uiState.update { it.copy(refreshing = false) }
                 // Scripts write the KVS at their own, much slower pace, so it only
                 // rides along on every tenth poll (roughly every 30 seconds) and
                 // without the spinner that a manual reload shows.

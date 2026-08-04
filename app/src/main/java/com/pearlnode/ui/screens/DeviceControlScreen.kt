@@ -2,6 +2,7 @@ package com.pearlnode.ui.screens
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -10,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.content.ClipData
@@ -65,6 +68,14 @@ fun DeviceControlScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // Poll only while the screen is actually in front of someone. Left running,
+    // it would fail its way into a backoff against a sleeping wifi radio and
+    // greet whoever unlocks the phone with a stale error.
+    LifecycleStartEffect(Unit) {
+        vm.onScreenVisible()
+        onStopOrDispose { vm.onScreenHidden() }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -94,142 +105,158 @@ fun DeviceControlScreen(
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()),
+        PullToRefreshBox(
+            isRefreshing = uiState.refreshing,
+            onRefresh = { vm.refresh() },
+            modifier = Modifier.padding(padding),
         ) {
-            val device = uiState.device ?: run {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-                return@Column
-            }
-
-            if (!uiState.isOnline) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.WifiOff, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.device_offline), color = MaterialTheme.colorScheme.onErrorContainer)
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            ) {
+                val device = uiState.device ?: run {
+                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
                     }
+                    return@Column
                 }
-            }
 
-            uiState.controlError?.let { err ->
-                Text(err, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp))
-            }
-
-            uiState.channels.forEachIndexed { idx, channel ->
-                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Row(
-                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                // The message is where the user is already looking, so it is also
+                // where the way out belongs.
+                if (!uiState.isOnline) {
+                    Card(
+                        onClick = { vm.refresh() },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     ) {
-                        Column {
-                            Text(
-                                if (uiState.channels.size > 1) stringResource(R.string.channel_n, idx + 1)
-                                else stringResource(R.string.power),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            channel.power?.let { w ->
-                                Text("${String.format(Locale.ROOT, "%.1f", w)} W",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Switch(checked = channel.isOn, onCheckedChange = { vm.toggle(idx, it) },
-                            enabled = uiState.isOnline)
-                    }
-                }
-            }
-
-            if (device.type.capability == DeviceCapability.DOOR) {
-                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.trigger), style = MaterialTheme.typography.titleMedium)
-                            TextButton(onClick = { showPulseConfig = true }) {
-                                Text("${uiState.pulseDurationSeconds}s")
-                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                        Button(onClick = { vm.pulse(0, true) }, enabled = uiState.isOnline,
-                            modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Default.DoorFront, contentDescription = null)
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.WifiOff, contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer)
                             Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.trigger_door))
+                            Text(stringResource(R.string.device_offline),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f))
+                            Text(stringResource(R.string.retry),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
-            }
 
-            if (device.type.capability == DeviceCapability.RGBW && uiState.isOnline) {
-                RgbControls(
-                    color = uiState.color ?: RgbColor(255, 255, 255),
-                    onColorChange = vm::setColor,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-
-            Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
-                    Text("IP: ${device.ipAddress}", style = MaterialTheme.typography.bodySmall)
-                    Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
-                    // The device's own answer wins; the stored value only says
-                    // which protocol family it belongs to and calls every one of
-                    // them GEN2.
-                    val generation = uiState.reportedGeneration?.let { "GEN$it" }
-                        ?: device.generation.name
-                    Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
+                uiState.controlError?.let { err ->
+                    Text(err, color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clickable { vm.refresh() }
+                            .padding(horizontal = 16.dp))
                 }
+
+                uiState.channels.forEachIndexed { idx, channel ->
+                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Row(
+                            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(
+                                    if (uiState.channels.size > 1) stringResource(R.string.channel_n, idx + 1)
+                                    else stringResource(R.string.power),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                channel.power?.let { w ->
+                                    Text("${String.format(Locale.ROOT, "%.1f", w)} W",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            Switch(checked = channel.isOn, onCheckedChange = { vm.toggle(idx, it) },
+                                enabled = uiState.isOnline)
+                        }
+                    }
+                }
+
+                if (device.type.capability == DeviceCapability.DOOR) {
+                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(R.string.trigger), style = MaterialTheme.typography.titleMedium)
+                                TextButton(onClick = { showPulseConfig = true }) {
+                                    Text("${uiState.pulseDurationSeconds}s")
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            Button(onClick = { vm.pulse(0, true) }, enabled = uiState.isOnline,
+                                modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.DoorFront, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.trigger_door))
+                            }
+                        }
+                    }
+                }
+
+                if (device.type.capability == DeviceCapability.RGBW && uiState.isOnline) {
+                    RgbControls(
+                        color = uiState.color ?: RgbColor(255, 255, 255),
+                        onColorChange = vm::setColor,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.device_info), style = MaterialTheme.typography.titleSmall)
+                        Text("IP: ${device.ipAddress}", style = MaterialTheme.typography.bodySmall)
+                        Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
+                        // The device's own answer wins; the stored value only says
+                        // which protocol family it belongs to and calls every one of
+                        // them GEN2.
+                        val generation = uiState.reportedGeneration?.let { "GEN$it" }
+                            ?: device.generation.name
+                        Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                KvsSection(
+                    entries = uiState.kvs,
+                    loading = uiState.kvsLoading,
+                    error   = uiState.kvsError,
+                    onRetry = { vm.loadKvs() },
+                )
+
+                val firmwareChannel by vm.firmwareChannel.collectAsStateWithLifecycle()
+                val fwContext = LocalContext.current
+                FirmwareSection(
+                    info          = uiState.firmwareInfo,
+                    loading       = uiState.firmwareLoading,
+                    error         = uiState.firmwareError,
+                    channel       = firmwareChannel,
+                    progress      = uiState.firmwareUpdateProgress,
+                    onChannelChange = { vm.setFirmwareChannel(it) },
+                    onRetry       = { vm.loadFirmwareInfo() },
+                    onUpdate      = { vm.startFirmwareUpdate(fwContext) },
+                    onDismiss     = { vm.dismissFirmwareResult() },
+                )
+
+                SchedulesSection(
+                    uiState = uiState,
+                    onAdd = { showAddSchedule = true },
+                    onEdit = { editingSchedule = it },
+                    onToggleEnabled = { s, enabled -> vm.setScheduleEnabled(s, enabled) },
+                    onDelete = { vm.deleteSchedule(it) },
+                    onRetry = { vm.loadSchedules() },
+                )
+
+                AlarmSyncSection(
+                    uiState = uiState,
+                    onToggleEnabled = { enabled -> vm.setAlarmSyncEnabled(enabled, context) },
+                    onOffsetChange = { vm.setAlarmSyncOffset(it) },
+                    onActionChange = { vm.setAlarmSyncAction(it) },
+                    onSyncNow = { vm.triggerAlarmSync(context) },
+                )
+
+                Spacer(Modifier.height(16.dp))
             }
-
-            KvsSection(
-                entries = uiState.kvs,
-                loading = uiState.kvsLoading,
-                error   = uiState.kvsError,
-                onRetry = { vm.loadKvs() },
-            )
-
-            val firmwareChannel by vm.firmwareChannel.collectAsStateWithLifecycle()
-            val fwContext = LocalContext.current
-            FirmwareSection(
-                info          = uiState.firmwareInfo,
-                loading       = uiState.firmwareLoading,
-                error         = uiState.firmwareError,
-                channel       = firmwareChannel,
-                progress      = uiState.firmwareUpdateProgress,
-                onChannelChange = { vm.setFirmwareChannel(it) },
-                onRetry       = { vm.loadFirmwareInfo() },
-                onUpdate      = { vm.startFirmwareUpdate(fwContext) },
-                onDismiss     = { vm.dismissFirmwareResult() },
-            )
-
-            SchedulesSection(
-                uiState = uiState,
-                onAdd = { showAddSchedule = true },
-                onEdit = { editingSchedule = it },
-                onToggleEnabled = { s, enabled -> vm.setScheduleEnabled(s, enabled) },
-                onDelete = { vm.deleteSchedule(it) },
-                onRetry = { vm.loadSchedules() },
-            )
-
-            AlarmSyncSection(
-                uiState = uiState,
-                onToggleEnabled = { enabled -> vm.setAlarmSyncEnabled(enabled, context) },
-                onOffsetChange = { vm.setAlarmSyncOffset(it) },
-                onActionChange = { vm.setAlarmSyncAction(it) },
-                onSyncNow = { vm.triggerAlarmSync(context) },
-            )
-
-            Spacer(Modifier.height(16.dp))
         }
     }
 
