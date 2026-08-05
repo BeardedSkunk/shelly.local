@@ -33,7 +33,7 @@ data class PowerBucket(
  */
 fun mergeFinest(blocks: List<PowerBlock>, fromUtc: Long, toUtc: Long): List<PowerSegment> {
     if (fromUtc >= toUtc) return emptyList()
-    val covered = ArrayList<LongArray>()   // disjoint, sorted [start, end)
+    val covered = ArrayList<Covered>()   // disjoint, sorted by start
     val out = ArrayList<PowerSegment>()
 
     for (block in blocks.sortedWith(compareBy({ it.tier }, { it.startUtc }))) {
@@ -43,14 +43,57 @@ fun mergeFinest(blocks: List<PowerBlock>, fromUtc: Long, toUtc: Long): List<Powe
 
         val pieces = subtract(start, end, covered)
         if (pieces.isEmpty()) continue
-        val rate = block.energyMwh.toDouble() / block.durationSec
+
+        // What the block claims over the part of it that falls in the window,
+        // less what finer blocks have already accounted for inside it.
+        //
+        // Subtracting the energy rather than the time is the whole point. If
+        // the fine data stops at 11:07 and only the hour 11:00 to 12:00
+        // survives, what happened between 11:07 and 12:00 is the hour's total
+        // minus the seven minutes that are known exactly -- not fifty-three
+        // sixtieths of it. The two differ by however unusual those minutes
+        // were, which is exactly when it matters.
+        val claim = block.energyMwh.toDouble() * (end - start) / block.durationSec
+        var leftover = claim - coveredEnergy(covered, start, end)
+        // The coarse tiers store whole units -- a whole watt hour in the hour
+        // tier -- so the fine total can come out a shade above the coarse one it
+        // sits inside. There is nothing left over then, and it must not become a
+        // bar pointing the other way.
+        if (claim >= 0) { if (leftover < 0) leftover = 0.0 } else if (leftover > 0) leftover = 0.0
+
+        val free = pieces.sumOf { it[1] - it[0] }.toDouble()
         for (piece in pieces) {
-            out.add(PowerSegment(piece[0], piece[1], rate * (piece[1] - piece[0]), block.tier))
-            insert(covered, piece)
+            val share = if (free > 0) leftover * (piece[1] - piece[0]) / free else 0.0
+            out.add(PowerSegment(piece[0], piece[1], share, block.tier))
+            insert(covered, Covered(piece[0], piece[1], share))
         }
     }
     out.sortBy { it.startUtc }
     return out
+}
+
+/**
+ * A stretch some tier has already spoken for, and what it said about it.
+ *
+ * These are never merged with one another, however neatly they abut. Merging
+ * would pool the energy of a short, busy native run with a long, flat day
+ * leftover, and the next coarse block asking what is already accounted for
+ * across part of that would get the pooled average rather than the truth.
+ */
+private class Covered(val start: Long, val end: Long, val energyMwh: Double)
+
+/** How much of what is already accounted for falls inside [start, end). */
+private fun coveredEnergy(covered: List<Covered>, start: Long, end: Long): Double {
+    var total = 0.0
+    for (range in covered) {
+        if (range.end <= start) continue
+        if (range.start >= end) break
+        val span = range.end - range.start
+        if (span <= 0) continue
+        val overlap = minOf(range.end, end) - maxOf(range.start, start)
+        if (overlap > 0) total += range.energyMwh * overlap / span
+    }
+    return total
 }
 
 /** Buckets segments onto the boundaries the chart draws, splitting where they straddle one. */
@@ -84,32 +127,30 @@ fun bucketize(segments: List<PowerSegment>, edges: List<Long>): List<PowerBucket
 }
 
 /** [start, end) minus everything already covered, left to right. */
-private fun subtract(start: Long, end: Long, covered: List<LongArray>): List<LongArray> {
+private fun subtract(start: Long, end: Long, covered: List<Covered>): List<LongArray> {
     val pieces = ArrayList<LongArray>()
     var at = start
     for (range in covered) {
-        if (range[1] <= at) continue
-        if (range[0] >= end) break
-        if (range[0] > at) pieces.add(longArrayOf(at, minOf(range[0], end)))
-        at = maxOf(at, range[1])
+        if (range.end <= at) continue
+        if (range.start >= end) break
+        if (range.start > at) pieces.add(longArrayOf(at, minOf(range.start, end)))
+        at = maxOf(at, range.end)
         if (at >= end) return pieces
     }
     if (at < end) pieces.add(longArrayOf(at, end))
     return pieces
 }
 
-/** Adds a range to the covered list, keeping it sorted and merging what touches. */
-private fun insert(covered: MutableList<LongArray>, piece: LongArray) {
-    var at = covered.indexOfFirst { it[0] > piece[0] }
+/** Adds a stretch to the covered list, keeping it sorted by start. */
+private fun insert(covered: MutableList<Covered>, piece: Covered) {
+    // Blocks arrive in order within a tier, so the new stretch almost always
+    // belongs at the end. Checking that first keeps a month of native blocks
+    // from turning the merge into a quadratic scan.
+    if (covered.isEmpty() || covered.last().start <= piece.start) {
+        covered.add(piece)
+        return
+    }
+    var at = covered.indexOfFirst { it.start > piece.start }
     if (at < 0) at = covered.size
     covered.add(at, piece)
-    var i = 0
-    while (i < covered.size - 1) {
-        if (covered[i][1] >= covered[i + 1][0]) {
-            covered[i][1] = maxOf(covered[i][1], covered[i + 1][1])
-            covered.removeAt(i + 1)
-        } else {
-            i++
-        }
-    }
 }

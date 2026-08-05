@@ -22,6 +22,16 @@ class PowerHistoryTest {
     private fun block(tier: Int, start: Long, duration: Long, mwh: Long) =
         PowerBlock(device, tier, start, duration, mwh)
 
+    /** No holes and no overlaps between from and to. */
+    private fun gaplessSegments(segments: List<PowerSegment>, from: Long, to: Long): Boolean {
+        var at = from
+        for (segment in segments) {
+            if (segment.startUtc != at) return false
+            at = segment.endUtc
+        }
+        return at == to
+    }
+
     @Test
     fun `a coarse block does not count the stretch a finer one already covers`() {
         // One day at day resolution, and the first two hours of it also present
@@ -33,18 +43,15 @@ class PowerHistoryTest {
         )
         val segments = mergeFinest(blocks, 0, day)
 
-        // Not the day's 24000: the first two hours are taken from the hour
-        // blocks, which say what actually happened, and the day contributes
-        // only its own average over the 22 hours nothing finer described.
-        assertEquals(5_000.0 + 3_000.0 + 24_000.0 * 22 / 24,
-            segments.sumOf { it.energyMwh }, 0.001)
+        // Exactly the day's own total. The hours say what happened in the first
+        // two, and the day keeps the rest -- its total less those two, not its
+        // average over the remaining time.
+        assertEquals(24_000.0, segments.sumOf { it.energyMwh }, 0.001)
         assertEquals(5_000.0, segments.first { it.startUtc == 0L }.energyMwh, 0.001)
         assertEquals(3_000.0, segments.first { it.startUtc == hour }.energyMwh, 0.001)
-        // The day block keeps only the 22 hours nobody else spoke for, and its
-        // energy is split in proportion rather than carried over whole.
         val rest = segments.first { it.startUtc == 2 * hour }
         assertEquals(3, rest.tier)
-        assertEquals(24_000.0 * 22 / 24, rest.energyMwh, 0.001)
+        assertEquals(24_000.0 - 5_000.0 - 3_000.0, rest.energyMwh, 0.001)
     }
 
     @Test
@@ -58,10 +65,100 @@ class PowerHistoryTest {
         assertEquals(2, segments.count { it.tier == 3 })   // the day, before and after the hole
         assertEquals(1, segments.count { it.tier == 1 })
         assertEquals(400.0, segments.first { it.tier == 1 }.energyMwh, 0.001)
-        // Nothing is double counted: the day gives up exactly the quarter hour
-        // it lost, and no more.
-        assertEquals(24_000.0 - 24_000.0 * 900 / day + 400.0,
-            segments.sumOf { it.energyMwh }, 0.001)
+        // Nothing is double counted and nothing is lost: the day gives up
+        // exactly the 400 the quarter hour claims, so the total is still the
+        // day's own.
+        assertEquals(24_000.0, segments.sumOf { it.energyMwh }, 0.001)
+        assertEquals(24_000.0 - 400.0, segments.filter { it.tier == 3 }.sumOf { it.energyMwh }, 0.001)
+    }
+
+    /**
+     * A sync that comes late finds the fine detail already thinned away, and
+     * what is left has to be stitched onto what was saved earlier without
+     * counting the seam twice.
+     *
+     * The seam is the interesting part. If the last native block ends at 11:07
+     * and only the hour 11:00-12:00 survives on the plug, what happened between
+     * 11:07 and 12:00 is the hour's total *minus the seven minutes that are
+     * known exactly* -- not fifty-three sixtieths of it. Those seven minutes
+     * were a 2000 W kettle here, far above the hour's average, so the two
+     * answers are nowhere near each other.
+     */
+    @Test
+    fun `a coarse block gives up the energy of the fine part, not its share of the time`() {
+        val elevenSeven = 7 * 60L
+        val blocks = listOf(
+            // Known exactly: 2000 W for the first seven minutes of the hour.
+            block(0, 0, elevenSeven, 233_333),
+            // All that is left of the hour: 400 Wh over the whole of it.
+            block(2, 0, hour, 400_000),
+        )
+        val segments = mergeFinest(blocks, 0, hour)
+
+        val rest = segments.single { it.tier == 2 }
+        assertEquals(elevenSeven, rest.startUtc)
+        assertEquals(hour, rest.endUtc)
+        // The hour's total less what is known, which is the truth about the
+        // remaining 53 minutes.
+        assertEquals(400_000.0 - 233_333.0, rest.energyMwh, 0.001)
+        // Splitting by time instead would have left 353333 mWh in those 53
+        // minutes -- more than twice as much.
+        assertEquals(400_000.0, segments.sumOf { it.energyMwh }, 0.001)
+    }
+
+    @Test
+    fun `three tiers stitch together without a seam being counted twice`() {
+        // A week nobody synced: days for the older part, hours for yesterday,
+        // native blocks for the last hour before the app finally got through.
+        val blocks = listOf(
+            block(3, 0, day, 10_000_000),
+            block(3, day, day, 12_000_000),
+            block(2, day + 20 * hour, hour, 900_000),
+            block(1, day + 20 * hour + 1800, 900, 300_000),
+            block(0, day + 20 * hour + 2700, 900, 250_000),
+        )
+        val segments = mergeFinest(blocks, 0, 2 * day)
+
+        // The two days still account for everything nothing finer described.
+        val total = segments.sumOf { it.energyMwh }
+        assertEquals(22_000_000.0, total, 0.001)
+        // Every finer figure survives intact rather than being averaged away.
+        assertEquals(250_000.0, segments.single { it.tier == 0 }.energyMwh, 0.001)
+        assertEquals(300_000.0, segments.single { it.tier == 1 }.energyMwh, 0.001)
+        // The hour keeps only what the quarter hours left of it.
+        assertEquals(900_000.0 - 300_000.0 - 250_000.0,
+            segments.filter { it.tier == 2 }.sumOf { it.energyMwh }, 0.001)
+        assertTrue("the timeline has no holes and no overlaps", gaplessSegments(segments, 0, 2 * day))
+    }
+
+    @Test
+    fun `only day blocks left is still a usable history`() {
+        val blocks = (0 until 5).map { block(3, it * day, day, 8_000_000L + it * 1_000_000) }
+        val segments = mergeFinest(blocks, 0, 5 * day)
+        assertEquals(5, segments.size)
+        assertEquals(50_000_000.0, segments.sumOf { it.energyMwh }, 0.001)
+        assertTrue(gaplessSegments(segments, 0, 5 * day))
+
+        // Drawn as hours, a day spreads evenly across its own hours. That is
+        // what the block asserts and all anyone can know once the detail is
+        // gone -- but it is a day's worth of energy, in the right day.
+        val hours = bucketize(segments, (0..24).map { it * hour })
+        assertEquals(8_000_000.0, hours.sumOf { it.energyMwh }, 0.001)
+        assertTrue("every hour of that day is accounted for", hours.all { it.coarsestTier == 3 })
+    }
+
+    @Test
+    fun `rounding in the coarse unit cannot produce a bar pointing the wrong way`() {
+        // The hour tier stores whole watt hours, so the finer blocks inside an
+        // hour can add up to slightly more than the hour itself.
+        val blocks = listOf(
+            block(1, 0, 900, 100_400),
+            block(2, 0, hour, 100_000),
+        )
+        val segments = mergeFinest(blocks, 0, hour)
+        val rest = segments.single { it.tier == 2 }
+        assertEquals("nothing is left over, and nothing is invented", 0.0, rest.energyMwh, 0.001)
+        assertTrue(segments.all { it.energyMwh >= 0 })
     }
 
     @Test

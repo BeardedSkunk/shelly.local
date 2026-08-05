@@ -149,29 +149,36 @@ fun DeviceControlScreen(
                             .padding(horizontal = 16.dp))
                 }
 
-                // A device that has never answered has no channels, and the
+                // A device that has not answered yet has no channels, and the
                 // card that carries the way to its history would vanish with
                 // them -- exactly when the history is the only thing still
-                // worth looking at. So an unreachable device gets a placeholder
-                // channel: no watts, a dead switch, and the chart still behind
-                // it.
-                val channels = uiState.channels.ifEmpty {
-                    if (uiState.isOnline) emptyList() else listOf(ChannelState(0, false))
-                }
+                // worth looking at. So it gets a placeholder: no watts, a dead
+                // switch, and the chart still behind it.
+                //
+                // Not conditional on being offline. Going offline takes two
+                // failed polls of five seconds each, and for those ten seconds
+                // the device still counts as online with nothing to show -- a
+                // gap long enough to look like the card is simply missing,
+                // which is what it looked like. An empty channel list is the
+                // honest condition either way, and a device that does answer
+                // replaces the placeholder within a second.
+                val awaitingDevice = uiState.channels.isEmpty()
+                val channels = uiState.channels.ifEmpty { listOf(ChannelState(0, false)) }
                 channels.forEachIndexed { idx, channel ->
                     // The energy history lives behind the card that shows the
                     // watts. Only the first channel of a Gen2 device leads
                     // anywhere: the journal is an mJS script and it reads
                     // switch:0, so there is nothing behind the others.
                     //
-                    // Online, a live power reading is what says the device
-                    // meters at all. Offline there is no reading to go by, so
-                    // the device type has to answer instead.
+                    // A live power reading is what says the device meters at
+                    // all. Without one there is nothing to go by, so the device
+                    // type has to answer instead -- which is the only thing
+                    // available for a plug that cannot be reached.
                     val switchLike = device.type.capability == DeviceCapability.PLUG ||
                         device.type.capability == DeviceCapability.RELAY
                     val hasJournal = idx == 0 &&
                         device.generation == ShellyGeneration.GEN2 &&
-                        (channel.power != null || (!uiState.isOnline && switchLike))
+                        (channel.power != null || (awaitingDevice && switchLike))
                     val cardModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                     val body: @Composable () -> Unit = {
                         Row(
@@ -200,8 +207,13 @@ fun DeviceControlScreen(
                                     )
                                     Spacer(Modifier.width(12.dp))
                                 }
+                                // Dead until the device has actually said what
+                                // it is doing. A placeholder switch shows off
+                                // because it has to show something, and letting
+                                // it be flipped would send a command based on a
+                                // state nobody has read.
                                 Switch(checked = channel.isOn, onCheckedChange = { vm.toggle(idx, it) },
-                                    enabled = uiState.isOnline)
+                                    enabled = uiState.isOnline && !awaitingDevice)
                             }
                         }
                     }
