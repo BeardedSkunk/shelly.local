@@ -547,6 +547,8 @@ test('19  the HTTP endpoint hands out the index and one page at a time', () => {
   const sliced = JSON.parse(plug.request('page=' + key + '&skip=1&max=1').body);
   ok(sliced.blocks.length <= 1, 'skip and max cut the response down');
   eq(sliced.total, page.total, 'while it still reports the whole page');
+  eq(sliced.returned, sliced.blocks.length, 'and returned counts what came back');
+  eq(page.returned, page.blocks.length, 'as it does for a whole page');
 
   const raw = JSON.parse(plug.request('page=' + key + '&raw=1').body);
   eq(raw.raw, plug.storage[key], 'raw hands back exactly what is stored, through JSON unharmed');
@@ -577,6 +579,18 @@ test('21  the switch is never written to', () => {
   eq(plug.output, output, 'and the relay is where it was');
 });
 
+// The Android app deploys the journal from a bundled copy rather than from
+// this directory, and a Gradle build has no Node to generate it with. So the
+// squeezed script is checked in, and a change here that nobody regenerated
+// would otherwise ship an app that installs an old script on a plug.
+test('22  the copy the app ships is the script in this directory', () => {
+  const { build, TARGET } = require('../tools/asset');
+  const fs = require('fs');
+  ok(fs.existsSync(TARGET), 'the app carries a copy of the script');
+  ok(fs.readFileSync(TARGET, 'utf8') === build(),
+    'and it is up to date -- run node tools/asset.js if this fails');
+});
+
 // The plug refuses a call stack it believes is about to overflow, and it kills
 // the script when it does -- mid-write, with the archive half switched over.
 // Measured on a Plug M Gen3 running 2.0.0, the budget is 15 nested frames from
@@ -588,7 +602,7 @@ test('21  the switch is never written to', () => {
 // Frames of the script read "at name (eval at boot (harness.js), ...)" because
 // the harness loads the file with new Function. A frame without that is the
 // harness itself, which is where the script's own chain ends.
-test('22  the archive never nests deeper than the plug allows', () => {
+test('23  the archive never nests deeper than the plug allows', () => {
   const CEILING = 10;
   let deepest = { n: 0, chain: '' };
   const realRound = Math.round;

@@ -1153,21 +1153,21 @@ function httpPage(key, raw, skip, max) {
   let out = '{"page":"' + key + '","tier":' + tier + ',"grid_sec":' + grid +
     ',"start":' + at + ',"fields":["start_time","duration_sec","energy_mwh"],"blocks":[';
   let n = 0;
-  let first = true;
+  let sent = 0;
   let duration, energy;
   while (DEC.i < text.length) {
     duration = dec(text) * grid;
     energy = decZ(text) * unit;
     if (!DEC.ok) break;
     if (n >= skip && n < skip + max) {
-      if (!first) out = out + ',';
+      if (sent > 0) out = out + ',';
       out = out + '[' + at + ',' + duration + ',' + energy + ']';
-      first = false;
+      sent = sent + 1;
     }
     at = at + duration;
     n = n + 1;
   }
-  return out + '],"skip":' + skip + ',"returned":' + (first ? 0 : 1) + ',"total":' + n + ',"end":' + at + '}';
+  return out + '],"skip":' + skip + ',"returned":' + sent + ',"total":' + n + ',"end":' + at + '}';
 }
 
 // --------------------------------------------------------------------- main
