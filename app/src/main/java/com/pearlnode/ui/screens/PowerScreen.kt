@@ -6,10 +6,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -17,7 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
@@ -25,8 +29,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -48,6 +52,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
@@ -62,8 +70,10 @@ import com.pearlnode.data.PowerTrackingSettings
 import com.pearlnode.model.PowerBucket
 import com.pearlnode.model.PowerLevel
 import com.pearlnode.model.PowerWindow
+import com.pearlnode.ui.viewmodels.PowerPicker
 import com.pearlnode.ui.viewmodels.PowerUiState
 import com.pearlnode.ui.viewmodels.PowerViewModel
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -129,12 +139,24 @@ fun PowerScreen(
             ChartCard(
                 state = uiState,
                 onLevel = vm::setLevel,
-                onShow = vm::show,
+                onOpenPicker = vm::openPicker,
                 onStep = vm::step,
                 onDrill = vm::drillInto,
                 onSync = vm::sync,
             )
             Spacer(Modifier.padding(8.dp))
+
+            // A dialog draws in its own window, so where it sits in the tree
+            // decides nothing but who owns it.
+            uiState.picker?.let { picker ->
+                PeriodPickerDialog(
+                    picker = picker,
+                    onPick = vm::show,
+                    onPage = vm::pagePicker,
+                    onNow = { vm.show(PowerWindow.LAST_24H) },
+                    onDismiss = vm::closePicker,
+                )
+            }
         }
     }
 }
@@ -258,7 +280,7 @@ private fun SettingsCard(
 private fun ChartCard(
     state: PowerUiState,
     onLevel: (PowerLevel) -> Unit,
-    onShow: (PowerWindow) -> Unit,
+    onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
     onDrill: (Int) -> Unit,
     onSync: () -> Unit,
@@ -305,7 +327,7 @@ private fun ChartCard(
             }
 
             Spacer(Modifier.padding(4.dp))
-            PeriodPicker(state, onShow = onShow, onStep = onStep)
+            PeriodPicker(state, onOpenPicker = onOpenPicker, onStep = onStep)
 
             Spacer(Modifier.padding(8.dp))
             PowerChart(
@@ -349,40 +371,142 @@ private fun ChartCard(
  * nothing after now to show.
  */
 @Composable
-private fun PeriodPicker(state: PowerUiState, onShow: (PowerWindow) -> Unit, onStep: (Long) -> Unit) {
-    var open by remember { mutableStateOf(false) }
+private fun PeriodPicker(state: PowerUiState, onOpenPicker: () -> Unit, onStep: (Long) -> Unit) {
     val rollingLabel = stringResource(R.string.power_last_24h)
-
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { onStep(-1) }) {
             Icon(Icons.Default.ChevronLeft, contentDescription = stringResource(R.string.power_earlier))
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            TextButton(onClick = { open = true }) {
+            TextButton(onClick = onOpenPicker) {
+                Icon(Icons.Default.CalendarMonth, contentDescription = null,
+                    modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
                 Text(if (state.window.rolling) rollingLabel else state.window.label())
-                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                // The rolling window is not a calendar period and does not
-                // belong in a sequence of them, so it sits above the list
-                // rather than inside it -- and only where days are shown.
-                if (state.window.level == PowerLevel.DAY) {
-                    DropdownMenuItem(
-                        text = { Text(rollingLabel) },
-                        onClick = { open = false; onShow(PowerWindow.LAST_24H) },
-                    )
-                    HorizontalDivider()
-                }
-                state.choices.forEach { choice ->
-                    DropdownMenuItem(
-                        text = { Text(choice.label()) },
-                        onClick = { open = false; onShow(choice) },
-                    )
-                }
             }
         }
         IconButton(onClick = { onStep(1) }, enabled = !state.atLatest) {
             Icon(Icons.Default.ChevronRight, contentDescription = stringResource(R.string.power_later))
+        }
+    }
+}
+
+/**
+ * Choosing a period, as a grid rather than a list.
+ *
+ * A list of every month there has ever been stops being usable after a couple
+ * of years, and a list of every day never was. A grid of what fits inside one
+ * coarser period never grows past about thirty cells however long the archive
+ * runs: twelve months in a year, thirty-one days in a month, twenty-four hours
+ * in a day. Paging moves by that coarser period, so getting anywhere takes a
+ * bounded number of taps rather than a proportional amount of scrolling.
+ *
+ * Each cell is tinted by the energy behind it, which is the part a list could
+ * never do. Finding the afternoon the plant had its best hour becomes a matter
+ * of looking rather than of stepping through days one at a time. A cell nothing
+ * is known about is left plain rather than dark -- a gap is not a quiet day.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PeriodPickerDialog(
+    picker: PowerPicker,
+    onPick: (PowerWindow) -> Unit,
+    onPage: (Long) -> Unit,
+    onNow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val peak = picker.cells.maxOfOrNull { abs(it.energyMwh) } ?: 0.0
+    val drawnColor = PowerDrawnColor
+    // A month grid only reads as a calendar if the first lands under its weekday.
+    val pad = if (picker.calendar) picker.cells.firstOrNull()?.weekdayIndex ?: 0 else 0
+
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+            Column(Modifier.padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (picker.parent != null) {
+                        IconButton(onClick = { onPage(-1) }) {
+                            Icon(Icons.Default.ChevronLeft,
+                                contentDescription = stringResource(R.string.power_earlier))
+                        }
+                    }
+                    Text(
+                        picker.title.ifEmpty { stringResource(R.string.power_all_years) },
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (picker.parent != null) {
+                        IconButton(onClick = { onPage(1) }, enabled = picker.canPageForward) {
+                            Icon(Icons.Default.ChevronRight,
+                                contentDescription = stringResource(R.string.power_later))
+                        }
+                    }
+                }
+
+                if (picker.calendar) {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                        DayOfWeek.entries.forEach { day ->
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                Text(
+                                    day.getDisplayName(TextStyle.NARROW, Locale.getDefault()),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(picker.columns),
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(pad) { Spacer(Modifier.height(40.dp)) }
+                    items(picker.cells.size) { index ->
+                        val cell = picker.cells[index]
+                        val share = if (peak > 0) (abs(cell.energyMwh) / peak).toFloat() else 0f
+                        val tint = if (cell.energyMwh < 0) PowerEarnedColor else drawnColor
+                        Box(
+                            Modifier
+                                .height(40.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (!cell.known) Color.Transparent
+                                    else tint.copy(alpha = 0.15f + 0.6f * share)
+                                )
+                                .then(
+                                    if (!cell.selected) Modifier
+                                    else Modifier.border(
+                                        2.dp,
+                                        MaterialTheme.colorScheme.onSurface,
+                                        MaterialTheme.shapes.small,
+                                    )
+                                )
+                                .clickable { onPick(cell.window) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                cell.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (cell.known) MaterialTheme.colorScheme.onSurface
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    TextButton(onClick = onNow) { Text(stringResource(R.string.power_last_24h)) }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                }
+            }
         }
     }
 }

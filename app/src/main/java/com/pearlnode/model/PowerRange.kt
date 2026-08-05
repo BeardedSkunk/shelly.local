@@ -97,6 +97,55 @@ data class PowerWindow(
         })
     }
 
+    /**
+     * The periods of a finer level that fall inside this one: the twelve months
+     * of a year, the days of a month, the hours of a day.
+     *
+     * This is what the picker is built from. A list of every period there has
+     * ever been stops being usable after a year or two; a grid of what fits
+     * inside one coarser period never grows past about thirty cells, however
+     * long the archive runs.
+     */
+    fun subWindows(child: PowerLevel, zone: ZoneId = ZoneId.systemDefault()): List<PowerWindow> {
+        val anchor = anchor ?: return emptyList()
+        val start = anchor.atZone(zone)
+        val end = when (level) {
+            PowerLevel.HOUR -> start.plusHours(1)
+            PowerLevel.DAY -> start.plusDays(1)
+            PowerLevel.WEEK -> start.plusWeeks(1)
+            PowerLevel.MONTH -> start.plusMonths(1)
+            PowerLevel.YEAR -> start.plusYears(1)
+        }
+        val out = ArrayList<PowerWindow>()
+        var at = start
+        while (at < end) {
+            out.add(of(child, at.toLocalDateTime()))
+            at = when (child) {
+                PowerLevel.HOUR -> at.plusHours(1)
+                PowerLevel.DAY -> at.plusDays(1)
+                PowerLevel.WEEK -> at.plusWeeks(1)
+                PowerLevel.MONTH -> at.plusMonths(1)
+                PowerLevel.YEAR -> at.plusYears(1)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Which period the picker pages through to offer this one. Choosing a day
+     * means looking at a month, choosing a month at a year. Years have nothing
+     * above them, so they are offered as the span the archive actually covers.
+     */
+    fun pickingParent(): PowerWindow? {
+        val anchor = anchor ?: return null
+        return when (level) {
+            PowerLevel.HOUR -> of(PowerLevel.DAY, anchor)
+            PowerLevel.DAY -> of(PowerLevel.MONTH, anchor)
+            PowerLevel.WEEK, PowerLevel.MONTH -> of(PowerLevel.YEAR, anchor)
+            PowerLevel.YEAR -> null
+        }
+    }
+
     /** Keeps the moment being looked at and changes how much around it is shown. */
     fun atLevel(target: PowerLevel, now: LocalDateTime): PowerWindow = of(target, anchor ?: now)
 
@@ -147,27 +196,5 @@ data class PowerWindow(
             })
         }
 
-        /**
-         * What the picker offers: this period and the ones before it, newest
-         * first, stopping once past the oldest stored block. The rolling window
-         * is added by the screen, at the top, because it is not a calendar
-         * period and does not belong in a sequence of them.
-         */
-        fun choices(
-            level: PowerLevel,
-            now: LocalDateTime,
-            earliest: LocalDateTime?,
-            limit: Int = 24,
-        ): List<PowerWindow> {
-            val out = ArrayList<PowerWindow>()
-            var window = of(level, now)
-            val floor = earliest?.let { of(level, it) }
-            while (out.size < limit) {
-                out.add(window)
-                if (floor != null && !window.anchor!!.isAfter(floor.anchor!!)) break
-                window = window.shifted(-1, now)
-            }
-            return out
-        }
     }
 }

@@ -22,8 +22,36 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/**
+ * One cell of the period picker: a period, and how much energy is behind it.
+ *
+ * The energy is what makes a grid better than a list. Thirty cells tinted by
+ * what they hold say where the interesting days were; thirty lines of text say
+ * nothing at all.
+ */
+data class PowerCell(
+    val window: PowerWindow,
+    val label: String,
+    val energyMwh: Double,
+    val known: Boolean,
+    val selected: Boolean,
+    /** Where the first cell sits in a week, so a month grid lines up as a calendar. */
+    val weekdayIndex: Int = 0,
+)
+
+data class PowerPicker(
+    /** The period being paged through -- the year a month is chosen from, say. */
+    val parent: PowerWindow?,
+    val title: String,
+    val cells: List<PowerCell>,
+    val columns: Int,
+    val calendar: Boolean = false,
+    val canPageForward: Boolean = true,
+)
 
 data class PowerUiState(
     val device: Device? = null,
@@ -40,8 +68,6 @@ data class PowerUiState(
     val error: String? = null,
     val window: PowerWindow = PowerWindow.LAST_24H,
     val buckets: List<PowerBucket> = emptyList(),
-    /** Periods the picker offers for the current level, newest first. */
-    val choices: List<PowerWindow> = emptyList(),
     /** True while the window runs up to now, so there is no later one to step to. */
     val atLatest: Boolean = true,
     val priceCentsPerKwh: Double = 30.0,
@@ -50,6 +76,8 @@ data class PowerUiState(
     val lastSyncUtc: Long = 0L,
     val storedBlocks: Int = 0,
     val earliestUtc: Long? = null,
+    /** Non-null while the picker is open. */
+    val picker: PowerPicker? = null,
 ) {
     /**
      * Signed, in kWh: positive drawn from the grid, negative sent back.
@@ -114,8 +142,11 @@ class PowerViewModel(
     private fun nowUtc() = System.currentTimeMillis() / 1000
     private fun now() = LocalDateTime.now(zone)
 
+    private val picker = MutableStateFlow<PowerWindow?>(null)
+
     init {
         observeHistory()
+        observePicker()
     }
 
     /**
@@ -154,22 +185,139 @@ class PowerViewModel(
                 _uiState.update { it.copy(
                     window = selected,
                     buckets = bucketize(segments, edges),
-                    choices = choicesFor(selected),
                     atLatest = selected.isCurrent(nowUtc(), zone),
                 ) }
             }
         }
     }
 
-    /** The periods the picker offers, never reaching further back than the oldest block. */
-    private fun choicesFor(selected: PowerWindow): List<PowerWindow> {
-        val earliest = _uiState.value.earliestUtc
-            ?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDateTime() }
-        return PowerWindow.choices(selected.level, now(), earliest)
-    }
-
     fun show(selected: PowerWindow) {
         window.value = selected
+        picker.value = null
+    }
+
+    // ------------------------------------------------------------ the picker
+
+    /**
+     * The picker is a grid of the periods inside one coarser period, and it
+     * pages by that coarser period: months within a year, days within a month,
+     * hours within a day. Years have nothing above them, so they are offered as
+     * the span the archive actually covers -- which is bounded by the data
+     * rather than by a guess.
+     */
+    fun openPicker() {
+        val current = window.value
+        picker.value = if (current.rolling) PowerWindow.of(PowerLevel.MONTH, now()).let {
+            // The rolling window is not in any month, so the picker opens on
+            // this one and offers its days.
+            it
+        } else current.pickingParent() ?: YEARS
+    }
+
+    fun closePicker() {
+        picker.value = null
+    }
+
+    fun pagePicker(steps: Long) {
+        val open = picker.value ?: return
+        if (open === YEARS) return
+        picker.value = open.shifted(steps, now())
+    }
+
+    private fun childLevelFor(parent: PowerWindow): PowerLevel {
+        val level = window.value.level
+        // The rolling window counts as choosing a day.
+        if (window.value.rolling) return PowerLevel.DAY
+        return if (parent === YEARS) PowerLevel.YEAR else level
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observePicker() {
+        viewModelScope.launch {
+            picker.flatMapLatest { parent ->
+                if (parent == null) flowOf(null to emptyList<PowerBlock>())
+                else {
+                    val span = pickerSpan(parent)
+                    journal.observeRange(deviceId, span.first, span.second)
+                        .map { parent to it }
+                }
+            }.collectLatest { (parent, blocks) ->
+                _uiState.update { it.copy(picker = parent?.let { p -> buildPicker(p, blocks) }) }
+            }
+        }
+    }
+
+    /** The whole stretch a picker page covers, which is what its cells divide up. */
+    private fun pickerSpan(parent: PowerWindow): Pair<Long, Long> {
+        if (parent === YEARS) {
+            val from = _uiState.value.earliestUtc ?: nowUtc() - 365L * 86400
+            return from to nowUtc() + 86400
+        }
+        val edges = parent.edges(nowUtc(), zone)
+        return edges.first() to edges.last()
+    }
+
+    private fun buildPicker(parent: PowerWindow, blocks: List<PowerBlock>): PowerPicker {
+        val child = childLevelFor(parent)
+        val cells = if (parent === YEARS) yearWindows() else parent.subWindows(child, zone)
+        val edges = cells.map { it.edges(nowUtc(), zone).first() } +
+            (cells.lastOrNull()?.edges(nowUtc(), zone)?.last() ?: nowUtc())
+        val segments = mergeFinest(blocks, edges.first(), edges.last())
+        val buckets = bucketize(segments, edges)
+        val shown = window.value
+
+        val list = cells.mapIndexed { index, cell ->
+            val bucket = buckets.getOrNull(index)
+            PowerCell(
+                window = cell,
+                label = cellLabel(child, cell),
+                energyMwh = bucket?.energyMwh ?: 0.0,
+                known = bucket?.coarsestTier != null,
+                selected = cell.anchor == shown.anchor && cell.level == shown.level,
+                weekdayIndex = cell.anchor?.dayOfWeek?.ordinal ?: 0,
+            )
+        }
+        return PowerPicker(
+            parent = if (parent === YEARS) null else parent,
+            title = if (parent === YEARS) "" else parent.label(),
+            cells = list,
+            columns = when (child) {
+                PowerLevel.HOUR -> 6
+                PowerLevel.DAY -> 7
+                PowerLevel.WEEK -> 6
+                PowerLevel.MONTH -> 4
+                PowerLevel.YEAR -> 4
+            },
+            calendar = child == PowerLevel.DAY,
+            canPageForward = parent !== YEARS && !parent.isCurrent(nowUtc(), zone),
+        )
+    }
+
+    /** Every year the archive touches, newest last, so the grid reads forwards. */
+    private fun yearWindows(): List<PowerWindow> {
+        val first = _uiState.value.earliestUtc
+            ?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDateTime() } ?: now()
+        val out = ArrayList<PowerWindow>()
+        var at = PowerWindow.of(PowerLevel.YEAR, first)
+        val last = PowerWindow.of(PowerLevel.YEAR, now())
+        while (out.size < 40) {
+            out.add(at)
+            if (at.anchor == last.anchor) break
+            at = at.shifted(1, now())
+        }
+        return out
+    }
+
+    private fun cellLabel(level: PowerLevel, cell: PowerWindow): String {
+        val at = cell.anchor ?: return ""
+        return when (level) {
+            PowerLevel.HOUR -> String.format(java.util.Locale.getDefault(), "%02d", at.hour)
+            PowerLevel.DAY -> at.dayOfMonth.toString()
+            PowerLevel.WEEK -> "" + at.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
+            PowerLevel.MONTH -> at.month.getDisplayName(
+                java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+            PowerLevel.YEAR -> at.year.toString()
+        }
     }
 
     /** Keeps the moment being looked at and changes how much around it is shown. */
@@ -242,9 +390,6 @@ class PowerViewModel(
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             ) }
-            // The picker reaches back to the oldest block, so it can only be
-            // right once that is known.
-            _uiState.update { it.copy(choices = choicesFor(window.value)) }
             if (running) sync()
         }
     }
@@ -261,9 +406,6 @@ class PowerViewModel(
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             ) }
-            // The picker reaches back to the oldest block, so it can only be
-            // right once that is known.
-            _uiState.update { it.copy(choices = choicesFor(window.value)) }
         }
     }
 
@@ -290,6 +432,14 @@ class PowerViewModel(
             ) }
             refresh()
         }
+    }
+
+    companion object {
+        /**
+         * Stands for "the years the archive covers" -- the one picker page that
+         * is not a calendar period, because years have nothing above them.
+         */
+        private val YEARS = PowerWindow(PowerLevel.YEAR, null)
     }
 
     class Factory(

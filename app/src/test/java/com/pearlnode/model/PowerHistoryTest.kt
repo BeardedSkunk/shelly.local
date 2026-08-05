@@ -216,14 +216,4 @@ class PowerHistoryTest {
         assertFalse(PowerWindow.of(PowerLevel.YEAR, today.minusYears(1)).isCurrent(now, zone))
     }
 
-    @Test
-    fun `the picker stops at the oldest block rather than running on forever`() {
-        val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
-        val since = java.time.LocalDate.of(2026, 6, 20).atStartOfDay()
-        val months = PowerWindow.choices(PowerLevel.MONTH, today, since)
-        assertEquals(listOf(8, 7, 6), months.map { it.anchor!!.monthValue })
-
-        // With nothing stored, it still offers a usable stretch rather than none.
-        assertEquals(24, PowerWindow.choices(PowerLevel.MONTH, today, null).size)
-    }
 }
