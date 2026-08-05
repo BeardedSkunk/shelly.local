@@ -502,11 +502,16 @@ function atticDone() {
 // ------------------------------------------------------------------ tiering
 
 // Where the grid line at or before this second sits. The offset is what makes
-// a day bucket start at local midnight rather than at 01:00 or 02:00; for the
-// quarter hour and hour grids it changes nothing, because every sane UTC
-// offset is a multiple of both.
+// a day bucket start at local midnight rather than at 22:00 or 23:00 the
+// evening before; for the quarter hour and hour grids it changes nothing,
+// because every sane UTC offset is a multiple of both.
+//
+// Local time is UTC plus the offset, so it is the shifted value that has to
+// land on the grid, and the shift comes back off afterwards. Getting this
+// backwards puts the day boundary at four in the morning, which is what it did
+// until a plug showed it.
 function bucketStart(when, grid) {
-  return Math.floor((when - ST.offset) / grid) * grid + ST.offset;
+  return Math.floor((when + ST.offset) / grid) * grid - ST.offset;
 }
 
 // Feeds one closed block into one tier. The block's energy is spread over the

@@ -237,12 +237,19 @@ test('8  hours and days line up too, days on local midnight', () => {
   ok(gapless(hours), 'and they are contiguous');
 
   // Days go through the reducer directly: two simulated days at ten second
-  // samples would be seventeen thousand ticks for one assertion.
-  eq(plug.pj.bucketStart(1785913800, 86400) % 86400, 7200,
-    'a day bucket starts at 02:00 UTC, which is local midnight at UTC+2');
-  const winter = running({ utcOffset: 3600 });
-  eq(winter.pj.bucketStart(1785913800, 86400) % 86400, 3600,
-    'and at 01:00 UTC once the clocks go back');
+  // samples would be seventeen thousand ticks for one assertion. The check is
+  // against local midnight itself rather than against an offset in UTC, so it
+  // cannot pass with the shift applied the wrong way round -- which is exactly
+  // how a day boundary once ended up at four in the morning.
+  const localMidnight = (when, offset) => {
+    const start = (offset === 7200 ? plug : running({ utcOffset: offset }))
+      .pj.bucketStart(when, 86400);
+    return new Date((start + offset) * 1000).toISOString().slice(11, 19);
+  };
+  eq(localMidnight(1785913800, 7200), '00:00:00', 'a day bucket starts at local midnight in summer');
+  eq(localMidnight(1785913800, 3600), '00:00:00', 'and at local midnight once the clocks go back');
+  eq(localMidnight(1785913800, 0), '00:00:00', 'and in UTC, where the two are the same');
+  ok(plug.pj.bucketStart(1785913800, 86400) <= 1785913800, 'and never after the moment it is asked about');
 });
 
 test('9  the tiers agree about how much energy there was', () => {

@@ -19,7 +19,7 @@ They are divided like this:
 
 | tier | grid | energy unit | pages | blocks/page | reaches back at least |
 |---|---|---|---|---|---|
-| native | — | 1 mWh | 1 | ~250 | the last few hundred blocks |
+| native | — | 1 mWh | 1 | ~195 | hours, or days on a quiet load |
 | quarter hour | 900 s | 100 mWh | 3 | 250 | **7.8 days** |
 | hour | 3600 s | 1 Wh | 3 | 250 | **31 days** |
 | day | 86400 s | 10 Wh | 3 | 250 | **2.1 years** |
@@ -33,6 +33,12 @@ across that whole range. Real use does better, often much better: a night
 merges into one entry.
 
 **End to end, day resolution reaches back 5750 days — about 15.7 years.**
+
+The native tier is the exception, because it stores whole seconds and whole
+milliwatt hours and so costs about five characters a block rather than four.
+How long its single page lasts is entirely up to the load: measured on a
+balcony plant it took 17 blocks in 18 minutes, which fills the page in about
+three and a half hours. On a phone charger it is days.
 
 Every closed block is fed to **all four tiers at once**. Tier 0 keeps it
 verbatim; the others drop it into buckets on their grid. The tiers do not
