@@ -35,6 +35,13 @@ data class JournalIndex(
      * request.
      */
     val generation: Int,
+    /**
+     * The plug's own clock at the moment it answered, or 0 before it has taken
+     * its first sample. Every time in this archive was stamped by this clock,
+     * so anything measured against the archive has to be measured against this
+     * one and not against the phone's.
+     */
+    val unixtime: Long,
     val utcOffsetSec: Int,
     val atticBytes: Int,
     val tiers: List<JournalTier>,
@@ -88,12 +95,29 @@ class PowerJournalClient(
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) error("HTTP ${resp.code}")
             val root = Json.parseToJsonElement(resp.body.string()).jsonObject
-            root["error"]?.let { err ->
-                error("RPC error: ${err.jsonObject["message"]?.jsonPrimitive?.content}")
+            // Cast rather than jsonObject: a present JSON null is JsonNull, not
+            // an absent key, and asking JsonNull for an object throws. Some
+            // methods answer error:null on success and some answer result:null,
+            // and reading either as a failure is how a working update once
+            // reported itself as broken.
+            (root["error"] as? JsonObject)?.let { err ->
+                error("RPC error: ${err["message"]?.jsonPrimitive?.contentOrNull}")
             }
-            return root["result"]?.jsonObject ?: buildJsonObject {}
+            return root["result"] as? JsonObject ?: buildJsonObject {}
         }
     }
+
+    /**
+     * The timezone the plug keeps, as an IANA name -- "Europe/Berlin".
+     *
+     * This is the zone the archive happened in, and it is not necessarily the
+     * phone's. Someone looking at their plug from another country still wants
+     * to see the day that plug had. Null when the plug has no location set,
+     * which is a plug that has never been on the internet.
+     */
+    fun timezone(): String? =
+        (rpc("Sys.GetConfig")["location"] as? JsonObject)
+            ?.get("tz")?.jsonPrimitive?.contentOrNull
 
     private fun get(path: String): String {
         val req = Request.Builder().url("http://$ip$path").get().build()
@@ -225,6 +249,7 @@ fun parseJournalIndex(body: String): JournalIndex {
     return JournalIndex(
         version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
         generation = root["generation"]?.jsonPrimitive?.intOrNull ?: 0,
+        unixtime = root["unixtime"]?.jsonPrimitive?.longOrNull ?: 0L,
         utcOffsetSec = root["utc_offset"]?.jsonPrimitive?.intOrNull ?: 0,
         atticBytes = root["attic_bytes"]?.jsonPrimitive?.intOrNull ?: 0,
         tiers = tiers,

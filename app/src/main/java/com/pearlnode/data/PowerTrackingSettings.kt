@@ -1,6 +1,7 @@
 package com.pearlnode.data
 
 import android.content.Context
+import java.time.ZoneId
 
 /**
  * What the user chose, as opposed to what the plug is doing.
@@ -64,6 +65,25 @@ class PowerTrackingSettings(context: Context) {
 
     fun setSyncedGeneration(deviceId: String, generation: Int) {
         prefs.edit().putInt("${deviceId}_gen", generation).apply()
+    }
+
+    /**
+     * The timezone the plug keeps, as an IANA name, learned on the last sync.
+     *
+     * The chart is drawn in it rather than in the phone's, because a day is a
+     * fact about where the energy was used. Looking at a plug in Berlin from
+     * Tokyo has to show Berlin days, or "yesterday" means neither one thing nor
+     * the other: half its bars would come from one calendar day at the plug and
+     * half from the next. Null until a sync has been through, and null forever
+     * for a plug with no location set -- the phone's zone is the fallback, and
+     * for a plug at home it is the same answer anyway.
+     */
+    fun zoneId(deviceId: String): ZoneId? =
+        prefs.getString("${deviceId}_tz", null)
+            ?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+
+    fun setZoneId(deviceId: String, zone: String) {
+        prefs.edit().putString("${deviceId}_tz", zone).apply()
     }
 
     /** Unix second of the last successful sync, so a stale view can say so. */

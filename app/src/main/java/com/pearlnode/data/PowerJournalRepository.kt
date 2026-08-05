@@ -8,6 +8,7 @@ import com.pearlnode.data.db.PowerBlockDao
 import com.pearlnode.model.Device
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.TIER_NATIVE
+import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -113,6 +114,20 @@ class PowerJournalRepository(
         val scriptId = client.installation().scriptId ?: error("no journal on this device")
         val index = client.index(scriptId)
 
+        // Which zone the plug keeps is asked for only when the offset it
+        // reports stops matching the zone already on file. That is one extra
+        // request when a plug is first seen, and none at all on the hundreds of
+        // syncs after -- including the two days a year the offset moves for
+        // daylight saving, which the stored zone predicts on its own. A plug
+        // that really was carried to another country answers the question
+        // again by itself.
+        val known = settings.zoneId(device.id)
+        val plugNow = if (index.unixtime > 0) Instant.ofEpochSecond(index.unixtime) else Instant.now()
+        if (known == null || known.rules.getOffset(plugNow).totalSeconds != index.utcOffsetSec) {
+            runCatching { client.timezone() }.getOrNull()
+                ?.let { settings.setZoneId(device.id, it) }
+        }
+
         // Blocks copied from an older archive mean something else. Up to
         // version 3 the sign followed the plug's reverse metering flag, and
         // nothing in a stored row says which way that flag stood at the time --
@@ -179,8 +194,16 @@ class PowerJournalRepository(
         // and its energy is zero by definition. Leaving it out would put a hole
         // in the chart across every quiet night, and a hole means "nobody was
         // watching", which would be a lie.
+        //
+        // A null block reports no duration, so one has to be worked out, and
+        // the only clock allowed to do that is the plug's. Its own is what
+        // stamped the start; measuring against the phone's would stretch or
+        // shorten the block by however far apart the two clocks are, and a
+        // phone running ahead would push the archive into the future. The
+        // phone's clock is the fallback for a plug that has not sampled yet,
+        // where there is no block to measure anyway.
         index.current?.let { (start, duration, energy) ->
-            val now = System.currentTimeMillis() / 1000
+            val now = if (index.unixtime > 0) index.unixtime else System.currentTimeMillis() / 1000
             val span = if (duration > 0) duration else now - start
             if (span > 0) blocks.add(PowerBlock(device.id, TIER_NATIVE, start, span, energy))
         }

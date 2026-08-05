@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -78,6 +79,8 @@ data class PowerUiState(
     val earliestUtc: Long? = null,
     /** Non-null while the picker is open. */
     val picker: PowerPicker? = null,
+    /** The zone every time on this screen is read in -- the plug's, where known. */
+    val zone: ZoneId = ZoneId.systemDefault(),
 ) {
     /**
      * Signed, in kWh: positive drawn from the grid, negative sent back.
@@ -130,6 +133,7 @@ class PowerViewModel(
             priceCentsPerKwh = journal.settings.priceCentsPerKwh,
             feedInCentsPerKwh = journal.settings.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
+            zone = journal.settings.zoneId(deviceId) ?: ZoneId.systemDefault(),
         )
     )
     val uiState: StateFlow<PowerUiState> = _uiState.asStateFlow()
@@ -138,7 +142,19 @@ class PowerViewModel(
     // a calendar period and the only one that is always worth something.
     private val window = MutableStateFlow(PowerWindow.LAST_24H)
 
-    private val zone: ZoneId get() = ZoneId.systemDefault()
+    /**
+     * The zone the chart is drawn in: the plug's, once a sync has learned it,
+     * and the phone's until then.
+     *
+     * A day is a fact about the place the energy was used. Reading it in the
+     * phone's zone would cut the bars at a midnight that never happened at the
+     * plug -- for a plug at home that is the same moment, and away from home it
+     * is not, which is exactly the case this screen exists for.
+     */
+    private val zoneFlow = MutableStateFlow(storedZone())
+    private val zone: ZoneId get() = zoneFlow.value
+
+    private fun storedZone(): ZoneId = journal.settings.zoneId(deviceId) ?: ZoneId.systemDefault()
     private fun nowUtc() = System.currentTimeMillis() / 1000
     private fun now() = LocalDateTime.now(zone)
 
@@ -174,7 +190,9 @@ class PowerViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeHistory() {
         viewModelScope.launch {
-            window.flatMapLatest { selected ->
+            // The zone is in here because it decides where the bars are cut,
+            // and a first sync can change it under a window that has not moved.
+            combine(window, zoneFlow) { selected, _ -> selected }.flatMapLatest { selected ->
                 val edges = selected.edges(nowUtc(), zone)
                 if (edges.size < 2) flowOf(emptyList<PowerBlock>())
                 else journal.observeRange(deviceId, edges.first(), edges.last())
@@ -186,6 +204,7 @@ class PowerViewModel(
                     window = selected,
                     buckets = bucketize(segments, edges),
                     atLatest = selected.isCurrent(nowUtc(), zone),
+                    zone = zone,
                 ) }
             }
         }
@@ -406,6 +425,11 @@ class PowerViewModel(
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             ) }
+            // A first sync is where the plug's zone is learned, and the bars
+            // are cut on its midnights -- so they have to be worked out again.
+            // A StateFlow drops a value it already holds, so the usual sync
+            // that learns nothing new costs nothing.
+            zoneFlow.value = storedZone()
         }
     }
 

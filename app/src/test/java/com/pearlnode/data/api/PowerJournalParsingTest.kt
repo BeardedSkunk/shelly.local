@@ -61,6 +61,17 @@ class PowerJournalParsingTest {
     }
 
     @Test
+    fun `the plug's own clock comes through, and its absence is visible`() {
+        // Version 3 of the script publishes unixtime. The two fixtures above
+        // were captured from version 2, which did not -- and a reader has to be
+        // able to tell that apart from a clock reading zero, because that is
+        // when it has to fall back to its own.
+        val withClock = plant.replace(""""generation":76,""", """"generation":76,"unixtime":1785925600,""")
+        assertEquals(1785925600L, parseJournalIndex(withClock).unixtime)
+        assertEquals(0L, parseJournalIndex(plant).unixtime)
+    }
+
+    @Test
     fun `a merged pending run keeps its full span`() {
         // Two quarter hours that turned out to be the same level, so the plug
         // holds them as one 1800 second run. Copying it as 900 would lose half.

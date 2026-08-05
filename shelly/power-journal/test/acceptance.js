@@ -736,6 +736,37 @@ test('26  the archive never nests deeper than the plug allows', () => {
   }
 });
 
+test('27  the clock is the plug\'s own, and the day grid never breaks', () => {
+  // Europe/Berlin, 29 March 2026: 02:00 CET becomes 03:00 CEST, so that local
+  // day is 23 hours long. A day block is a fixed 86400 seconds -- the page
+  // format stores durations as multiples of the tier's grid and nothing else
+  // fits -- so the grid cannot follow the offset. What it must do instead is
+  // stay unbroken: whatever the offset does, day blocks keep meeting end to
+  // end, because a page reconstructs every start by summing the durations
+  // before it. A gap or an overlap here would not be an hour out of place, it
+  // would silently move every block after it.
+  const midnight = Date.UTC(2026, 2, 28, 23, 0, 0) / 1000; // 00:00 CET, 29.03
+  const change = Date.UTC(2026, 2, 29, 1, 0, 0) / 1000;    // 02:00 CET -> 03:00 CEST
+  const plug = running({ unixtime: midnight - 600, utcOffset: 3600 });
+
+  let step = 0;
+  while (plug.unixtime < midnight + 3 * 86400) {
+    plug.feedFor(step++ % 2 ? 100 : 400, 1800);
+    if (plug.unixtime >= change) plug.utcOffset = 7200;
+  }
+
+  const days = plug.tierBlocks(3);
+  ok(days.length >= 2, 'the day tier filled  (' + days.length + ' blocks)');
+  ok(gapless(days), 'and its blocks still meet end to end across the change');
+  ok(days.every((b) => b.duration === 86400), 'each of them a whole day long');
+  eq(days[0].start % 86400, midnight % 86400,
+    'the grid still sits where it was anchored, one hour off local midnight now');
+
+  const index = JSON.parse(plug.request('').body);
+  eq(index.unixtime, plug.unixtime, 'the index reports the plug\'s own clock');
+  eq(index.utc_offset, 7200, 'and the offset it is currently keeping');
+});
+
 // ---------------------------------------------------------------------------
 
 console.log('\n' + '-'.repeat(64));

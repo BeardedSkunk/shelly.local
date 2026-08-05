@@ -1181,9 +1181,14 @@ function queryValue(query, name) {
   return amp < 0 ? rest : rest.slice(0, amp);
 }
 
+// unixtime is the plug's own clock, and it is here so that a reader never has
+// to bring its own. Every time in this archive was stamped by this clock; a
+// phone that is a minute out would otherwise mismeasure the running block
+// against it, and one in another country would draw the wrong day.
 function httpIndex() {
   let out = '{"version":' + VERSION + ',"generation":' + ST.meta.g +
-    ',"utc_offset":' + ST.offset + ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
+    ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
+    ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
   // is still filling, and the merged run waiting to see whether the next
   // bucket joins it. Both are reported here, because a reader that only saw

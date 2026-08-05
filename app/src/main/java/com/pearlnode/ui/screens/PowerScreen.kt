@@ -339,7 +339,7 @@ private fun ChartCard(
             Spacer(Modifier.padding(8.dp))
             PowerChart(
                 buckets = state.buckets,
-                labels = barLabels(state.window, state.buckets),
+                labels = barLabels(state.window, state.buckets, state.zone),
                 centsPerKwh = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
                               else state.priceCentsPerKwh,
                 onBarTap = if (state.canDrill) onDrill else null,
@@ -598,8 +598,11 @@ private fun levelLabel(level: PowerLevel): Int = when (level) {
  * labels are hung on the last bar and counted backwards, so the newest bar is
  * always one of the named ones.
  */
-private fun barLabels(window: PowerWindow, buckets: List<PowerBucket>): List<String> {
-    val zone = ZoneId.systemDefault()
+private fun barLabels(
+    window: PowerWindow,
+    buckets: List<PowerBucket>,
+    zone: ZoneId,
+): List<String> {
     val every = when (window.level) {
         PowerLevel.HOUR -> 5
         PowerLevel.DAY -> 6
