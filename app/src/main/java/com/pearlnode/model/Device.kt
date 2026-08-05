@@ -10,6 +10,13 @@ data class Device(
     val ipAddress: String,
     val type: DeviceType,
     val generation: ShellyGeneration = ShellyGeneration.UNKNOWN,
+    /**
+     * The generation the device reports for itself, remembered from the last
+     * time it answered. [generation] is only the protocol family -- a Plug M
+     * Gen3 is a GEN2 speaker -- so without this a device that cannot be reached
+     * would be described as a generation older than it is.
+     */
+    val reportedGeneration: Int? = null,
     val hasAuth: Boolean = false,
     val channelCount: Int = 1,
     val sortOrder: Int = 0,

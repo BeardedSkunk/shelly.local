@@ -71,6 +71,8 @@ sealed class FirmwareUpdateProgress {
     object Idle        : FirmwareUpdateProgress()
     data class Downloading(val percent: Int) : FirmwareUpdateProgress()
     data class Uploading(val percent: Int)   : FirmwareUpdateProgress()
+    /** The device is fetching the firmware itself; nothing goes through the phone. */
+    object Installing  : FirmwareUpdateProgress()
     object Rebooting   : FirmwareUpdateProgress()
     object Success     : FirmwareUpdateProgress()
     data class ReadyToInstall(val filePath: String, val webUiUrl: String) : FirmwareUpdateProgress()
@@ -87,6 +89,9 @@ sealed class AlarmSyncStatus {
 
 /** How many failures in a row it takes before the device counts as unreachable. */
 private const val FAILURES_BEFORE_OFFLINE = 2
+
+/** Fetching, installing and rebooting a firmware takes a couple of minutes. */
+private const val UPDATE_TIMEOUT_MS = 5 * 60 * 1000L
 
 class DeviceControlViewModel(
     private val repo: DeviceRepository,
@@ -408,13 +413,44 @@ class DeviceControlViewModel(
         }
     }
 
+    /**
+     * Updating, by whichever route the device actually offers.
+     *
+     * A Gen2 device checks Shelly's update server for itself, and if it can
+     * reach it the whole thing is one call: it fetches and installs, and
+     * nothing passes through the phone at all. Downloading the file here and
+     * then pointing at the web UI was busywork -- the web UI fetches its own
+     * copy and never wanted the downloaded one.
+     *
+     * The old route stays for devices that do not offer the new one: a Gen1
+     * device, which has to be pushed to because it cannot pull, and a Gen2
+     * device with no way out to the internet, which still gets the file saved
+     * for a manual install.
+     */
     fun startFirmwareUpdate(context: Context) {
         val device = currentDevice ?: return
         val info   = _uiState.value.firmwareInfo ?: return
         val ch     = _uiState.value.firmwareChannel
         if (!info.hasUpdate(ch)) return
         val url = info.targetUrl(ch)
+        val stage = if (ch == FirmwareChannel.BETA) "beta" else "stable"
         viewModelScope.launch {
+            val offered = runCatching { repo.availableUpdates(device) }.getOrDefault(emptyMap())
+            if (offered.containsKey(stage)) {
+                runCatching {
+                    _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Installing) }
+                    repo.installUpdate(device, stage)
+                    _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Rebooting) }
+                    awaitNewFirmware(device, info.currentVersion)
+                }
+                    .onSuccess { _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Success) } }
+                    .onFailure { e ->
+                        _uiState.update {
+                            it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Error(e.message ?: "Update failed"))
+                        }
+                    }
+                return@launch
+            }
             if (device.generation == ShellyGeneration.GEN2) {
                 runCatching {
                     _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Downloading(0)) }
@@ -454,6 +490,23 @@ class DeviceControlViewModel(
                     }
             }
         }
+    }
+
+    /**
+     * Waits for the device to come back on a different firmware.
+     *
+     * It fetches, installs and reboots, and is unreachable for part of that, so
+     * a failed request here means nothing and is ignored. Only a version that
+     * has actually changed counts as done.
+     */
+    private suspend fun awaitNewFirmware(device: Device, before: String) {
+        val deadline = System.currentTimeMillis() + UPDATE_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            delay(5_000)
+            val now = runCatching { repo.getDeviceInfo(device).firmwareVersion }.getOrNull()
+            if (now != null && now.isNotBlank() && now != before) return
+        }
+        error("the device did not come back on the new firmware in time")
     }
 
     fun dismissFirmwareResult() {

@@ -160,6 +160,7 @@
     <string name="firmware_updating_title">Updating firmware</string>
     <string name="firmware_downloading">Downloading… %1$d%%</string>
     <string name="firmware_uploading">Uploading to device… %1$d%%</string>
+    <string name="firmware_installing">The device is fetching the firmware…</string>
     <string name="firmware_rebooting">Rebooting device…</string>
     <string name="firmware_ready_title">Firmware ready</string>
     <string name="firmware_ready_message">Firmware downloaded to your device:</string>

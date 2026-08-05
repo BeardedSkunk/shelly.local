@@ -376,6 +376,7 @@ fun FirmwareProgressDialogs(progress: FirmwareUpdateProgress, onDismiss: () -> U
     when (progress) {
         is FirmwareUpdateProgress.Downloading,
         is FirmwareUpdateProgress.Uploading,
+        FirmwareUpdateProgress.Installing,
         FirmwareUpdateProgress.Rebooting -> {
             AlertDialog(
                 onDismissRequest = {},
@@ -396,6 +397,10 @@ fun FirmwareProgressDialogs(progress: FirmwareUpdateProgress, onDismiss: () -> U
                                     progress = { progress.percent / 100f },
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                            }
+                            FirmwareUpdateProgress.Installing -> {
+                                Text(stringResource(R.string.firmware_installing))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             }
                             FirmwareUpdateProgress.Rebooting -> {
                                 Text(stringResource(R.string.firmware_rebooting))

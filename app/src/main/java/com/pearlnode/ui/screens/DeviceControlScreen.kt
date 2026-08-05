@@ -257,7 +257,7 @@ fun DeviceControlScreen(
                 val fwContext = LocalContext.current
                 DeviceCard(
                     device             = device,
-                    reportedGeneration = uiState.reportedGeneration,
+                    reportedGeneration = uiState.reportedGeneration ?: device.reportedGeneration,
                     firmware           = uiState.firmwareInfo,
                     firmwareLoading    = uiState.firmwareLoading,
                     firmwareError      = uiState.firmwareError,

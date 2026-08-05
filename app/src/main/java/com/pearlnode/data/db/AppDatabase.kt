@@ -13,7 +13,7 @@ import com.pearlnode.model.DeviceType
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.ShellyGeneration
 
-@Database(entities = [Device::class, PowerBlock::class], version = 3, exportSchema = false)
+@Database(entities = [Device::class, PowerBlock::class], version = 4, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
@@ -58,13 +58,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // The generation a device reports for itself, so an unreachable one is
+        // not described by its protocol family instead.
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE devices ADD COLUMN reportedGeneration INTEGER")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "shelly.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
             }
     }
 }

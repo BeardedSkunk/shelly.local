@@ -202,6 +202,11 @@ class Gen1Client(
         return DeviceInfo(type, fw, ShellyGeneration.GEN1)
     }
 
+    // Gen1 has no equivalent: its firmware is pushed to it, never pulled by it.
+    override fun availableUpdates(): Map<String, String> = emptyMap()
+
+    override fun installUpdate(stage: String) = error("Gen1 devices cannot fetch their own firmware")
+
     override fun uploadFirmware(bytes: ByteArray, onProgress: (Int) -> Unit) {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)

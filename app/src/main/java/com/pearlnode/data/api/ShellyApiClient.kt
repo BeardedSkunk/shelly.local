@@ -24,5 +24,19 @@ interface ShellyApiClient {
     fun deleteSchedule(id: Int)
     fun setScheduleEnabled(id: Int, enabled: Boolean)
     fun getDeviceInfo(): DeviceInfo
+
+    /**
+     * What the device itself can fetch, by channel name. Empty when it has no
+     * way to reach the update servers, which is what says the firmware has to
+     * be carried to it instead.
+     */
+    fun availableUpdates(): Map<String, String>
+
+    /**
+     * Tells the device to fetch and install a channel itself. Returns as soon
+     * as it has accepted the job -- installing takes minutes and a reboot.
+     */
+    fun installUpdate(stage: String)
+
     fun uploadFirmware(bytes: ByteArray, onProgress: (Int) -> Unit)
 }

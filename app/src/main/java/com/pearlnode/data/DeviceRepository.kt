@@ -105,7 +105,21 @@ class DeviceRepository(
         }
 
     suspend fun getDeviceInfo(device: Device): DeviceInfo = withContext(Dispatchers.IO) {
-        clientFor(device).getDeviceInfo()
+        val info = clientFor(device).getDeviceInfo()
+        // Remembered on the way past, so the next time the device cannot be
+        // reached it is still described as what it is.
+        info.reportedGeneration?.let {
+            if (it != device.reportedGeneration) dao.updateReportedGeneration(device.id, it)
+        }
+        info
+    }
+
+    suspend fun availableUpdates(device: Device): Map<String, String> = withContext(Dispatchers.IO) {
+        clientFor(device).availableUpdates()
+    }
+
+    suspend fun installUpdate(device: Device, stage: String) = withContext(Dispatchers.IO) {
+        clientFor(device).installUpdate(stage)
     }
 
     suspend fun uploadFirmware(device: Device, bytes: ByteArray, onProgress: (Int) -> Unit) =

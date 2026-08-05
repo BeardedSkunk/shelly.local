@@ -246,6 +246,27 @@ class Gen2Client(
         }
     }
 
+    /**
+     * Asks the device what it can reach. A Gen2 plug checks Shelly's update
+     * server for itself, so if this answers, the whole update can be left to
+     * it: no download through the phone, no file anywhere, one call.
+     */
+    override fun availableUpdates(): Map<String, String> {
+        val result = runCatching { rpc("Shelly.CheckForUpdate") }.getOrElse { return emptyMap() }
+        val out = LinkedHashMap<String, String>()
+        for (stage in listOf("stable", "beta")) {
+            val entry = result[stage]?.jsonObject ?: continue
+            val version = entry["build_id"]?.jsonPrimitive?.contentOrNull
+                ?: entry["version"]?.jsonPrimitive?.contentOrNull ?: continue
+            out[stage] = version
+        }
+        return out
+    }
+
+    override fun installUpdate(stage: String) {
+        rpc("Shelly.Update", buildJsonObject { put("stage", stage) })
+    }
+
     override fun uploadFirmware(bytes: ByteArray, onProgress: (Int) -> Unit) {
         // Gen2 pulls firmware from a URL rather than accepting a direct upload.
         // Serve bytes over a local HTTP socket so the device can download from the phone.
