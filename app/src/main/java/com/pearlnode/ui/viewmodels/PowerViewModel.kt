@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class PowerUiState(
@@ -130,7 +131,7 @@ class PowerViewModel(
     private suspend fun requireDevice(): Device? {
         _uiState.value.device?.let { return it }
         val device = devices.getAllDevices().find { it.id == deviceId }
-        if (device != null) _uiState.value = _uiState.value.copy(device = device)
+        if (device != null) _uiState.update { it.copy(device = device) }
         return device
     }
 
@@ -150,12 +151,12 @@ class PowerViewModel(
                 val selected = window.value
                 val edges = selected.edges(nowUtc(), zone)
                 val segments = mergeFinest(blocks, edges.first(), edges.last())
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     window = selected,
                     buckets = bucketize(segments, edges),
                     choices = choicesFor(selected),
                     atLatest = selected.isCurrent(nowUtc(), zone),
-                )
+                ) }
             }
         }
     }
@@ -204,22 +205,22 @@ class PowerViewModel(
 
     fun setPrice(centsPerKwh: Double) {
         journal.settings.priceCentsPerKwh = centsPerKwh
-        _uiState.value = _uiState.value.copy(priceCentsPerKwh = centsPerKwh)
+        _uiState.update { it.copy(priceCentsPerKwh = centsPerKwh) }
     }
 
     /** Null puts a returned kilowatt hour back at the price of a drawn one. */
     fun setFeedInPrice(centsPerKwh: Double?) {
         journal.settings.feedInCentsPerKwh = centsPerKwh
-        _uiState.value = _uiState.value.copy(feedInCentsPerKwh = centsPerKwh)
+        _uiState.update { it.copy(feedInCentsPerKwh = centsPerKwh) }
     }
 
     /** Asks the plug what it is running, and syncs if the journal is there. */
     fun refresh() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(checkingDevice = true, error = null)
+            _uiState.update { it.copy(checkingDevice = true, error = null) }
             val device = requireDevice()
             if (device == null) {
-                _uiState.value = _uiState.value.copy(checkingDevice = false)
+                _uiState.update { it.copy(checkingDevice = false) }
                 return@launch
             }
             val installation = runCatching { journal.installation(device) }
@@ -231,7 +232,7 @@ class PowerViewModel(
             // for. When the plug cannot be reached, the stored answer is all
             // there is, so it stays.
             if (installation.isSuccess) journal.reconcile(device.id, running)
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
@@ -240,10 +241,10 @@ class PowerViewModel(
                 scriptError = installation.getOrNull()?.error,
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
-            )
+            ) }
             // The picker reaches back to the oldest block, so it can only be
             // right once that is known.
-            _uiState.value = _uiState.value.copy(choices = choicesFor(window.value))
+            _uiState.update { it.copy(choices = choicesFor(window.value)) }
             if (running) sync()
         }
     }
@@ -251,18 +252,18 @@ class PowerViewModel(
     fun sync() {
         viewModelScope.launch {
             val device = requireDevice() ?: return@launch
-            _uiState.value = _uiState.value.copy(syncing = true, error = null)
+            _uiState.update { it.copy(syncing = true, error = null) }
             val result = runCatching { journal.sync(device) }
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 syncing = false,
                 error = result.exceptionOrNull()?.let { it.message ?: it.toString() },
                 lastSyncUtc = journal.settings.lastSync(deviceId),
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
-            )
+            ) }
             // The picker reaches back to the oldest block, so it can only be
             // right once that is known.
-            _uiState.value = _uiState.value.copy(choices = choicesFor(window.value))
+            _uiState.update { it.copy(choices = choicesFor(window.value)) }
         }
     }
 
@@ -274,19 +275,19 @@ class PowerViewModel(
      */
     fun setTracking(enabled: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(deploying = true, error = null)
+            _uiState.update { it.copy(deploying = true, error = null) }
             val device = requireDevice() ?: run {
-                _uiState.value = _uiState.value.copy(deploying = false)
+                _uiState.update { it.copy(deploying = false) }
                 return@launch
             }
             val result = runCatching {
                 if (enabled) journal.enable(device) else journal.disable(device)
             }
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 deploying = false,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
                 error = result.exceptionOrNull()?.let { it.message ?: it.toString() },
-            )
+            ) }
             refresh()
         }
     }
