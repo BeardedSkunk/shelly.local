@@ -37,6 +37,8 @@ interface PowerBlockDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(blocks: List<PowerBlock>)
 
-    @Query("DELETE FROM power_blocks WHERE deviceId = :deviceId")
-    suspend fun deleteForDevice(deviceId: String)
+    // There is deliberately no delete. Removing a device from the list leaves
+    // its history here: the plug thins its own archive out, so what is stored
+    // here cannot be fetched again, and a device removed by accident and added
+    // back under the same id finds its years intact.
 }

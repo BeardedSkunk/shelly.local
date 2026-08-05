@@ -35,6 +35,8 @@ data class PowerUiState(
     val range: PowerRange = PowerRange.DAY,
     val buckets: List<PowerBucket> = emptyList(),
     val priceCentsPerKwh: Double = 30.0,
+    /** Null while a returned kilowatt hour is worth the same as one drawn. */
+    val feedInCentsPerKwh: Double? = null,
     val lastSyncUtc: Long = 0L,
     val storedBlocks: Int = 0,
     val earliestUtc: Long? = null,
@@ -42,8 +44,27 @@ data class PowerUiState(
     /** Signed, in kWh: positive drawn, negative exported. */
     val totalKwh: Double get() = buckets.sumOf { it.energyMwh } / 1_000_000.0
 
-    /** Signed, in euros. Positive is a cost, negative an earning. */
-    val totalEuro: Double get() = totalKwh * priceCentsPerKwh / 100.0
+    val drawnKwh: Double
+        get() = buckets.filter { it.energyMwh > 0 }.sumOf { it.energyMwh } / 1_000_000.0
+
+    /** Negative, like the energy it comes from. */
+    val exportedKwh: Double
+        get() = buckets.filter { it.energyMwh < 0 }.sumOf { it.energyMwh } / 1_000_000.0
+
+    val hasExport: Boolean get() = exportedKwh < 0
+
+    /**
+     * Signed, in euros. Positive is a cost, negative an earning.
+     *
+     * Split by direction and priced separately, because what is drawn and what
+     * is returned are not worth the same. The split is per bar, which is as
+     * fine as it can be: a plug that both drew and exported within one quarter
+     * hour reports the two already netted off, and no finer figure exists to
+     * split.
+     */
+    val totalEuro: Double
+        get() = drawnKwh * priceCentsPerKwh / 100.0 +
+            exportedKwh * (feedInCentsPerKwh ?: priceCentsPerKwh) / 100.0
 
     /** Offline means the plug cannot be reached; the archive still reads fine. */
     val offline: Boolean get() = !reachable && !checkingDevice
@@ -59,6 +80,7 @@ class PowerViewModel(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
             priceCentsPerKwh = journal.settings.priceCentsPerKwh,
+            feedInCentsPerKwh = journal.settings.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
         )
     )
@@ -105,6 +127,12 @@ class PowerViewModel(
     fun setPrice(centsPerKwh: Double) {
         journal.settings.priceCentsPerKwh = centsPerKwh
         _uiState.value = _uiState.value.copy(priceCentsPerKwh = centsPerKwh)
+    }
+
+    /** Null puts a returned kilowatt hour back at the price of a drawn one. */
+    fun setFeedInPrice(centsPerKwh: Double?) {
+        journal.settings.feedInCentsPerKwh = centsPerKwh
+        _uiState.value = _uiState.value.copy(feedInCentsPerKwh = centsPerKwh)
     }
 
     /** Asks the plug what it is running, and syncs if the journal is there. */

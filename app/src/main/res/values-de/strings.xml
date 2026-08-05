@@ -97,7 +97,11 @@
     <string name="power_cost">Kosten</string>
     <string name="power_earned">Ertrag</string>
     <string name="power_price">Preis</string>
+    <string name="power_price_drawn">Preis Bezug</string>
+    <string name="power_price_feed_in">Preis Einspeisung</string>
+    <string name="power_price_feed_in_hint">Was eine zurückgespeiste Kilowattstunde wert ist. Beim Bezugspreis lassen, wenn der Ertrag im Haus verbraucht wird.</string>
     <string name="power_price_unit">ct/kWh</string>
+    <string name="power_split">%1$s kWh bezogen · %2$s kWh eingespeist</string>
     <string name="power_sync_now">Jetzt holen</string>
     <string name="power_never_synced">Noch nie vom Gerät geholt</string>
     <string name="power_last_sync">Zuletzt geholt %1$s · %2$d Blöcke gespeichert</string>

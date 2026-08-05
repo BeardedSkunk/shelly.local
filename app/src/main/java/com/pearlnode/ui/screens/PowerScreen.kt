@@ -46,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pearlnode.PearlnodeApp
 import com.pearlnode.R
 import com.pearlnode.data.DeviceRepository
+import com.pearlnode.data.PowerTrackingSettings
 import com.pearlnode.model.PowerBucket
 import com.pearlnode.model.PowerRange
 import com.pearlnode.ui.viewmodels.PowerUiState
@@ -107,7 +108,13 @@ fun PowerScreen(
                 )
             }
             SettingsCard(uiState, onTracking = vm::setTracking)
-            ChartCard(uiState, onRange = vm::setRange, onPrice = vm::setPrice, onSync = vm::sync)
+            ChartCard(
+                state = uiState,
+                onRange = vm::setRange,
+                onPrice = vm::setPrice,
+                onFeedInPrice = vm::setFeedInPrice,
+                onSync = vm::sync,
+            )
             Spacer(Modifier.padding(8.dp))
         }
     }
@@ -176,6 +183,7 @@ private fun ChartCard(
     state: PowerUiState,
     onRange: (PowerRange) -> Unit,
     onPrice: (Double) -> Unit,
+    onFeedInPrice: (Double?) -> Unit,
     onSync: () -> Unit,
 ) {
     // Nothing has ever been recorded and nothing is recording: there is no
@@ -223,7 +231,28 @@ private fun ChartCard(
             Totals(state)
 
             Spacer(Modifier.padding(8.dp))
-            PriceField(state.priceCentsPerKwh, onPrice)
+            PriceField(
+                value = state.priceCentsPerKwh,
+                label = stringResource(
+                    if (state.hasExport) R.string.power_price_drawn else R.string.power_price
+                ),
+                onValue = { onPrice(it ?: PowerTrackingSettings.DEFAULT_PRICE_CT.toDouble()) },
+            )
+            // Only worth asking about once something has actually gone back out.
+            // A plug that only ever draws has no second price to give.
+            if (state.hasExport) {
+                Spacer(Modifier.padding(4.dp))
+                PriceField(
+                    value = state.feedInCentsPerKwh ?: state.priceCentsPerKwh,
+                    label = stringResource(R.string.power_price_feed_in),
+                    onValue = onFeedInPrice,
+                )
+                Text(
+                    stringResource(R.string.power_price_feed_in_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             Spacer(Modifier.padding(4.dp))
             Text(
@@ -245,6 +274,7 @@ private fun ChartCard(
 private fun Totals(state: PowerUiState) {
     val kwh = state.totalKwh
     val euro = state.totalEuro
+    val mixed = state.hasExport && state.drawnKwh > 0
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Column {
             Text(stringResource(R.string.power_total_energy),
@@ -252,35 +282,48 @@ private fun Totals(state: PowerUiState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(String.format(Locale.getDefault(), "%.2f kWh", abs(kwh)),
                 style = MaterialTheme.typography.titleMedium)
+            // With both directions in the same span, the net figure alone hides
+            // most of what happened.
+            if (mixed) {
+                Text(
+                    stringResource(
+                        R.string.power_split,
+                        String.format(Locale.getDefault(), "%.2f", state.drawnKwh),
+                        String.format(Locale.getDefault(), "%.2f", abs(state.exportedKwh)),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             // A plug on a plant earns rather than costs, and the difference is
             // worth naming rather than leaving to a minus sign.
             Text(
-                stringResource(if (kwh < 0) R.string.power_earned else R.string.power_cost),
+                stringResource(if (euro < 0) R.string.power_earned else R.string.power_cost),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(String.format(Locale.getDefault(), "%.2f €", abs(euro)),
                 style = MaterialTheme.typography.titleMedium,
-                color = if (kwh < 0) MaterialTheme.colorScheme.tertiary
+                color = if (euro < 0) MaterialTheme.colorScheme.tertiary
                         else MaterialTheme.colorScheme.onSurface)
         }
     }
 }
 
+/** Emits null when the field is cleared, which is what puts a price back to its default. */
 @Composable
-private fun PriceField(priceCents: Double, onPrice: (Double) -> Unit) {
-    var text by remember(priceCents) {
-        mutableStateOf(String.format(Locale.getDefault(), "%.1f", priceCents))
-    }
+private fun PriceField(value: Double, label: String, onValue: (Double?) -> Unit) {
+    var text by remember(value) { mutableStateOf(String.format(Locale.getDefault(), "%.1f", value)) }
     OutlinedTextField(
         value = text,
         onValueChange = { typed ->
             text = typed
-            typed.replace(',', '.').toDoubleOrNull()?.let { if (it >= 0) onPrice(it) }
+            if (typed.isBlank()) onValue(null)
+            else typed.replace(',', '.').toDoubleOrNull()?.let { if (it >= 0) onValue(it) }
         },
-        label = { Text(stringResource(R.string.power_price)) },
+        label = { Text(label) },
         suffix = { Text(stringResource(R.string.power_price_unit)) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),

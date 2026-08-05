@@ -25,6 +25,22 @@ class PowerTrackingSettings(context: Context) {
         get() = prefs.getFloat("price_ct_kwh", DEFAULT_PRICE_CT).toDouble()
         set(value) { prefs.edit().putFloat("price_ct_kwh", value.toFloat()).apply() }
 
+    /**
+     * What a kilowatt hour sent back out is worth, which is not the same
+     * question. Energy a balcony plant produces and the household uses on the
+     * spot saves the full household price; energy that goes to the grid earns
+     * the feed-in rate, which is a third of it. Unset means the two are the
+     * same, which is right for a plant whose output never leaves the house --
+     * so a plain consumer never has to think about this at all.
+     */
+    var feedInCentsPerKwh: Double?
+        get() = if (prefs.contains(KEY_FEED_IN)) prefs.getFloat(KEY_FEED_IN, 0f).toDouble() else null
+        set(value) {
+            prefs.edit().apply {
+                if (value == null) remove(KEY_FEED_IN) else putFloat(KEY_FEED_IN, value.toFloat())
+            }.apply()
+        }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 
@@ -32,7 +48,14 @@ class PowerTrackingSettings(context: Context) {
         prefs.edit().putLong("${deviceId}_synced", whenUtc).apply()
     }
 
+    /** Every device the user has switched tracking on for. */
+    fun enabledDeviceIds(): List<String> =
+        prefs.all.entries
+            .filter { it.key.endsWith("_enabled") && it.value == true }
+            .map { it.key.removeSuffix("_enabled") }
+
     companion object {
         const val DEFAULT_PRICE_CT = 30f
+        private const val KEY_FEED_IN = "feed_in_ct_kwh"
     }
 }

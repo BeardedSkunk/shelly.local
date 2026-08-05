@@ -59,11 +59,17 @@ class PowerJournalRepository(
         clientFor(device).installation()
     }
 
-    /** Puts the script on the plug, starts it, and remembers that the user asked for it. */
+    /**
+     * Puts the script on the plug, starts it, and remembers that the user asked
+     * for it. The hourly background fetch starts with it: the finest tier holds
+     * only hours, so waiting for someone to open the screen would quietly cost
+     * the detail this whole thing exists to keep.
+     */
     suspend fun enable(device: Device) = withContext(Dispatchers.IO) {
         val code = context.assets.open(ASSET).bufferedReader().use { it.readText() }
         clientFor(device).deploy(code)
         settings.setEnabled(device.id, true)
+        PowerSyncWorker.enqueue(context, device.id)
     }
 
     /**
@@ -75,6 +81,7 @@ class PowerJournalRepository(
         val client = clientFor(device)
         client.installation().scriptId?.let { client.setEnabled(it, false) }
         settings.setEnabled(device.id, false)
+        PowerSyncWorker.cancel(context, device.id)
     }
 
     /**
