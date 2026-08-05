@@ -56,7 +56,13 @@ class PowerJournalRepository(
     }
 
     suspend fun installation(device: Device): JournalInstallation = withContext(Dispatchers.IO) {
-        clientFor(device).installation()
+        val client = clientFor(device)
+        val installation = client.installation()
+        // Read while the plug is in reach, because it decides how everything
+        // already stored is to be read, and that has to hold offline too.
+        runCatching { client.meteringReversed() }
+            .onSuccess { settings.setReversed(device.id, it) }
+        installation
     }
 
     /**

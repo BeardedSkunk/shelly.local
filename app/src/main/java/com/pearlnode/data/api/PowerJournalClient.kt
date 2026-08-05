@@ -191,6 +191,20 @@ class PowerJournalClient(
         }
     }
 
+    /**
+     * Whether the switch has reverse metering on.
+     *
+     * It changes what every reading means. A balcony plant with it off reports
+     * its generation as negative power; with it on the same generation reads
+     * positive, which is nicer to look at but makes the plug indistinguishable
+     * from a consumer to anything downstream. So the flag has to be read and
+     * carried, or a plant's earnings get called costs.
+     */
+    fun meteringReversed(switchId: Int = 0): Boolean {
+        val config = rpc("Switch.GetConfig", buildJsonObject { put("id", switchId) })
+        return config["reverse"]?.jsonPrimitive?.booleanOrNull ?: false
+    }
+
     // ---------------------------------------------------------------- reading
 
     fun index(scriptId: Int): JournalIndex = parseJournalIndex(get("/script/$scriptId/$ENDPOINT"))

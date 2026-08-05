@@ -6,10 +6,15 @@ import androidx.lifecycle.viewModelScope
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.PowerJournalRepository
 import com.pearlnode.model.Device
+import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.PowerBucket
-import com.pearlnode.model.PowerRange
+import com.pearlnode.model.PowerLevel
+import com.pearlnode.model.PowerWindow
 import com.pearlnode.model.bucketize
 import com.pearlnode.model.mergeFinest
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,8 +37,18 @@ data class PowerUiState(
     val deploying: Boolean = false,
     val syncing: Boolean = false,
     val error: String? = null,
-    val range: PowerRange = PowerRange.DAY,
+    val window: PowerWindow = PowerWindow.LAST_24H,
     val buckets: List<PowerBucket> = emptyList(),
+    /** Periods the picker offers for the current level, newest first. */
+    val choices: List<PowerWindow> = emptyList(),
+    /** True while the window runs up to now, so there is no later one to step to. */
+    val atLatest: Boolean = true,
+    /**
+     * Whether the plug has reverse metering on. With it on, the plug reports
+     * its generation as positive, so everything read off it means the opposite
+     * of what the sign says.
+     */
+    val reversed: Boolean = false,
     val priceCentsPerKwh: Double = 30.0,
     /** Null while a returned kilowatt hour is worth the same as one drawn. */
     val feedInCentsPerKwh: Double? = null,
@@ -41,17 +56,31 @@ data class PowerUiState(
     val storedBlocks: Int = 0,
     val earliestUtc: Long? = null,
 ) {
+    /**
+     * The bars with their signs meaning what they say: positive drawn from the
+     * grid, negative sent back. On a plug with reverse metering that is the
+     * opposite of what it reported, which is the whole reason this exists --
+     * without it a balcony plant's generation reads as consumption and its
+     * earnings get printed as costs.
+     */
+    val oriented: List<PowerBucket>
+        get() = if (!reversed) buckets
+        else buckets.map { it.copy(energyMwh = -it.energyMwh) }
+
     /** Signed, in kWh: positive drawn, negative exported. */
-    val totalKwh: Double get() = buckets.sumOf { it.energyMwh } / 1_000_000.0
+    val totalKwh: Double get() = oriented.sumOf { it.energyMwh } / 1_000_000.0
 
     val drawnKwh: Double
-        get() = buckets.filter { it.energyMwh > 0 }.sumOf { it.energyMwh } / 1_000_000.0
+        get() = oriented.filter { it.energyMwh > 0 }.sumOf { it.energyMwh } / 1_000_000.0
 
     /** Negative, like the energy it comes from. */
     val exportedKwh: Double
-        get() = buckets.filter { it.energyMwh < 0 }.sumOf { it.energyMwh } / 1_000_000.0
+        get() = oriented.filter { it.energyMwh < 0 }.sumOf { it.energyMwh } / 1_000_000.0
 
     val hasExport: Boolean get() = exportedKwh < 0
+
+    /** A bar can be opened up until the five-minute bars of one hour are on screen. */
+    val canDrill: Boolean get() = window.level != PowerLevel.HOUR
 
     /**
      * Signed, in euros. Positive is a cost, negative an earning.
@@ -79,6 +108,7 @@ class PowerViewModel(
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
+            reversed = journal.settings.isReversed(deviceId),
             priceCentsPerKwh = journal.settings.priceCentsPerKwh,
             feedInCentsPerKwh = journal.settings.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
@@ -86,7 +116,13 @@ class PowerViewModel(
     )
     val uiState: StateFlow<PowerUiState> = _uiState.asStateFlow()
 
-    private val range = MutableStateFlow(PowerRange.DAY)
+    // The page opens on the last 24 hours, which is the only window that is not
+    // a calendar period and the only one that is always worth something.
+    private val window = MutableStateFlow(PowerWindow.LAST_24H)
+
+    private val zone: ZoneId get() = ZoneId.systemDefault()
+    private fun nowUtc() = System.currentTimeMillis() / 1000
+    private fun now() = LocalDateTime.now(zone)
 
     init {
         observeHistory()
@@ -117,24 +153,64 @@ class PowerViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeHistory() {
         viewModelScope.launch {
-            range.flatMapLatest { selected ->
-                val edges = selected.edges(System.currentTimeMillis() / 1000)
-                if (edges.size < 2) flowOf(emptyList<com.pearlnode.model.PowerBlock>())
+            window.flatMapLatest { selected ->
+                val edges = selected.edges(nowUtc(), zone)
+                if (edges.size < 2) flowOf(emptyList<PowerBlock>())
                 else journal.observeRange(deviceId, edges.first(), edges.last())
             }.collectLatest { blocks ->
-                val selected = range.value
-                val edges = selected.edges(System.currentTimeMillis() / 1000)
+                val selected = window.value
+                val edges = selected.edges(nowUtc(), zone)
                 val segments = mergeFinest(blocks, edges.first(), edges.last())
                 _uiState.value = _uiState.value.copy(
-                    range = selected,
+                    window = selected,
                     buckets = bucketize(segments, edges),
+                    choices = choicesFor(selected),
+                    atLatest = selected.isCurrent(nowUtc(), zone),
                 )
             }
         }
     }
 
-    fun setRange(selected: PowerRange) {
-        range.value = selected
+    /** The periods the picker offers, never reaching further back than the oldest block. */
+    private fun choicesFor(selected: PowerWindow): List<PowerWindow> {
+        val earliest = _uiState.value.earliestUtc
+            ?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDateTime() }
+        return PowerWindow.choices(selected.level, now(), earliest)
+    }
+
+    fun show(selected: PowerWindow) {
+        window.value = selected
+    }
+
+    /** Keeps the moment being looked at and changes how much around it is shown. */
+    fun setLevel(level: PowerLevel) {
+        // Coming back to the day level lands on the rolling window rather than
+        // on today, because that is what the page means by 24 h.
+        window.value =
+            if (level == PowerLevel.DAY && window.value.level != PowerLevel.DAY) PowerWindow.LAST_24H
+            else window.value.atLevel(level, now())
+    }
+
+    /** Opens the period behind one bar: a year's month, a day's hour, and so on. */
+    fun drillInto(barIndex: Int) {
+        window.value.drillInto(barIndex, nowUtc(), zone)?.let { window.value = it }
+    }
+
+    /**
+     * Steps whole periods, from the arrows and from a swipe across the chart.
+     * Stepping back out of the rolling window lands on yesterday, since today is
+     * mostly what the rolling window already is. There is nothing after the
+     * latest period, so forward stops there rather than showing empty future.
+     */
+    fun step(periods: Long) {
+        if (periods == 0L) return
+        var moved = window.value
+        repeat(kotlin.math.abs(periods).toInt()) {
+            val next = moved.shifted(if (periods > 0) 1 else -1, now())
+            if (periods > 0 && moved.isCurrent(nowUtc(), zone)) return@repeat
+            moved = next
+        }
+        window.value = moved
     }
 
     fun setPrice(centsPerKwh: Double) {
@@ -170,12 +246,16 @@ class PowerViewModel(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
+                reversed = journal.settings.isReversed(deviceId),
                 scriptInstalled = installation.getOrNull()?.installed ?: false,
                 scriptRunning = running,
                 scriptError = installation.getOrNull()?.error,
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             )
+            // The picker reaches back to the oldest block, so it can only be
+            // right once that is known.
+            _uiState.value = _uiState.value.copy(choices = choicesFor(window.value))
             if (running) sync()
         }
     }
@@ -192,6 +272,9 @@ class PowerViewModel(
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             )
+            // The picker reaches back to the oldest block, so it can only be
+            // right once that is known.
+            _uiState.value = _uiState.value.copy(choices = choicesFor(window.value))
         }
     }
 

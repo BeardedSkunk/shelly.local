@@ -1,6 +1,7 @@
 package com.pearlnode.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -116,15 +117,16 @@ class PowerHistoryTest {
     fun `bars land on real local boundaries`() {
         val zone = java.time.ZoneId.of("Europe/Berlin")
         val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
+        val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
 
-        val days = PowerRange.WEEK.edges(now, zone)
+        val days = PowerWindow.of(PowerLevel.WEEK, today).edges(now, zone)
         assertEquals(8, days.size)
         assertTrue("every week edge is a local midnight", days.all { edge ->
             val at = java.time.ZonedDateTime.ofInstant(java.time.Instant.ofEpochSecond(edge), zone)
             at.hour == 0 && at.minute == 0 && at.second == 0
         })
 
-        val months = PowerRange.YEAR.edges(now, zone)
+        val months = PowerWindow.of(PowerLevel.YEAR, today).edges(now, zone)
         assertEquals(13, months.size)
         assertTrue("every year edge is the first of a month at midnight", months.all { edge ->
             val at = java.time.ZonedDateTime.ofInstant(java.time.Instant.ofEpochSecond(edge), zone)
@@ -133,13 +135,95 @@ class PowerHistoryTest {
     }
 
     @Test
-    fun `the day the clocks go back is still one bar`() {
-        // 25 hours long in Berlin, and a bar boundary either side of it.
+    fun `the day the clocks go back is 25 bars, not 24`() {
         val zone = java.time.ZoneId.of("Europe/Berlin")
         val now = java.time.ZonedDateTime.of(2026, 10, 27, 9, 0, 0, 0, zone).toEpochSecond()
-        val edges = PowerRange.WEEK.edges(now, zone)
-        val lengths = edges.zipWithNext { a, b -> b - a }
+        val clockChange = java.time.LocalDate.of(2026, 10, 25).atStartOfDay()
+
+        // Seen as a day, it is an hour longer than any other.
+        val hours = PowerWindow.of(PowerLevel.DAY, clockChange).edges(now, zone)
+        assertEquals("25 bars and the edge past the last one", 26, hours.size)
+        assertEquals(25 * hour, hours.last() - hours.first())
+
+        // Seen as a week, it is still exactly one bar.
+        val lengths = PowerWindow.of(PowerLevel.WEEK, clockChange).edges(now, zone)
+            .zipWithNext { a, b -> b - a }
         assertTrue("one bar is the 25 hour day", lengths.contains(25 * hour))
-        assertTrue("and the rest are ordinary days", lengths.count { it != day } == 1)
+        assertEquals("and the rest are ordinary days", 1, lengths.count { it != day })
+    }
+
+    @Test
+    fun `the rolling window ends at the next full hour and reaches back a day`() {
+        val zone = java.time.ZoneId.of("Europe/Berlin")
+        val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
+        val edges = PowerWindow.LAST_24H.edges(now, zone)
+        assertEquals(25, edges.size)
+        assertEquals(24 * hour, edges.last() - edges.first())
+        assertTrue("it covers now", edges.first() < now && edges.last() > now)
+    }
+
+    @Test
+    fun `tapping a bar opens exactly the period behind it`() {
+        val zone = java.time.ZoneId.of("Europe/Berlin")
+        val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
+        val year = PowerWindow.of(PowerLevel.YEAR, java.time.LocalDate.of(2026, 8, 5).atStartOfDay())
+
+        // The eighth bar of 2026 is August, and it opens as a month.
+        val august = year.drillInto(7, now, zone)!!
+        assertEquals(PowerLevel.MONTH, august.level)
+        assertEquals(java.time.LocalDate.of(2026, 8, 1).atStartOfDay(), august.anchor)
+        assertEquals(32, august.edges(now, zone).size)   // 31 days and the edge after
+
+        // The fifth bar of August is the fifth, and it opens as a day.
+        val fifth = august.drillInto(4, now, zone)!!
+        assertEquals(PowerLevel.DAY, fifth.level)
+        assertEquals(java.time.LocalDate.of(2026, 8, 5).atStartOfDay(), fifth.anchor)
+
+        val hour = fifth.drillInto(13, now, zone)!!
+        assertEquals(PowerLevel.HOUR, hour.level)
+        assertEquals(13, hour.anchor!!.hour)
+        assertEquals("twelve five minute bars", 13, hour.edges(now, zone).size)
+        assertNull("and nothing under an hour", hour.drillInto(0, now, zone))
+    }
+
+    @Test
+    fun `a week starts on its Monday whichever day it is anchored to`() {
+        val wednesday = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
+        assertEquals(java.time.DayOfWeek.WEDNESDAY, wednesday.dayOfWeek)
+        val week = PowerWindow.of(PowerLevel.WEEK, wednesday)
+        assertEquals(java.time.LocalDate.of(2026, 8, 3).atStartOfDay(), week.anchor)
+        assertEquals(java.time.DayOfWeek.MONDAY, week.anchor!!.dayOfWeek)
+    }
+
+    @Test
+    fun `stepping back out of the rolling window lands on yesterday`() {
+        val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
+        val yesterday = PowerWindow.LAST_24H.shifted(-1, today)
+        assertEquals(PowerLevel.DAY, yesterday.level)
+        assertEquals(java.time.LocalDate.of(2026, 8, 4).atStartOfDay(), yesterday.anchor)
+    }
+
+    @Test
+    fun `only the period containing now counts as the latest`() {
+        val zone = java.time.ZoneId.of("Europe/Berlin")
+        val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
+        val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
+
+        assertTrue(PowerWindow.LAST_24H.isCurrent(now, zone))
+        assertTrue(PowerWindow.of(PowerLevel.DAY, today).isCurrent(now, zone))
+        assertTrue(PowerWindow.of(PowerLevel.MONTH, today).isCurrent(now, zone))
+        assertFalse(PowerWindow.of(PowerLevel.DAY, today.minusDays(1)).isCurrent(now, zone))
+        assertFalse(PowerWindow.of(PowerLevel.YEAR, today.minusYears(1)).isCurrent(now, zone))
+    }
+
+    @Test
+    fun `the picker stops at the oldest block rather than running on forever`() {
+        val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
+        val since = java.time.LocalDate.of(2026, 6, 20).atStartOfDay()
+        val months = PowerWindow.choices(PowerLevel.MONTH, today, since)
+        assertEquals(listOf(8, 7, 6), months.map { it.anchor!!.monthValue })
+
+        // With nothing stored, it still offers a usable stretch rather than none.
+        assertEquals(24, PowerWindow.choices(PowerLevel.MONTH, today, null).size)
     }
 }

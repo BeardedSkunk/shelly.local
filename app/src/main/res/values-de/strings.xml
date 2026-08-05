@@ -89,7 +89,11 @@
     <string name="power_offline_hint">Die Statistik funktioniert offline. Ein- und Ausschalten braucht das Gerät.</string>
     <string name="power_history">Verlauf</string>
     <string name="power_history_dormant">Aufzeichnung einschalten, um einen Verlauf zu sammeln. Für dieses Gerät liegt noch nichts vor.</string>
-    <string name="power_range_day">24 h</string>
+    <string name="power_last_24h">Letzte 24 h</string>
+    <string name="power_earlier">Früher</string>
+    <string name="power_later">Später</string>
+    <string name="power_range_hour">Stunde</string>
+    <string name="power_range_day">Tag</string>
     <string name="power_range_week">Woche</string>
     <string name="power_range_month">Monat</string>
     <string name="power_range_year">Jahr</string>

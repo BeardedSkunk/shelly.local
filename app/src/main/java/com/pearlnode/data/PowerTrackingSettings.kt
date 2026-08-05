@@ -41,6 +41,18 @@ class PowerTrackingSettings(context: Context) {
             }.apply()
         }
 
+    /**
+     * Whether this plug reports with reverse metering. Kept here rather than
+     * asked for on every read, because it decides how the stored energy is to
+     * be understood and the statistics have to work with the plug out of
+     * reach.
+     */
+    fun isReversed(deviceId: String): Boolean = prefs.getBoolean("${deviceId}_reverse", false)
+
+    fun setReversed(deviceId: String, reversed: Boolean) {
+        prefs.edit().putBoolean("${deviceId}_reverse", reversed).apply()
+    }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 
