@@ -193,45 +193,53 @@ class PowerJournalClient(
 
     // ---------------------------------------------------------------- reading
 
-    fun index(scriptId: Int): JournalIndex {
-        val root = Json.parseToJsonElement(get("/script/$scriptId/$ENDPOINT")).jsonObject
-        val tiers = root["tiers"]?.jsonArray.orEmpty().map { element ->
-            val obj = element.jsonObject
-            JournalTier(
-                gridSec = obj["grid_sec"]?.jsonPrimitive?.longOrNull ?: 0,
-                unitMwh = obj["unit_mwh"]?.jsonPrimitive?.longOrNull ?: 1,
-                pages = obj["pages"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull },
-                pending = obj["pending"]?.triple(),
-            )
-        }
-        return JournalIndex(
-            version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
-            utcOffsetSec = root["utc_offset"]?.jsonPrimitive?.intOrNull ?: 0,
-            atticBytes = root["attic_bytes"]?.jsonPrimitive?.intOrNull ?: 0,
-            tiers = tiers,
-            archiveEnd = root["archive_end"]?.jsonPrimitive?.longOrNull,
-            current = root["current"]?.currentBlock(),
-        )
-    }
+    fun index(scriptId: Int): JournalIndex = parseJournalIndex(get("/script/$scriptId/$ENDPOINT"))
 
-    fun page(scriptId: Int, key: String, skip: Int, max: Int): JournalPage {
-        val root = Json.parseToJsonElement(
-            get("/script/$scriptId/$ENDPOINT?page=$key&skip=$skip&max=$max")
-        ).jsonObject
-        root["error"]?.jsonPrimitive?.contentOrNull?.let { error(it) }
-        val blocks = root["blocks"]?.jsonArray.orEmpty().mapNotNull { element ->
-            val triple = element.jsonArray
-            if (triple.size < 3) null
-            else longArrayOf(
-                triple[0].jsonPrimitive.long, triple[1].jsonPrimitive.long, triple[2].jsonPrimitive.long
-            )
-        }
-        return JournalPage(
-            tier = root["tier"]?.jsonPrimitive?.intOrNull ?: 0,
-            total = root["total"]?.jsonPrimitive?.intOrNull ?: blocks.size,
-            blocks = blocks,
+    fun page(scriptId: Int, key: String, skip: Int, max: Int): JournalPage =
+        parseJournalPage(get("/script/$scriptId/$ENDPOINT?page=$key&skip=$skip&max=$max"))
+}
+
+// The parsing is separate from the fetching so it can be held against
+// responses captured from a real plug -- see PowerJournalParsingTest. The
+// shape is written by hand in mJS rather than by a serialiser, and the tests
+// are what say it still matches.
+
+fun parseJournalIndex(body: String): JournalIndex {
+    val root = Json.parseToJsonElement(body).jsonObject
+    val tiers = root["tiers"]?.jsonArray.orEmpty().map { element ->
+        val obj = element.jsonObject
+        JournalTier(
+            gridSec = obj["grid_sec"]?.jsonPrimitive?.longOrNull ?: 0,
+            unitMwh = obj["unit_mwh"]?.jsonPrimitive?.longOrNull ?: 1,
+            pages = obj["pages"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull },
+            pending = obj["pending"]?.triple(),
         )
     }
+    return JournalIndex(
+        version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
+        utcOffsetSec = root["utc_offset"]?.jsonPrimitive?.intOrNull ?: 0,
+        atticBytes = root["attic_bytes"]?.jsonPrimitive?.intOrNull ?: 0,
+        tiers = tiers,
+        archiveEnd = root["archive_end"]?.jsonPrimitive?.longOrNull,
+        current = root["current"]?.currentBlock(),
+    )
+}
+
+fun parseJournalPage(body: String): JournalPage {
+    val root = Json.parseToJsonElement(body).jsonObject
+    root["error"]?.jsonPrimitive?.contentOrNull?.let { error(it) }
+    val blocks = root["blocks"]?.jsonArray.orEmpty().mapNotNull { element ->
+        val triple = element.jsonArray
+        if (triple.size < 3) null
+        else longArrayOf(
+            triple[0].jsonPrimitive.long, triple[1].jsonPrimitive.long, triple[2].jsonPrimitive.long
+        )
+    }
+    return JournalPage(
+        tier = root["tier"]?.jsonPrimitive?.intOrNull ?: 0,
+        total = root["total"]?.jsonPrimitive?.intOrNull ?: blocks.size,
+        blocks = blocks,
+    )
 }
 
 /** A pending run, written as [start, duration, energy] or null. */
