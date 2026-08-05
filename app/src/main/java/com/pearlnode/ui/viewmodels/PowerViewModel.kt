@@ -89,11 +89,24 @@ class PowerViewModel(
     private val range = MutableStateFlow(PowerRange.DAY)
 
     init {
-        viewModelScope.launch {
-            val device = devices.getAllDevices().find { it.id == deviceId }
-            _uiState.value = _uiState.value.copy(device = device)
-            observeHistory()
-        }
+        observeHistory()
+    }
+
+    /**
+     * The device row, from the state if it is already there and from the
+     * database otherwise.
+     *
+     * Nothing here may assume the device has been loaded. The screen calls
+     * refresh the moment it appears, and the database read that finds the
+     * device is slower than the first composition every time -- so a refresh
+     * that gave up on a missing device would leave the spinner running for
+     * good and the switch disabled behind it.
+     */
+    private suspend fun requireDevice(): Device? {
+        _uiState.value.device?.let { return it }
+        val device = devices.getAllDevices().find { it.id == deviceId }
+        if (device != null) _uiState.value = _uiState.value.copy(device = device)
+        return device
     }
 
     /**
@@ -137,26 +150,39 @@ class PowerViewModel(
 
     /** Asks the plug what it is running, and syncs if the journal is there. */
     fun refresh() {
-        val device = _uiState.value.device ?: return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(checkingDevice = true, error = null)
+            val device = requireDevice()
+            if (device == null) {
+                _uiState.value = _uiState.value.copy(checkingDevice = false)
+                return@launch
+            }
             val installation = runCatching { journal.installation(device) }
+            val running = installation.getOrNull()?.running ?: false
+            // The plug is the truth about whether it is recording, not the
+            // setting stored here. A script installed by hand over RPC, or one
+            // that failed to come back after a reboot, would otherwise be
+            // described by a switch that only remembers what was last asked
+            // for. When the plug cannot be reached, the stored answer is all
+            // there is, so it stays.
+            if (installation.isSuccess) journal.reconcile(device.id, running)
             _uiState.value = _uiState.value.copy(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
+                trackingEnabled = journal.settings.isEnabled(deviceId),
                 scriptInstalled = installation.getOrNull()?.installed ?: false,
-                scriptRunning = installation.getOrNull()?.running ?: false,
+                scriptRunning = running,
                 scriptError = installation.getOrNull()?.error,
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
             )
-            if (installation.getOrNull()?.running == true) sync()
+            if (running) sync()
         }
     }
 
     fun sync() {
-        val device = _uiState.value.device ?: return
         viewModelScope.launch {
+            val device = requireDevice() ?: return@launch
             _uiState.value = _uiState.value.copy(syncing = true, error = null)
             val result = runCatching { journal.sync(device) }
             _uiState.value = _uiState.value.copy(
@@ -176,9 +202,12 @@ class PowerViewModel(
      * flipping it would otherwise record a wish the plug never heard.
      */
     fun setTracking(enabled: Boolean) {
-        val device = _uiState.value.device ?: return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(deploying = true, error = null)
+            val device = requireDevice() ?: run {
+                _uiState.value = _uiState.value.copy(deploying = false)
+                return@launch
+            }
             val result = runCatching {
                 if (enabled) journal.enable(device) else journal.disable(device)
             }

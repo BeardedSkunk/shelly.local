@@ -85,6 +85,22 @@ class PowerJournalRepository(
     }
 
     /**
+     * Brings the stored answer into line with what the plug is actually doing,
+     * and arms or cancels the background fetch to match.
+     *
+     * Whether a plug is recording is a fact about the plug, not a wish stored
+     * here. A script installed over RPC by hand, or one that did not come back
+     * after a reboot, would otherwise be described by a switch that only
+     * remembers what was last asked for.
+     */
+    fun reconcile(deviceId: String, running: Boolean) {
+        if (settings.isEnabled(deviceId) == running) return
+        settings.setEnabled(deviceId, running)
+        if (running) PowerSyncWorker.enqueue(context, deviceId)
+        else PowerSyncWorker.cancel(context, deviceId)
+    }
+
+    /**
      * Reads everything the plug has and writes it into the local database.
      *
      * All four tiers are copied, not just the finest one. They overlap, and
