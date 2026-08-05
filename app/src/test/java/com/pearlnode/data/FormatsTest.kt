@@ -88,8 +88,51 @@ class FormatsTest {
     fun `a currency with no small unit only ever shows whole ones`() {
         val f = formats(AppPrefs(currencyMajor = "¥", currencyMinor = ""))
         assertEquals("0,45 ¥", f.money(45.0))
-        assertEquals("0,00 ¥", f.money(0.02))
+        // Still nothing to say below what two decimals can show, same as with a
+        // small unit -- "0,00 ¥" reads as a figure rather than as nothing.
+        assertEquals("0", f.money(0.02))
         assertEquals("¥/kWh", f.priceUnit)
+    }
+
+    @Test
+    fun `the tariff is shown in the unit the user reads`() {
+        // The same 30 hundredths per kilowatt hour, said two ways. Clearing the
+        // small unit must not leave it reading as thirty whole units, which is a
+        // hundred times the real price and looks entirely plausible.
+        val withCt = formats(AppPrefs(currencyMajor = "€", currencyMinor = "ct"))
+        val whole = formats(AppPrefs(currencyMajor = "€", currencyMinor = ""))
+        assertEquals("30,0", withCt.priceText(30.0))
+        assertEquals("ct/kWh", withCt.priceUnit)
+        assertEquals("0,3", whole.priceText(30.0))
+        assertEquals("€/kWh", whole.priceUnit)
+    }
+
+    @Test
+    fun `what is typed into the price field comes back unchanged`() {
+        val withCt = formats(AppPrefs(currencyMinor = "ct"))
+        val whole = formats(AppPrefs(currencyMinor = ""))
+        // Stored in hundredths either way, so nothing downstream has to know.
+        assertEquals(30.0, withCt.priceTyped(30.0), 1e-9)
+        assertEquals(30.0, whole.priceTyped(0.3), 1e-9)
+        for (cents in listOf(0.0, 8.5, 30.0, 32.5, 145.0)) {
+            assertEquals(cents, withCt.priceTyped(withCt.priceShown(cents)), 1e-9)
+            assertEquals(cents, whole.priceTyped(whole.priceShown(cents)), 1e-9)
+        }
+    }
+
+    @Test
+    fun `a whole unit price keeps the digits a hundredth carried`() {
+        val whole = formats(AppPrefs(currencyMinor = ""))
+        // 32,5 ct is 0,325 -- two decimals would round it away.
+        assertEquals("0,325", whole.priceText(32.5))
+        // And a price that needs no decimals does not pretend to have them.
+        assertEquals("1", whole.priceText(100.0))
+    }
+
+    @Test
+    fun `a cleared unit leaves no space hanging off the figure`() {
+        val bare = formats(AppPrefs(currencyMajor = "", currencyMinor = ""))
+        assertEquals("4,50", bare.money(450.0))
     }
 
     @Test

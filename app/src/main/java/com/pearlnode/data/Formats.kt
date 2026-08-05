@@ -41,21 +41,63 @@ class Formats(
      * artefact as a real figure.
      */
     fun money(cents: Double): String {
-        if (prefs.currencyMinor.isBlank()) return major(cents / 100.0)
+        if (prefs.currencyMinor.isBlank()) {
+            // Under half of what two decimals can show there is nothing to say.
+            return if (abs(cents) < 0.5) "0" else major(cents / 100.0)
+        }
         if (abs(cents) < 0.05) return "0"
         return if (abs(cents) >= 100) major(cents / 100.0) else minor(cents)
     }
 
     /** Always the whole unit, which is what a total wants however small it is. */
     fun major(amount: Double): String =
-        String.format(Locale.getDefault(), "%.2f %s", amount, prefs.currencyMajor)
+        // Trimmed, because a unit the user has cleared must not leave a space
+        // hanging off every figure in the app.
+        String.format(Locale.getDefault(), "%.2f %s", amount, prefs.currencyMajor).trim()
 
     fun minor(cents: Double): String =
-        String.format(Locale.getDefault(), "%.1f %s", cents, prefs.currencyMinor)
+        String.format(Locale.getDefault(), "%.1f %s", cents, prefs.currencyMinor).trim()
 
-    /** The unit a price per kilowatt hour is entered in. */
+    // ------------------------------------------------------------ the tariff
+
+    /**
+     * A price per kilowatt hour is held in hundredths throughout -- that is what
+     * every calculation in the app multiplies by -- and only ever shown in the
+     * unit the user reads. Take the hundredth away and the same 30 becomes 0,30
+     * of the whole unit: the tariff has not changed, only the way of saying it.
+     *
+     * Converting on the way in and out rather than when the unit changes is
+     * deliberate. A stored figure rewritten by a display setting is a figure
+     * that can be rewritten twice, or once while the unit field is half typed,
+     * and there is no way to tell afterwards which it was.
+     */
     val priceUnit: String
         get() = (prefs.currencyMinor.ifBlank { prefs.currencyMajor }) + "/kWh"
+
+    private val priceInMinor: Boolean get() = prefs.currencyMinor.isNotBlank()
+
+    /** What the price field shows, for a tariff held in hundredths. */
+    fun priceShown(centsPerKwh: Double): Double =
+        if (priceInMinor) centsPerKwh else centsPerKwh / 100.0
+
+    /** And back, for what was typed into it. */
+    fun priceTyped(shown: Double): Double =
+        if (priceInMinor) shown else shown * 100.0
+
+    /**
+     * The price as text. Whole units need the decimals that hundredths carry in
+     * front of the point -- 32,5 ct is 0,325 -- and trailing zeros of a price
+     * that does not need them read as false precision.
+     */
+    fun priceText(centsPerKwh: Double): String {
+        val shown = priceShown(centsPerKwh)
+        // One decimal is the established look for hundredths -- 30,0 ct -- so
+        // only the three a whole unit needs get trimmed back.
+        if (priceInMinor) return String.format(Locale.getDefault(), "%.1f", shown)
+        val text = String.format(Locale.getDefault(), "%.3f", shown)
+        if (!text.contains(',') && !text.contains('.')) return text
+        return text.trimEnd('0').trimEnd(',', '.')
+    }
 
     // ----------------------------------------------------------- temperature
 

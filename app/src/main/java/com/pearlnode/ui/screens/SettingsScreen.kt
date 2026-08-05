@@ -60,9 +60,9 @@ fun SettingsScreen(onBack: () -> Unit) {
         Column(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
         ) {
-            EnergyCard(prefs, formats, settings)
             LanguageCard()
             RegionalCard(prefs, formats, settings)
+            EnergyCard(prefs, formats, settings)
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -76,14 +76,14 @@ private fun EnergyCard(prefs: AppPrefs, formats: Formats, settings: AppSettings)
         PriceField(
             value = prefs.priceCentsPerKwh,
             label = stringResource(R.string.power_price_drawn),
-            unit = formats.priceUnit,
+            formats = formats,
             onValue = { settings.setPrice(it ?: AppPrefs.DEFAULT_PRICE_CT) },
         )
         Spacer(Modifier.height(8.dp))
         PriceField(
             value = prefs.feedInCentsPerKwh ?: prefs.priceCentsPerKwh,
             label = stringResource(R.string.power_price_feed_in),
-            unit = formats.priceUnit,
+            formats = formats,
             onValue = settings::setFeedInPrice,
         )
         Text(
@@ -126,16 +126,28 @@ private fun EnergyCard(prefs: AppPrefs, formats: Formats, settings: AppSettings)
     }
 }
 
-/** Emits null when the field is cleared, which is what puts a price back to its default. */
+/**
+ * The tariff, always in hundredths behind the scenes and in whichever unit the
+ * user reads in front of them.
+ *
+ * Keyed on the unit as well as the value: dropping the hundredth turns 30 into
+ * 0,3 without the number in preferences moving at all, and a field still showing
+ * what it was typed as would read as thirty whole units per kilowatt hour.
+ *
+ * Emits null when the field is cleared, which is what puts a price back to its
+ * default.
+ */
 @Composable
-private fun PriceField(value: Double, label: String, unit: String, onValue: (Double?) -> Unit) {
-    var text by remember(value) { mutableStateOf(String.format(Locale.getDefault(), "%.1f", value)) }
+private fun PriceField(value: Double, label: String, formats: Formats, onValue: (Double?) -> Unit) {
+    val unit = formats.priceUnit
+    var text by remember(value, unit) { mutableStateOf(formats.priceText(value)) }
     OutlinedTextField(
         value = text,
         onValueChange = { typed ->
             text = typed
             if (typed.isBlank()) onValue(null)
-            else typed.replace(',', '.').toDoubleOrNull()?.let { if (it >= 0) onValue(it) }
+            else typed.replace(',', '.').toDoubleOrNull()
+                ?.let { if (it >= 0) onValue(formats.priceTyped(it)) }
         },
         label = { Text(label) },
         suffix = { Text(unit) },

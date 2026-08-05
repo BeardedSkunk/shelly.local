@@ -129,7 +129,6 @@
     <string name="power_price_drawn">Price drawn</string>
     <string name="power_price_feed_in">Price returned</string>
     <string name="power_price_feed_in_hint">What a kilowatt hour sent back out is worth. Leave it at the price drawn if the output is used in the house.</string>
-    <string name="power_price_unit">ct/kWh</string>
     <string name="power_split">%1$s kWh drawn · %2$s kWh returned</string>
     <string name="power_sync_now">Fetch now</string>
     <string name="power_never_synced">Never fetched from the device yet</string>
