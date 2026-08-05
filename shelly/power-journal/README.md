@@ -332,3 +332,25 @@ Measured on a Plug M Gen3, `S3PL-30110EU`, firmware 2.0.0.
 | `Sys.GetStatus.utc_offset` | seconds east of UTC, which is what puts day buckets on local midnight |
 | `JSON.parse` on bad input | uncatchable, kills the script |
 | mJS | no `Math.min`, no `Array.shift`; `chr()` exists, and `str.at(i)` returns a byte value rather than a character |
+
+## Verified on the device
+
+Running on `192.168.178.23`, a Plug M Gen3 feeding a balcony solar plant back
+into the house — a deliberately unkind load, swinging between 250 and 750 W
+from minute to minute.
+
+- **17 blocks in 18 minutes**, one native page, 5.1 characters a block:
+  ```
+  0I_YHJX$E'IP7I%EV6ACT)A^L(`$QS2U$OF2A^L(S%^b4I%CX/AEb)I%K^7K$U],^%Ib=[&[T4S%KL1K$QO,X$#
+  ```
+  87 characters for 114.8 Wh across 17 blocks.
+- The page moved from slot `b` to `a` between two consecutive requests, which
+  is the copy-on-write doing its job.
+- Bucket boundaries read back as **09:15:00** for quarter hours, **09:00:00**
+  for hours and **00:00:00** for days, in local time.
+- A redeploy left metadata the running script could not parse — an eighth
+  field had been added. It rebuilt the page list from the tier digits alone
+  and carried on, which was an unplanned test of exactly that path.
+- The day boundary sat at 04:00 for one deploy, because the UTC offset was
+  added where it had to be subtracted. The unit test had asserted the wrong
+  arithmetic back at itself; reading the plug is what caught it.
