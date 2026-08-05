@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pearlnode.PearlnodeApp
+import com.pearlnode.data.Formats
 import com.pearlnode.R
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.PowerTrackingSettings
@@ -97,9 +98,14 @@ fun PowerScreen(
     deviceId: String,
     onBack: () -> Unit,
 ) {
-    val journal = (LocalContext.current.applicationContext as PearlnodeApp).powerJournalRepository
-    val vm: PowerViewModel = viewModel(factory = PowerViewModel.Factory(repo, journal, deviceId))
+    val app = LocalContext.current.applicationContext as PearlnodeApp
+    val journal = app.powerJournalRepository
+    val settings = app.appSettings
+    val vm: PowerViewModel =
+        viewModel(factory = PowerViewModel.Factory(repo, journal, settings, deviceId))
     val uiState by vm.uiState.collectAsStateWithLifecycle()
+    val prefs by settings.flow.collectAsStateWithLifecycle()
+    val formats = Formats(prefs, settings.systemDefaults)
 
     LifecycleStartEffect(Unit) {
         vm.refresh()
@@ -130,14 +136,10 @@ fun PowerScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            SettingsCard(
-                state = uiState,
-                onTracking = vm::setTracking,
-                onPrice = vm::setPrice,
-                onFeedInPrice = vm::setFeedInPrice,
-            )
+            SettingsCard(state = uiState, onTracking = vm::setTracking)
             ChartCard(
                 state = uiState,
+                formats = formats,
                 onLevel = vm::setLevel,
                 onOpenPicker = vm::openPicker,
                 onStep = vm::step,
@@ -153,7 +155,7 @@ fun PowerScreen(
                     picker = picker,
                     onPick = vm::show,
                     onPage = vm::pagePicker,
-                    onNow = { vm.show(PowerWindow.LAST_24H) },
+                    onNow = vm::showLatest,
                     onDismiss = vm::closePicker,
                 )
             }
@@ -171,8 +173,6 @@ fun PowerScreen(
 private fun SettingsCard(
     state: PowerUiState,
     onTracking: (Boolean) -> Unit,
-    onPrice: (Double) -> Unit,
-    onFeedInPrice: (Double?) -> Unit,
 ) {
     // Open only when the device is in reach and has no recorder on it, because
     // that is the one case where the switch is the only thing on the page that
@@ -254,31 +254,6 @@ private fun SettingsCard(
                     )
                 }
             }
-
-            Spacer(Modifier.padding(8.dp))
-            HorizontalDivider()
-            Spacer(Modifier.padding(8.dp))
-            // A tariff prices a history. With no recorder installed there is
-            // none and never will be, so the fields are there to be seen and
-            // not to be filled in yet.
-            PriceField(
-                value = state.priceCentsPerKwh,
-                label = stringResource(R.string.power_price_drawn),
-                enabled = state.scriptInstalled,
-                onValue = { onPrice(it ?: PowerTrackingSettings.DEFAULT_PRICE_CT.toDouble()) },
-            )
-            Spacer(Modifier.padding(4.dp))
-            PriceField(
-                value = state.feedInCentsPerKwh ?: state.priceCentsPerKwh,
-                label = stringResource(R.string.power_price_feed_in),
-                enabled = state.scriptInstalled,
-                onValue = onFeedInPrice,
-            )
-            Text(
-                stringResource(R.string.power_price_feed_in_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -286,6 +261,7 @@ private fun SettingsCard(
 @Composable
 private fun ChartCard(
     state: PowerUiState,
+    formats: Formats,
     onLevel: (PowerLevel) -> Unit,
     onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
@@ -339,9 +315,10 @@ private fun ChartCard(
             Spacer(Modifier.padding(8.dp))
             PowerChart(
                 buckets = state.buckets,
-                labels = barLabels(state.window, state.buckets, state.zone),
+                labels = barLabels(state.window, state.buckets, state.zone, formats),
                 centsPerKwh = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
                               else state.priceCentsPerKwh,
+                formats = formats,
                 onBarTap = if (state.canDrill) onDrill else null,
                 onSwipe = onStep,
             )
@@ -349,12 +326,12 @@ private fun ChartCard(
             Spacer(Modifier.padding(8.dp))
             HorizontalDivider()
             Spacer(Modifier.padding(4.dp))
-            Totals(state)
+            Totals(state, formats)
 
 
             Spacer(Modifier.padding(4.dp))
             Text(
-                syncLine(state),
+                syncLine(state, formats),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
@@ -519,7 +496,7 @@ private fun PeriodPickerDialog(
 }
 
 @Composable
-private fun Totals(state: PowerUiState) {
+private fun Totals(state: PowerUiState, formats: Formats) {
     val kwh = state.totalKwh
     val euro = state.totalEuro
     val mixed = state.hasExport && state.drawnKwh > 0
@@ -552,36 +529,11 @@ private fun Totals(state: PowerUiState) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(String.format(Locale.getDefault(), "%.2f €", abs(euro)),
+            Text(formats.major(abs(euro)),
                 style = MaterialTheme.typography.titleMedium,
                 color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
         }
     }
-}
-
-/** Emits null when the field is cleared, which is what puts a price back to its default. */
-@Composable
-private fun PriceField(
-    value: Double,
-    label: String,
-    enabled: Boolean,
-    onValue: (Double?) -> Unit,
-) {
-    var text by remember(value) { mutableStateOf(String.format(Locale.getDefault(), "%.1f", value)) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { typed ->
-            text = typed
-            if (typed.isBlank()) onValue(null)
-            else typed.replace(',', '.').toDoubleOrNull()?.let { if (it >= 0) onValue(it) }
-        },
-        label = { Text(label) },
-        enabled = enabled,
-        suffix = { Text(stringResource(R.string.power_price_unit)) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = Modifier.fillMaxWidth(),
-    )
 }
 
 private fun levelLabel(level: PowerLevel): Int = when (level) {
@@ -602,6 +554,7 @@ private fun barLabels(
     window: PowerWindow,
     buckets: List<PowerBucket>,
     zone: ZoneId,
+    formats: Formats,
 ): List<String> {
     val every = when (window.level) {
         PowerLevel.HOUR -> 5
@@ -615,7 +568,7 @@ private fun barLabels(
         val at = ZonedDateTime.ofInstant(Instant.ofEpochSecond(bucket.startUtc), zone)
         when (window.level) {
             PowerLevel.HOUR -> String.format(Locale.getDefault(), ":%02d", at.minute)
-            PowerLevel.DAY -> String.format(Locale.getDefault(), "%02d", at.hour)
+            PowerLevel.DAY -> formats.hour(bucket.startUtc * 1000)
             PowerLevel.WEEK -> at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
             PowerLevel.MONTH -> at.dayOfMonth.toString()
             PowerLevel.YEAR -> at.month.getDisplayName(TextStyle.NARROW, Locale.getDefault())
@@ -635,10 +588,10 @@ private fun trackingSubtitle(state: PowerUiState): String = when {
 }
 
 @Composable
-private fun syncLine(state: PowerUiState): String {
+private fun syncLine(state: PowerUiState, formats: Formats): String {
     if (state.lastSyncUtc <= 0) return stringResource(R.string.power_never_synced)
-    val at = ZonedDateTime.ofInstant(Instant.ofEpochSecond(state.lastSyncUtc), ZoneId.systemDefault())
-    val stamp = String.format(Locale.getDefault(), "%02d.%02d. %02d:%02d",
-        at.dayOfMonth, at.monthValue, at.hour, at.minute)
+    // When the app last fetched is a fact about the phone, so it is read in the
+    // phone's zone -- unlike the chart, which is read in the plug's.
+    val stamp = formats.dateTime(state.lastSyncUtc * 1000)
     return stringResource(R.string.power_last_sync, stamp, state.storedBlocks)
 }

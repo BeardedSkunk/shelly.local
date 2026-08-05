@@ -34,6 +34,13 @@ data class PowerWindow(
     val level: PowerLevel,
     /** Start of the period, or null for the rolling last 24 hours. */
     val anchor: LocalDateTime?,
+    /**
+     * Which day a week begins on. Part of the window rather than a parameter
+     * because it decides where a week starts, and a window derived from this one
+     * -- stepped, drilled into, offered in the picker -- has to keep the same
+     * answer. Two windows that disagree about it really are different windows.
+     */
+    val weekStart: DayOfWeek = DayOfWeek.MONDAY,
 ) {
     val rolling: Boolean get() = anchor == null
 
@@ -78,9 +85,9 @@ data class PowerWindow(
         if (barIndex < 0 || barIndex >= edges.size - 1) return null
         val at = Instant.ofEpochSecond(edges[barIndex]).atZone(zone).toLocalDateTime()
         return when (level) {
-            PowerLevel.YEAR -> of(PowerLevel.MONTH, at)
-            PowerLevel.MONTH, PowerLevel.WEEK -> of(PowerLevel.DAY, at)
-            PowerLevel.DAY -> of(PowerLevel.HOUR, at)
+            PowerLevel.YEAR -> of(PowerLevel.MONTH, at, weekStart)
+            PowerLevel.MONTH, PowerLevel.WEEK -> of(PowerLevel.DAY, at, weekStart)
+            PowerLevel.DAY -> of(PowerLevel.HOUR, at, weekStart)
             PowerLevel.HOUR -> null
         }
     }
@@ -88,7 +95,7 @@ data class PowerWindow(
     /** The same level, moved by whole periods. From the rolling window, now is the base. */
     fun shifted(steps: Long, now: LocalDateTime): PowerWindow {
         val base = anchor ?: now
-        return of(level, when (level) {
+        return of(level, weekStart = weekStart, at = when (level) {
             PowerLevel.HOUR -> base.plusHours(steps)
             PowerLevel.DAY -> base.plusDays(steps)
             PowerLevel.WEEK -> base.plusWeeks(steps)
@@ -119,7 +126,7 @@ data class PowerWindow(
         val out = ArrayList<PowerWindow>()
         var at = start
         while (at < end) {
-            out.add(of(child, at.toLocalDateTime()))
+            out.add(of(child, at.toLocalDateTime(), weekStart))
             at = when (child) {
                 PowerLevel.HOUR -> at.plusHours(1)
                 PowerLevel.DAY -> at.plusDays(1)
@@ -139,15 +146,16 @@ data class PowerWindow(
     fun pickingParent(): PowerWindow? {
         val anchor = anchor ?: return null
         return when (level) {
-            PowerLevel.HOUR -> of(PowerLevel.DAY, anchor)
-            PowerLevel.DAY -> of(PowerLevel.MONTH, anchor)
-            PowerLevel.WEEK, PowerLevel.MONTH -> of(PowerLevel.YEAR, anchor)
+            PowerLevel.HOUR -> of(PowerLevel.DAY, anchor, weekStart)
+            PowerLevel.DAY -> of(PowerLevel.MONTH, anchor, weekStart)
+            PowerLevel.WEEK, PowerLevel.MONTH -> of(PowerLevel.YEAR, anchor, weekStart)
             PowerLevel.YEAR -> null
         }
     }
 
     /** Keeps the moment being looked at and changes how much around it is shown. */
-    fun atLevel(target: PowerLevel, now: LocalDateTime): PowerWindow = of(target, anchor ?: now)
+    fun atLevel(target: PowerLevel, now: LocalDateTime): PowerWindow =
+        of(target, anchor ?: now, weekStart)
 
     /** True while the period runs up to or past now, which is when there is no later one. */
     fun isCurrent(nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): Boolean {
@@ -165,8 +173,10 @@ data class PowerWindow(
                 weekday, at.dayOfMonth, at.monthValue, at.year)
             PowerLevel.WEEK -> {
                 val last = at.plusDays(6)
+                // Counted from the same day the week starts on, or a Sunday
+                // start would be numbered as the week that ended the day before.
                 String.format(locale, "KW %d · %02d.%02d.–%02d.%02d.",
-                    at.get(WeekFields.ISO.weekOfWeekBasedYear()),
+                    at.get(WeekFields.of(weekStart, 4).weekOfWeekBasedYear()),
                     at.dayOfMonth, at.monthValue, last.dayOfMonth, last.monthValue)
             }
             PowerLevel.MONTH -> String.format(locale, "%s %d",
@@ -184,16 +194,23 @@ data class PowerWindow(
 
         val LAST_24H = PowerWindow(PowerLevel.DAY, null)
 
-        fun of(level: PowerLevel, at: LocalDateTime): PowerWindow {
+        fun of(
+            level: PowerLevel,
+            at: LocalDateTime,
+            weekStart: DayOfWeek = DayOfWeek.MONDAY,
+        ): PowerWindow {
             val day = at.truncatedTo(ChronoUnit.DAYS)
             return PowerWindow(level, when (level) {
                 PowerLevel.HOUR -> at.truncatedTo(ChronoUnit.HOURS)
                 PowerLevel.DAY -> day
-                // ISO weeks, so a week always starts on the Monday inside it.
-                PowerLevel.WEEK -> day.with(DayOfWeek.MONDAY)
+                // Back to the most recent week start at or before this day, so a
+                // week holds the seven days someone with that setting calls one.
+                PowerLevel.WEEK -> day.minusDays(
+                    ((day.dayOfWeek.value - weekStart.value + 7) % 7).toLong()
+                )
                 PowerLevel.MONTH -> day.withDayOfMonth(1)
                 PowerLevel.YEAR -> day.withDayOfYear(1)
-            })
+            }, weekStart)
         }
 
     }

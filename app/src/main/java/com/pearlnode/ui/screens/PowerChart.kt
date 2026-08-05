@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.pearlnode.data.Formats
 import com.pearlnode.model.PowerBucket
 import java.util.Locale
 import kotlin.math.abs
@@ -54,6 +55,7 @@ fun PowerChart(
     buckets: List<PowerBucket>,
     labels: List<String>,
     centsPerKwh: Double,
+    formats: Formats,
     modifier: Modifier = Modifier,
     onBarTap: ((Int) -> Unit)? = null,
     onSwipe: ((Long) -> Unit)? = null,
@@ -138,7 +140,7 @@ fun PowerChart(
                 }
             }
             AxisLabels(
-                values = axisTicks(peak, split) { formatMoney(it, centsPerKwh) },
+                values = axisTicks(peak, split) { formatMoney(it, centsPerKwh, formats) },
                 align = TextAlign.Start,
             )
         }
@@ -180,11 +182,8 @@ private fun formatEnergy(mwh: Double): String {
     else String.format(Locale.getDefault(), "%.0f Wh", wh)
 }
 
-private fun formatMoney(mwh: Double, centsPerKwh: Double): String {
-    val cents = mwh / 1_000_000.0 * centsPerKwh
-    if (abs(cents) < 0.05) return "0"
-    return if (abs(cents) >= 100) String.format(Locale.getDefault(), "%.2f €", cents / 100)
-    else String.format(Locale.getDefault(), "%.1f ct", cents)
+private fun formatMoney(mwh: Double, centsPerKwh: Double, formats: Formats): String {
+    return formats.money(mwh / 1_000_000.0 * centsPerKwh)
 }
 
 private fun tapModifier(barCount: Int, onBarTap: ((Int) -> Unit)?): Modifier =

@@ -27,6 +27,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pearlnode.PearlnodeApp
+import com.pearlnode.data.Formats
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -129,7 +132,7 @@ private fun KvsRow(entry: KvsEntry) {
                 )
             } else {
                 Text(
-                    if (entry.isStructured) summarizeKvsValue(entry.value, LocalContext.current)
+                    if (entry.isStructured) summarizeKvsValue(entry.value, kvsFormats())
                     else entry.value,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -153,4 +156,12 @@ private fun KvsRow(entry: KvsEntry) {
             }
         }
     }
+}
+
+/** The general settings, for the one line of this screen that formats a value. */
+@androidx.compose.runtime.Composable
+private fun kvsFormats(): Formats {
+    val settings = (LocalContext.current.applicationContext as PearlnodeApp).appSettings
+    val prefs by settings.flow.collectAsStateWithLifecycle()
+    return Formats(prefs, settings.systemDefaults)
 }

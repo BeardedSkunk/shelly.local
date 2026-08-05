@@ -14,8 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pearlnode.R
@@ -35,6 +33,7 @@ fun DeviceListScreen(
     onAdd: () -> Unit,
     onDevice: (String) -> Unit,
     onEdit: (String) -> Unit,
+    onSettings: () -> Unit,
 ) {
     val firmwareRepo = (LocalContext.current.applicationContext as PearlnodeApp).firmwareRepository
     val vm: DeviceListViewModel = viewModel(
@@ -44,15 +43,15 @@ fun DeviceListScreen(
     val states  by vm.states.collectAsStateWithLifecycle()
     val fwUpdates by vm.firmwareUpdates.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf<Device?>(null) }
-    var showLanguageDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
                 actions = {
-                    IconButton(onClick = { showLanguageDialog = true }) {
-                        Icon(Icons.Default.Language, contentDescription = stringResource(R.string.language))
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings_title))
                     }
                 },
             )
@@ -107,59 +106,6 @@ fun DeviceListScreen(
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text(stringResource(R.string.cancel)) } }
         )
     }
-
-    if (showLanguageDialog) {
-        LanguageDialog(onDismiss = { showLanguageDialog = false })
-    }
-}
-
-@Composable
-private fun LanguageDialog(onDismiss: () -> Unit) {
-    val options = listOf(
-        "" to stringResource(R.string.language_system),
-        "en" to stringResource(R.string.language_en),
-        "de" to stringResource(R.string.language_de),
-        "cs" to stringResource(R.string.language_cs),
-        "sk" to stringResource(R.string.language_sk),
-        "pl" to stringResource(R.string.language_pl),
-        "fr" to stringResource(R.string.language_fr),
-        "it" to stringResource(R.string.language_it),
-        "es" to stringResource(R.string.language_es),
-        "nl" to stringResource(R.string.language_nl),
-    )
-    val current = remember {
-        val locales = AppCompatDelegate.getApplicationLocales()
-        if (locales.isEmpty) "" else locales[0]?.language ?: ""
-    }
-    var selected by remember { mutableStateOf(current) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.language)) },
-        text = {
-            Column {
-                options.forEach { (tag, label) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        RadioButton(selected = selected == tag, onClick = { selected = tag })
-                        Text(label)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                AppCompatDelegate.setApplicationLocales(
-                    if (selected.isEmpty()) LocaleListCompat.getEmptyLocaleList()
-                    else LocaleListCompat.forLanguageTags(selected)
-                )
-                onDismiss()
-            }) { Text(stringResource(R.string.ok)) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

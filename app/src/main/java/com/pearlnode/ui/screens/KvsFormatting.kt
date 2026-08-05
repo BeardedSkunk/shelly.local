@@ -9,12 +9,9 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
-import android.content.Context
-import android.provider.Settings
-import android.text.format.DateFormat
+import com.pearlnode.data.Formats
+import com.pearlnode.data.TemperatureUnit
 import java.text.Normalizer
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -100,44 +97,55 @@ private val prettyJson = Json { prettyPrint = true; prettyPrintIndent = "  " }
  *
  * Returns the input unchanged when it is not JSON.
  */
-fun summarizeKvsValue(raw: String, context: Context): String {
+fun summarizeKvsValue(raw: String, formats: Formats): String {
     val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull() ?: return raw
-    return summarize(element, context).ifBlank { raw }
+    return summarize(element, formats).ifBlank { raw }
 }
 
-private fun summarize(element: JsonElement, context: Context): String = when (element) {
+private fun summarize(element: JsonElement, formats: Formats): String = when (element) {
     is JsonPrimitive -> element.contentOrNull ?: element.toString()
-    is JsonArray -> element.joinToString(", ") { summarize(it, context) }
-    is JsonObject -> summarizeObject(element, context)
+    is JsonArray -> element.joinToString(", ") { summarize(it, formats) }
+    is JsonObject -> summarizeObject(element, formats)
 }
 
-private fun summarizeObject(obj: JsonObject, context: Context): String {
+private fun summarizeObject(obj: JsonObject, formats: Formats): String {
     soleValue(obj)?.let { value ->
         val unit = soleUnit(obj)
-        return if (unit.isNullOrBlank()) value else "$value$unit"
+        if (unit.isNullOrBlank()) return value
+        // A reading that says what scale it is on can be put on the other one.
+        // Only then: without a unit there is nothing to convert from, and
+        // guessing at it would turn 22 degrees into 72 for no reason anyone
+        // could see.
+        temperatureScale(unit)?.let { scale ->
+            value.replace(',', '.').toDoubleOrNull()?.let { number ->
+                return if (scale == TemperatureUnit.CELSIUS) formats.temperature(number)
+                else formats.temperatureFromFahrenheit(number)
+            }
+        }
+        return "$value$unit"
     }
     // A single time in an object needs no naming -- it is plainly the time.
     val soleTimeKey = obj.keys.singleOrNull { it.looksLikeTime() }
     // The space after a comma is the only ordinary one in the result, so a line
     // break lands between pairs rather than between a label and its value.
     return obj.entries.joinToString(", ") { (key, value) ->
-        renderPair(key, value, key == soleTimeKey, context)
+        renderPair(key, value, key == soleTimeKey, formats)
     }
 }
 
 /** One `key: value` of a summary, dropping the label where it says nothing. */
-private fun renderPair(key: String, value: JsonElement, isSoleTime: Boolean, context: Context): String {
+private fun renderPair(key: String, value: JsonElement, isSoleTime: Boolean, formats: Formats): String {
     if (value is JsonPrimitive) {
         // A flag that is set says everything by being named. An unset one has to
         // say so, since its name alone would read as the opposite.
         if (value.booleanOrNull == true) return key
-        if (isSoleTime) return renderScalar(key, value, context) ?: key
+        if (isSoleTime) return renderScalar(key, value, formats) ?: key
         // "percent: 32" is three characters longer than "32%" and no clearer.
         if (key.normalizeKey() in PERCENT_KEYS && value.doubleOrNull != null) {
             return "${value.content}%"
         }
     }
-    return "$key:$NBSP${renderScalar(key, value, context) ?: summarize(value, context)}"
+    return "$key:$NBSP${renderScalar(key, value, formats) ?: summarize(value, formats)}"
 }
 
 /** The value of the one and only value-like key, or null if there is not exactly one. */
@@ -152,11 +160,11 @@ private fun solePrimitive(obj: JsonObject, keys: Set<String>): String? {
 }
 
 /** Renders a primitive, turning epoch numbers under time-like keys into a date. */
-private fun renderScalar(key: String, value: JsonElement, context: Context): String? {
+private fun renderScalar(key: String, value: JsonElement, formats: Formats): String? {
     if (value !is JsonPrimitive) return null
     if (key.looksLikeTime()) {
         val epoch = value.longOrNull ?: value.doubleOrNull?.toLong()
-        if (epoch != null) formatEpoch(epoch, context)?.let { return it }
+        if (epoch != null) formatEpoch(epoch, formats)?.let { return it }
         // A time already spelled out keeps its own wording, but its spaces must
         // not turn into line breaks.
         value.contentOrNull?.let { return it.replace(' ', NBSP) }
@@ -174,49 +182,23 @@ private fun String.looksLikeTime(): Boolean {
  * The range check is what keeps an ordinary number under a key like `date` from
  * being mangled into a date.
  */
-private fun formatEpoch(raw: Long, context: Context): String? {
+private fun formatEpoch(raw: Long, formats: Formats): String? {
     val millis = when (raw) {
         in EPOCH_MILLIS -> raw
         in EPOCH_SECONDS -> raw * 1000L
         else -> return null
     }
-    return runCatching {
-        // android.text.format.DateFormat rather than java.time on purpose: it is
-        // the only one that honours the system's 24-hour setting. A java.time
-        // pattern follows the locale alone and would print "12:05 PM" on an
-        // English phone even when the user asked for a 24-hour clock.
-        val moment = Date(millis)
-        val date = customDate(moment, context) ?: DateFormat.getDateFormat(context).format(moment)
-        val time = DateFormat.getTimeFormat(context).format(moment)
-        // Held together so a line break cannot split date from time.
-        "$date, $time".replace(' ', NBSP)
-    }.getOrNull()
+    // Held together so a line break cannot split date from time.
+    return runCatching { formats.dateTime(millis).replace(' ', NBSP) }.getOrNull()
 }
 
-/**
- * The date as spelled by the `date_format` system setting, or null when it is
- * unset or unusable.
- *
- * Android has no setting for the order of day, month and year -- it follows the
- * locale, so wanting an English phone with a European date is not expressible.
- * The `date_format` key is the remnant of a setting that once did exactly that.
- * The platform stopped reading it long ago, but the key still exists and still
- * holds whatever is written to it:
- *
- *     adb shell settings put system date_format dd.MM.yyyy
- *     adb shell settings delete system date_format
- *
- * Reading it here costs nothing and gives anyone who wants that control a way
- * to take it, without a preference screen for a single format string. An unset
- * key or a pattern SimpleDateFormat rejects both fall back to the locale.
- */
-private fun customDate(moment: Date, context: Context): String? {
-    // The Settings.System.DATE_FORMAT constant is deprecated; the key it names
-    // is not, so name it directly and avoid the warning.
-    val pattern = Settings.System.getString(context.contentResolver, "date_format")
-    if (pattern.isNullOrBlank()) return null
-    return runCatching { SimpleDateFormat(pattern, Locale.getDefault()).format(moment) }.getOrNull()
-}
+/** Which scale a unit names, or null when it names something else entirely. */
+private fun temperatureScale(unit: String): TemperatureUnit? =
+    when (unit.trim().removePrefix("°").trim().lowercase(Locale.ROOT)) {
+        "c", "celsius" -> TemperatureUnit.CELSIUS
+        "f", "fahrenheit" -> TemperatureUnit.FAHRENHEIT
+        else -> null
+    }
 
 /** Glues a summary together where a line break would read badly. */
 private const val NBSP = ' '

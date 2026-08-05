@@ -31,6 +31,26 @@
     <string name="language_es">Español</string>
     <string name="language_nl">Nederlands</string>
 
+    <!-- Allgemeine Einstellungen -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="settings_energy">Energie</string>
+    <string name="settings_regional">Region und Format</string>
+    <string name="settings_currency">Währung</string>
+    <string name="settings_currency_major">Ganze Einheit</string>
+    <string name="settings_currency_minor">Hundertstel</string>
+    <string name="settings_currency_hint">Beliebiges Zeichen. Hundertstel leer lassen, um immer ganze Einheiten zu zeigen.</string>
+    <string name="settings_first_day">Erster Tag der Woche</string>
+    <string name="settings_date_format">Datumsformat</string>
+    <string name="settings_temperature">Temperatur</string>
+    <string name="settings_clock">Uhrzeit</string>
+    <string name="settings_system">Einstellung des Telefons</string>
+    <string name="settings_system_is">Einstellung des Telefons (%1$s)</string>
+    <string name="settings_clock_24">24 Stunden</string>
+    <string name="settings_clock_12">AM / PM</string>
+    <string name="settings_celsius">Celsius (°C)</string>
+    <string name="settings_fahrenheit">Fahrenheit (°F)</string>
+    <string name="settings_preview">Jetzt: %1$s</string>
+
     <!-- Device list -->
     <string name="no_devices_title">Noch keine Geräte</string>
     <string name="no_devices_hint">Tippe auf +, um ein Gerät zu entdecken oder hinzuzufügen</string>

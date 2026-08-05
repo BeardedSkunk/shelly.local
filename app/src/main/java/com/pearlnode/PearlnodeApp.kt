@@ -3,6 +3,7 @@ package com.pearlnode
 import android.app.Application
 import com.pearlnode.alarmSync.AlarmSyncConfigStore
 import com.pearlnode.alarmSync.AlarmSyncRepository
+import com.pearlnode.data.AppSettings
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.FirmwareRepository
 import com.pearlnode.data.PowerJournalRepository
@@ -16,6 +17,7 @@ class PearlnodeApp : Application() {
         DeviceRepository(db.deviceDao(), CredentialStore(this))
     }
     val firmwareRepository: FirmwareRepository by lazy { FirmwareRepository() }
+    val appSettings: AppSettings by lazy { AppSettings(this) }
     val powerJournalRepository: PowerJournalRepository by lazy {
         val db = AppDatabase.getInstance(this)
         val store = CredentialStore(this)

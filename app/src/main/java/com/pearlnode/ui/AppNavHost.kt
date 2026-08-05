@@ -11,6 +11,7 @@ import com.pearlnode.ui.screens.AddEditDeviceScreen
 import com.pearlnode.ui.screens.DeviceControlScreen
 import com.pearlnode.ui.screens.DeviceListScreen
 import com.pearlnode.ui.screens.PowerScreen
+import com.pearlnode.ui.screens.SettingsScreen
 
 @Composable
 fun AppNavHost(repo: DeviceRepository, initialDeviceId: String? = null) {
@@ -24,7 +25,11 @@ fun AppNavHost(repo: DeviceRepository, initialDeviceId: String? = null) {
                 onAdd = { nav.navigate("add_device") },
                 onDevice = { id -> nav.navigate("control/$id") },
                 onEdit = { id -> nav.navigate("edit_device/$id") },
+                onSettings = { nav.navigate("settings") },
             )
+        }
+        composable("settings") {
+            SettingsScreen(onBack = { nav.popBackStack() })
         }
         composable("add_device") {
             AddEditDeviceScreen(repo = repo, deviceId = null, onDone = { nav.popBackStack() })

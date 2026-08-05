@@ -3,7 +3,9 @@ package com.pearlnode.ui.viewmodels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.pearlnode.data.AppSettings
 import com.pearlnode.data.DeviceRepository
+import com.pearlnode.data.Formats
 import com.pearlnode.data.PowerJournalRepository
 import com.pearlnode.model.Device
 import com.pearlnode.model.PowerBlock
@@ -124,14 +126,15 @@ data class PowerUiState(
 class PowerViewModel(
     private val devices: DeviceRepository,
     private val journal: PowerJournalRepository,
+    private val settings: AppSettings,
     private val deviceId: String,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
-            priceCentsPerKwh = journal.settings.priceCentsPerKwh,
-            feedInCentsPerKwh = journal.settings.feedInCentsPerKwh,
+            priceCentsPerKwh = settings.current.priceCentsPerKwh,
+            feedInCentsPerKwh = settings.current.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
             zone = journal.settings.zoneId(deviceId) ?: ZoneId.systemDefault(),
         )
@@ -163,7 +166,39 @@ class PowerViewModel(
     init {
         observeHistory()
         observePicker()
+        observeSettings()
     }
+
+    /**
+     * The general settings reach in here twice over. The tariff only prices
+     * what is drawn, so it changes a number. The week start changes where the
+     * bars are cut, so a window built under the old answer has to be built
+     * again -- rebuilding it from its own anchor keeps whatever period is on
+     * screen on screen, only cut the new way.
+     */
+    private fun observeSettings() {
+        viewModelScope.launch {
+            settings.flow.collect { prefs ->
+                _uiState.update { it.copy(
+                    priceCentsPerKwh = prefs.priceCentsPerKwh,
+                    feedInCentsPerKwh = prefs.feedInCentsPerKwh,
+                ) }
+                val start = formats().firstDayOfWeek
+                val shown = window.value
+                if (shown.weekStart != start) {
+                    window.value = shown.anchor
+                        ?.let { PowerWindow.of(shown.level, it, start) }
+                        ?: shown.copy(weekStart = start)
+                }
+            }
+        }
+    }
+
+    private fun formats() = Formats(settings.current, settings.systemDefaults)
+
+    /** A window at the level asked for, cut the way the user counts weeks. */
+    private fun windowAt(level: PowerLevel, at: LocalDateTime) =
+        PowerWindow.of(level, at, formats().firstDayOfWeek)
 
     /**
      * The device row, from the state if it is already there and from the
@@ -210,6 +245,9 @@ class PowerViewModel(
         }
     }
 
+    /** Back to the last 24 hours, cut the way the user counts weeks. */
+    fun showLatest() = show(PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek))
+
     fun show(selected: PowerWindow) {
         window.value = selected
         picker.value = null
@@ -226,7 +264,7 @@ class PowerViewModel(
      */
     fun openPicker() {
         val current = window.value
-        picker.value = if (current.rolling) PowerWindow.of(PowerLevel.MONTH, now()).let {
+        picker.value = if (current.rolling) windowAt(PowerLevel.MONTH, now()).let {
             // The rolling window is not in any month, so the picker opens on
             // this one and offers its days.
             it
@@ -317,8 +355,8 @@ class PowerViewModel(
         val first = _uiState.value.earliestUtc
             ?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDateTime() } ?: now()
         val out = ArrayList<PowerWindow>()
-        var at = PowerWindow.of(PowerLevel.YEAR, first)
-        val last = PowerWindow.of(PowerLevel.YEAR, now())
+        var at = windowAt(PowerLevel.YEAR, first)
+        val last = windowAt(PowerLevel.YEAR, now())
         while (out.size < 40) {
             out.add(at)
             if (at.anchor == last.anchor) break
@@ -344,7 +382,8 @@ class PowerViewModel(
         // Coming back to the day level lands on the rolling window rather than
         // on today, because that is what the page means by 24 h.
         window.value =
-            if (level == PowerLevel.DAY && window.value.level != PowerLevel.DAY) PowerWindow.LAST_24H
+            if (level == PowerLevel.DAY && window.value.level != PowerLevel.DAY)
+                PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek)
             else window.value.atLevel(level, now())
     }
 
@@ -368,17 +407,6 @@ class PowerViewModel(
             moved = next
         }
         window.value = moved
-    }
-
-    fun setPrice(centsPerKwh: Double) {
-        journal.settings.priceCentsPerKwh = centsPerKwh
-        _uiState.update { it.copy(priceCentsPerKwh = centsPerKwh) }
-    }
-
-    /** Null puts a returned kilowatt hour back at the price of a drawn one. */
-    fun setFeedInPrice(centsPerKwh: Double?) {
-        journal.settings.feedInCentsPerKwh = centsPerKwh
-        _uiState.update { it.copy(feedInCentsPerKwh = centsPerKwh) }
     }
 
     /** Asks the plug what it is running, and syncs if the journal is there. */
@@ -469,10 +497,11 @@ class PowerViewModel(
     class Factory(
         private val devices: DeviceRepository,
         private val journal: PowerJournalRepository,
+        private val settings: AppSettings,
         private val deviceId: String,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            PowerViewModel(devices, journal, deviceId) as T
+            PowerViewModel(devices, journal, settings, deviceId) as T
     }
 }

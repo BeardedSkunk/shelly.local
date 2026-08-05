@@ -1,5 +1,6 @@
 package com.pearlnode.model
 
+import java.time.DayOfWeek
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -120,6 +121,43 @@ class PowerRangeTest {
             assertEquals(monday, week.anchor)
             assertEquals(7, bars(week))
         }
+    }
+
+    @Test
+    fun `a Sunday start moves the whole week, not just its name`() {
+        // Same Wednesday, two settings. Monday first puts the week at the 3rd of
+        // August; Sunday first puts it at the 2nd, and both hold seven days.
+        val wednesday = at("2026-08-05T14:00")
+        val mondayFirst = PowerWindow.of(PowerLevel.WEEK, wednesday, DayOfWeek.MONDAY)
+        val sundayFirst = PowerWindow.of(PowerLevel.WEEK, wednesday, DayOfWeek.SUNDAY)
+        assertEquals(at("2026-08-03T00:00"), mondayFirst.anchor)
+        assertEquals(at("2026-08-02T00:00"), sundayFirst.anchor)
+        assertEquals(7, bars(mondayFirst))
+        assertEquals(7, bars(sundayFirst))
+        assertEquals(DayOfWeek.SUNDAY, sundayFirst.anchor!!.dayOfWeek)
+    }
+
+    @Test
+    fun `a Saturday start is offered too, for the places that count that way`() {
+        val week = PowerWindow.of(PowerLevel.WEEK, at("2026-08-05T14:00"), DayOfWeek.SATURDAY)
+        assertEquals(at("2026-08-01T00:00"), week.anchor)
+        assertEquals(DayOfWeek.SATURDAY, week.anchor!!.dayOfWeek)
+    }
+
+    @Test
+    fun `a derived window keeps the week start it came from`() {
+        // Stepping, drilling and the picker all build new windows. Any of them
+        // forgetting the setting would put the user back on Monday weeks the
+        // moment they touched an arrow.
+        val week = PowerWindow.of(PowerLevel.WEEK, at("2026-08-05T14:00"), DayOfWeek.SUNDAY)
+        val now = at("2026-08-05T14:00")
+        assertEquals(DayOfWeek.SUNDAY, week.shifted(-1, now).weekStart)
+        assertEquals(at("2026-07-26T00:00"), week.shifted(-1, now).anchor)
+        assertEquals(DayOfWeek.SUNDAY,
+            week.drillInto(0, nowIn("2026-08-10T00:00"), berlin)!!.weekStart)
+        assertEquals(DayOfWeek.SUNDAY, week.pickingParent()!!.weekStart)
+        assertEquals(DayOfWeek.SUNDAY, week.atLevel(PowerLevel.MONTH, now).weekStart)
+        assertTrue(week.subWindows(PowerLevel.DAY, berlin).all { it.weekStart == DayOfWeek.SUNDAY })
     }
 
     @Test
