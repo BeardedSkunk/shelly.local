@@ -16,11 +16,9 @@ class PowerPricingTest {
         vararg mwh: Double,
         price: Double = 30.0,
         feedIn: Double? = null,
-        reversed: Boolean = false,
     ) = PowerUiState(
         priceCentsPerKwh = price,
         feedInCentsPerKwh = feedIn,
-        reversed = reversed,
         buckets = mwh.mapIndexed { i, e ->
             PowerBucket(i * 3600L, (i + 1) * 3600L, e, 1)
         },
@@ -34,6 +32,12 @@ class PowerPricingTest {
         assertFalse(s.hasExport)
     }
 
+    /**
+     * A plant arrives already negative. Reverse metering used to be undone
+     * here, which put a flag outside the data in charge of what every stored
+     * number meant; the script settles the sign on the way into the archive
+     * now, so nothing in the app has an opinion about it.
+     */
     @Test
     fun `a plant that only exports earns rather than costs`() {
         val s = state(-2_000_000.0, feedIn = 8.0)
@@ -66,40 +70,6 @@ class PowerPricingTest {
         assertTrue("net energy is negative", s.totalKwh < 0)
         assertEquals(0.30 - 0.60, s.totalEuro, 0.0001)
         assertTrue("and so is the money", s.totalEuro < 0)
-    }
-
-    /**
-     * Reverse metering makes a plant report its generation as positive, which
-     * is nicer to look at and makes it indistinguishable from a consumer to
-     * everything downstream. Without the flag, the balcony plant's earnings
-     * came out labelled as costs.
-     */
-    @Test
-    fun `a reverse metered plant earns on exactly the readings that looked like costs`() {
-        val plain = state(2_000_000.0, feedIn = 8.0)
-        assertTrue("read straight it is consumption", plain.totalEuro > 0)
-
-        val plant = state(2_000_000.0, feedIn = 8.0, reversed = true)
-        assertEquals("the same readings are generation", -2.0, plant.totalKwh, 0.0001)
-        assertTrue(plant.hasExport)
-        assertEquals(-0.16, plant.totalEuro, 0.0001)
-    }
-
-    @Test
-    fun `a reverse metered plug that draws at night is charged for it`() {
-        // Negative under reverse metering means the plug actually drew -- an
-        // inverter idling after dark. That is a cost even on a plant.
-        val plant = state(3_000_000.0, -200_000.0, feedIn = 8.0, reversed = true)
-        assertEquals(0.2, plant.drawnKwh, 0.0001)
-        assertEquals(-3.0, plant.exportedKwh, 0.0001)
-        assertEquals(0.06 - 0.24, plant.totalEuro, 0.0001)
-    }
-
-    @Test
-    fun `the raw bars are left alone so the chart still draws what the plug said`() {
-        val plant = state(1_000_000.0, reversed = true)
-        assertEquals(1_000_000.0, plant.buckets.single().energyMwh, 0.0001)
-        assertEquals(-1_000_000.0, plant.oriented.single().energyMwh, 0.0001)
     }
 
     @Test

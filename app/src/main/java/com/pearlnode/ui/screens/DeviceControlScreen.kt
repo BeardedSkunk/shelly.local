@@ -31,12 +31,14 @@ import kotlinx.coroutines.launch
 import com.pearlnode.R
 import com.pearlnode.PearlnodeApp
 import com.pearlnode.data.DeviceRepository
+import com.pearlnode.model.ChannelState
 import com.pearlnode.model.DeviceCapability
 import com.pearlnode.model.FirmwareChannel
 import com.pearlnode.model.FirmwareInfo
 import com.pearlnode.model.firmwareDate
 import com.pearlnode.model.RgbColor
 import com.pearlnode.model.ScheduleAction
+import com.pearlnode.model.ShellyGeneration
 import com.pearlnode.model.ShellySchedule
 import com.pearlnode.model.formatDuration
 import com.pearlnode.ui.viewmodels.AlarmSyncStatus
@@ -147,14 +149,29 @@ fun DeviceControlScreen(
                             .padding(horizontal = 16.dp))
                 }
 
-                uiState.channels.forEachIndexed { idx, channel ->
+                // A device that has never answered has no channels, and the
+                // card that carries the way to its history would vanish with
+                // them -- exactly when the history is the only thing still
+                // worth looking at. So an unreachable device gets a placeholder
+                // channel: no watts, a dead switch, and the chart still behind
+                // it.
+                val channels = uiState.channels.ifEmpty {
+                    if (uiState.isOnline) emptyList() else listOf(ChannelState(0, false))
+                }
+                channels.forEachIndexed { idx, channel ->
                     // The energy history lives behind the card that shows the
-                    // watts. Only the first channel of a metering Gen2 device
-                    // leads anywhere: the journal is an mJS script and it reads
+                    // watts. Only the first channel of a Gen2 device leads
+                    // anywhere: the journal is an mJS script and it reads
                     // switch:0, so there is nothing behind the others.
+                    //
+                    // Online, a live power reading is what says the device
+                    // meters at all. Offline there is no reading to go by, so
+                    // the device type has to answer instead.
+                    val switchLike = device.type.capability == DeviceCapability.PLUG ||
+                        device.type.capability == DeviceCapability.RELAY
                     val hasJournal = idx == 0 &&
-                        device.generation == com.pearlnode.model.ShellyGeneration.GEN2 &&
-                        channel.power != null
+                        device.generation == ShellyGeneration.GEN2 &&
+                        (channel.power != null || (!uiState.isOnline && switchLike))
                     val cardModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                     val body: @Composable () -> Unit = {
                         Row(
@@ -164,7 +181,7 @@ fun DeviceControlScreen(
                         ) {
                             Column {
                                 Text(
-                                    if (uiState.channels.size > 1) stringResource(R.string.channel_n, idx + 1)
+                                    if (channels.size > 1) stringResource(R.string.channel_n, idx + 1)
                                     else stringResource(R.string.power),
                                     style = MaterialTheme.typography.titleMedium,
                                 )

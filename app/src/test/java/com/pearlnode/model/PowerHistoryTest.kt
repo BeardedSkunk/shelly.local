@@ -182,7 +182,7 @@ class PowerHistoryTest {
         val hour = fifth.drillInto(13, now, zone)!!
         assertEquals(PowerLevel.HOUR, hour.level)
         assertEquals(13, hour.anchor!!.hour)
-        assertEquals("twelve five minute bars", 13, hour.edges(now, zone).size)
+        assertEquals("thirty two minute bars", 31, hour.edges(now, zone).size)
         assertNull("and nothing under an hour", hour.drillInto(0, now, zone))
     }
 

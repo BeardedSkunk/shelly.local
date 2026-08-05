@@ -528,7 +528,7 @@ test('19  the HTTP endpoint hands out the index and one page at a time', () => {
   plug.feedFor(0, 60);
 
   const index = JSON.parse(plug.request('').body);
-  eq(index.version, 2, 'the index says version 2');
+  eq(index.version, 3, 'the index says version 3');
   eq(index.tiers.length, 4, 'and lists four tiers');
   eq(index.tiers[1].grid_sec, 900, 'with the quarter hour grid named');
   eq(index.utc_offset, 7200, 'and the offset the day buckets use');
@@ -579,11 +579,106 @@ test('21  the switch is never written to', () => {
   eq(plug.output, output, 'and the relay is where it was');
 });
 
+// Reverse metering makes a plant report its generation as positive. The flag
+// can be flipped at any point in a plug's life and nothing in the numbers says
+// which way round they were taken, so the script settles the sign on the way in
+// and stores one convention: positive is drawn from the grid.
+test('22  the stored sign does not depend on how the plug reports', () => {
+  const plain = running();
+  plain.feedFor(-400, 3600);
+  plain.feed(0, 4);
+  plain.feedFor(0, 60);
+  const straight = plain.tierBlocks(0).find((b) => b.energy !== 0);
+  ok(straight.energy < 0, 'a plant read straight is stored as negative  (' + straight.energy + ')');
+
+  // The same plant on a plug with reverse metering: the meter now reports the
+  // generation as positive, and the archive has to come out the same anyway.
+  const reversed = running({ reverse: true });
+  reversed.feedFor(400, 3600);
+  reversed.feed(0, 4);
+  reversed.feedFor(0, 60);
+  const flipped = reversed.tierBlocks(0).find((b) => b.energy !== 0);
+  ok(flipped.energy < 0, 'and so is the same plant read reversed  (' + flipped.energy + ')');
+  near(flipped.energy, straight.energy, 2000, 'to within a rounding of the same figure');
+  eq(parseMeta(reversed.storage.m).rev, 1, 'the metadata records which way the plug reports');
+  ok(JSON.parse(reversed.request('').body).reversed === true,
+    'and the index says so, so a reader never has to ask the plug');
+});
+
+test('23  a flag change that has not been rebooted into is not believed yet', () => {
+  // Setting reverse only takes effect on a device restart. Until then the plug
+  // still measures the old way while GetConfig already reports the new flag,
+  // and adopting it would put a sign flip in the middle of the history.
+  // Closing a block is what persists the metadata, so the run has to end
+  // before there is anything on file to look at.
+  const plug = running();
+  plug.feedFor(-400, 1800);
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+  eq(parseMeta(plug.storage.m).rev, 0, 'it starts out reading straight');
+
+  plug.reverse = true;
+  plug.restartRequired = true;
+  plug.restartScript();
+  plug.boot();
+  plug.settle(4);
+  eq(parseMeta(plug.storage.m).rev, 0, 'a pending restart leaves the orientation alone');
+  ok(plug.logsMatching('restart is pending').length > 0, 'and it says why');
+
+  // The reboot happens, and now the flag is real.
+  plug.restartRequired = false;
+  plug.powerCut(60);
+  plug.boot();
+  plug.settle(4);
+  plug.feedFor(400, 1800);
+
+  // Checked while a block is actually running: a null block carries no energy
+  // field at all, so waiting until the end would check nothing.
+  const live = plug.kvs['current_power'];
+  const plausible = 400 * 3600;
+  ok(Math.abs(live.energy_mwh) < plausible,
+    'and the running block did not swallow the lifetime counter  (' +
+      live.energy_mwh + ' mWh)');
+
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+  eq(parseMeta(plug.storage.m).rev, 1, 'after the restart it is adopted');
+  const blocks = plug.tierBlocks(0).filter((b) => b.energy !== 0);
+  ok(blocks.every((b) => b.energy < 0),
+    'and both halves of the history are stored the same way round');
+
+  // The bookmark in the KVS points into the plug's lifetime counter and is only
+  // comparable with readings taken the same way round. Left unturned, the first
+  // sample after the flip books the difference between plus and minus the whole
+  // lifetime total as the energy of one ten second interval -- which is exactly
+  // what the plug did before this was handled: minus 6.4 kWh in a fresh block.
+  ok(blocks.every((b) => Math.abs(b.energy) < plausible),
+    'nor did any archived one');
+});
+
+// An archive written before the sign was settled means something else, and
+// nothing in it says so. Carrying it forward would hide a flip in the middle of
+// the history, which is worse than losing a few hours.
+test('24  an archive from an older version is dropped rather than mixed in', () => {
+  const plug = running();
+  plug.feedFor(700, 3600);
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+  ok(plug.tierBlocks(0).length > 0, 'there is something to lose');
+
+  plug.storage.m = '2|9|0|' + plug.storage.m.split('|').slice(4).join('|');
+  plug.restartScript();
+  plug.boot();
+  plug.settle(4);
+  eq(Object.keys(plug.storage).filter((k) => k !== 'm').length, 0, 'every page is gone');
+  ok(plug.logsMatching('starting a new one').length > 0, 'and it says what it did');
+});
+
 // The Android app deploys the journal from a bundled copy rather than from
 // this directory, and a Gradle build has no Node to generate it with. So the
 // squeezed script is checked in, and a change here that nobody regenerated
 // would otherwise ship an app that installs an old script on a plug.
-test('22  the copy the app ships is the script in this directory', () => {
+test('25  the copy the app ships is the script in this directory', () => {
   const { build, TARGET } = require('../tools/asset');
   const fs = require('fs');
   ok(fs.existsSync(TARGET), 'the app carries a copy of the script');
@@ -602,7 +697,7 @@ test('22  the copy the app ships is the script in this directory', () => {
 // Frames of the script read "at name (eval at boot (harness.js), ...)" because
 // the harness loads the file with new Function. A frame without that is the
 // harness itself, which is where the script's own chain ends.
-test('23  the archive never nests deeper than the plug allows', () => {
+test('26  the archive never nests deeper than the plug allows', () => {
   const CEILING = 10;
   let deepest = { n: 0, chain: '' };
   const realRound = Math.round;

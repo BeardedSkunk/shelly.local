@@ -56,13 +56,7 @@ class PowerJournalRepository(
     }
 
     suspend fun installation(device: Device): JournalInstallation = withContext(Dispatchers.IO) {
-        val client = clientFor(device)
-        val installation = client.installation()
-        // Read while the plug is in reach, because it decides how everything
-        // already stored is to be read, and that has to hold offline too.
-        runCatching { client.meteringReversed() }
-            .onSuccess { settings.setReversed(device.id, it) }
-        installation
+        clientFor(device).installation()
     }
 
     /**
@@ -118,6 +112,22 @@ class PowerJournalRepository(
         val client = clientFor(device)
         val scriptId = client.installation().scriptId ?: error("no journal on this device")
         val index = client.index(scriptId)
+
+        // Blocks copied from an older archive mean something else. Up to
+        // version 3 the sign followed the plug's reverse metering flag, and
+        // nothing in a stored row says which way that flag stood at the time --
+        // so keeping them would put an invisible flip in the middle of the
+        // history. They go, once, and the whole archive is fetched again.
+        // Version 0 means rows from before this was recorded at all, which is
+        // the very case that has to go -- so the count is what says whether
+        // there is anything to lose. A device syncing for the first time has
+        // nothing stored and nothing to clear.
+        val storedVersion = settings.archiveVersion(device.id)
+        if (storedVersion < index.version && dao.count(device.id) > 0) {
+            dao.deleteForDevice(device.id)
+        }
+        settings.setArchiveVersion(device.id, index.version)
+
         val blocks = ArrayList<PowerBlock>()
 
         index.tiers.forEachIndexed { tier, row ->

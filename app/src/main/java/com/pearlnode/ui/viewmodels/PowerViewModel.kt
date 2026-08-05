@@ -43,12 +43,6 @@ data class PowerUiState(
     val choices: List<PowerWindow> = emptyList(),
     /** True while the window runs up to now, so there is no later one to step to. */
     val atLatest: Boolean = true,
-    /**
-     * Whether the plug has reverse metering on. With it on, the plug reports
-     * its generation as positive, so everything read off it means the opposite
-     * of what the sign says.
-     */
-    val reversed: Boolean = false,
     val priceCentsPerKwh: Double = 30.0,
     /** Null while a returned kilowatt hour is worth the same as one drawn. */
     val feedInCentsPerKwh: Double? = null,
@@ -57,25 +51,21 @@ data class PowerUiState(
     val earliestUtc: Long? = null,
 ) {
     /**
-     * The bars with their signs meaning what they say: positive drawn from the
-     * grid, negative sent back. On a plug with reverse metering that is the
-     * opposite of what it reported, which is the whole reason this exists --
-     * without it a balcony plant's generation reads as consumption and its
-     * earnings get printed as costs.
+     * Signed, in kWh: positive drawn from the grid, negative sent back.
+     *
+     * Nothing is flipped here. The script settles the sign on the way into the
+     * archive, so a plug's reverse metering flag -- which can be turned on and
+     * off over its life -- never reaches this far and cannot put a silent flip
+     * in the middle of a history.
      */
-    val oriented: List<PowerBucket>
-        get() = if (!reversed) buckets
-        else buckets.map { it.copy(energyMwh = -it.energyMwh) }
-
-    /** Signed, in kWh: positive drawn, negative exported. */
-    val totalKwh: Double get() = oriented.sumOf { it.energyMwh } / 1_000_000.0
+    val totalKwh: Double get() = buckets.sumOf { it.energyMwh } / 1_000_000.0
 
     val drawnKwh: Double
-        get() = oriented.filter { it.energyMwh > 0 }.sumOf { it.energyMwh } / 1_000_000.0
+        get() = buckets.filter { it.energyMwh > 0 }.sumOf { it.energyMwh } / 1_000_000.0
 
     /** Negative, like the energy it comes from. */
     val exportedKwh: Double
-        get() = oriented.filter { it.energyMwh < 0 }.sumOf { it.energyMwh } / 1_000_000.0
+        get() = buckets.filter { it.energyMwh < 0 }.sumOf { it.energyMwh } / 1_000_000.0
 
     val hasExport: Boolean get() = exportedKwh < 0
 
@@ -108,7 +98,6 @@ class PowerViewModel(
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
-            reversed = journal.settings.isReversed(deviceId),
             priceCentsPerKwh = journal.settings.priceCentsPerKwh,
             feedInCentsPerKwh = journal.settings.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
@@ -246,8 +235,7 @@ class PowerViewModel(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
-                reversed = journal.settings.isReversed(deviceId),
-                scriptInstalled = installation.getOrNull()?.installed ?: false,
+                    scriptInstalled = installation.getOrNull()?.installed ?: false,
                 scriptRunning = running,
                 scriptError = installation.getOrNull()?.error,
                 storedBlocks = journal.blockCount(deviceId),

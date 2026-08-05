@@ -22,7 +22,7 @@ enum class PowerLevel { HOUR, DAY, WEEK, MONTH, YEAR }
  * window of the last 24 hours, which is what the page opens on and which has no
  * anchor.
  *
- * Bars per screen: 12 five-minute bars in an hour, 24 hours in a day, 7 days in
+ * Bars per screen: 30 two-minute bars in an hour, 24 hours in a day, 7 days in
  * a week, 28 to 31 in a month, 12 months in a year. The day is 23 or 25 bars on
  * the two days a year the clocks move, because it genuinely is.
  *
@@ -70,7 +70,7 @@ data class PowerWindow(
     /**
      * The window behind one bar, or null at the finest level. A year opens the
      * month that was tapped, a month or a week the day, a day the hour -- and
-     * an hour is five-minute bars, which is as fine as the plug records.
+     * an hour is two-minute bars, comfortably inside what the plug records.
      */
     fun drillInto(barIndex: Int, nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): PowerWindow? {
         if (level == PowerLevel.HOUR) return null
@@ -130,8 +130,8 @@ data class PowerWindow(
         /** How many hours the rolling window covers. */
         const val ROLLING_HOURS = 24
 
-        /** Bar width inside an hour. The finest the plug's native tier supports usefully. */
-        const val BAR_MINUTES = 5L
+        /** Bar width inside an hour. The plug's native tier resolves far finer. */
+        const val BAR_MINUTES = 2L
 
         val LAST_24H = PowerWindow(PowerLevel.DAY, null)
 

@@ -77,6 +77,8 @@
     <!-- Energie-Verlauf -->
     <string name="power_title">Energie</string>
     <string name="power_settings">Einstellungen</string>
+    <string name="power_settings_expand">Einstellungen anzeigen</string>
+    <string name="power_settings_collapse">Einstellungen ausblenden</string>
     <string name="power_tracking">Stromverbrauch aufzeichnen</string>
     <string name="power_checking">Gerät wird gefragt…</string>
     <string name="power_deploying">Aufzeichnung wird installiert…</string>

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,15 +120,18 @@ fun PowerScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            SettingsCard(uiState, onTracking = vm::setTracking)
+            SettingsCard(
+                state = uiState,
+                onTracking = vm::setTracking,
+                onPrice = vm::setPrice,
+                onFeedInPrice = vm::setFeedInPrice,
+            )
             ChartCard(
                 state = uiState,
                 onLevel = vm::setLevel,
                 onShow = vm::show,
                 onStep = vm::step,
                 onDrill = vm::drillInto,
-                onPrice = vm::setPrice,
-                onFeedInPrice = vm::setFeedInPrice,
                 onSync = vm::sync,
             )
             Spacer(Modifier.padding(8.dp))
@@ -132,11 +139,43 @@ fun PowerScreen(
     }
 }
 
+/**
+ * Folded away by default: once recording is on and the tariff is entered,
+ * neither changes again, and the chart is what the page is for. A device with
+ * no recorder installed is the exception -- there the switch is the only thing
+ * on the page that does anything, so the card opens itself.
+ */
 @Composable
-private fun SettingsCard(state: PowerUiState, onTracking: (Boolean) -> Unit) {
+private fun SettingsCard(
+    state: PowerUiState,
+    onTracking: (Boolean) -> Unit,
+    onPrice: (Double) -> Unit,
+    onFeedInPrice: (Double?) -> Unit,
+) {
+    // Remembered against the installed state rather than Unit, so a card that
+    // opened because nothing was installed folds away once something is.
+    var expanded by rememberSaveable(state.scriptInstalled) {
+        mutableStateOf(!state.scriptInstalled)
+    }
+
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Column(Modifier.padding(16.dp)) {
-            Text(stringResource(R.string.power_settings), style = MaterialTheme.typography.titleMedium)
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(R.string.power_settings), style = MaterialTheme.typography.titleMedium)
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(
+                        if (expanded) R.string.power_settings_collapse else R.string.power_settings_expand
+                    ),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (!expanded) return@Column
+
             Spacer(Modifier.padding(4.dp))
             Row(
                 Modifier.fillMaxWidth(),
@@ -186,6 +225,31 @@ private fun SettingsCard(state: PowerUiState, onTracking: (Boolean) -> Unit) {
                     )
                 }
             }
+
+            Spacer(Modifier.padding(8.dp))
+            HorizontalDivider()
+            Spacer(Modifier.padding(8.dp))
+            // A tariff prices a history. With no recorder installed there is
+            // none and never will be, so the fields are there to be seen and
+            // not to be filled in yet.
+            PriceField(
+                value = state.priceCentsPerKwh,
+                label = stringResource(R.string.power_price_drawn),
+                enabled = state.scriptInstalled,
+                onValue = { onPrice(it ?: PowerTrackingSettings.DEFAULT_PRICE_CT.toDouble()) },
+            )
+            Spacer(Modifier.padding(4.dp))
+            PriceField(
+                value = state.feedInCentsPerKwh ?: state.priceCentsPerKwh,
+                label = stringResource(R.string.power_price_feed_in),
+                enabled = state.scriptInstalled,
+                onValue = onFeedInPrice,
+            )
+            Text(
+                stringResource(R.string.power_price_feed_in_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -197,8 +261,6 @@ private fun ChartCard(
     onShow: (PowerWindow) -> Unit,
     onStep: (Long) -> Unit,
     onDrill: (Int) -> Unit,
-    onPrice: (Double) -> Unit,
-    onFeedInPrice: (Double?) -> Unit,
     onSync: () -> Unit,
 ) {
     // Nothing has ever been recorded and nothing is recording: there is no
@@ -247,7 +309,7 @@ private fun ChartCard(
 
             Spacer(Modifier.padding(8.dp))
             PowerChart(
-                buckets = state.oriented,
+                buckets = state.buckets,
                 labels = barLabels(state.window, state.buckets),
                 centsPerKwh = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
                               else state.priceCentsPerKwh,
@@ -260,29 +322,6 @@ private fun ChartCard(
             Spacer(Modifier.padding(4.dp))
             Totals(state)
 
-            Spacer(Modifier.padding(8.dp))
-            PriceField(
-                value = state.priceCentsPerKwh,
-                label = stringResource(
-                    if (state.hasExport) R.string.power_price_drawn else R.string.power_price
-                ),
-                onValue = { onPrice(it ?: PowerTrackingSettings.DEFAULT_PRICE_CT.toDouble()) },
-            )
-            // Only worth asking about once something has actually gone back out.
-            // A plug that only ever draws has no second price to give.
-            if (state.hasExport) {
-                Spacer(Modifier.padding(4.dp))
-                PriceField(
-                    value = state.feedInCentsPerKwh ?: state.priceCentsPerKwh,
-                    label = stringResource(R.string.power_price_feed_in),
-                    onValue = onFeedInPrice,
-                )
-                Text(
-                    stringResource(R.string.power_price_feed_in_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
 
             Spacer(Modifier.padding(4.dp))
             Text(
@@ -391,7 +430,12 @@ private fun Totals(state: PowerUiState) {
 
 /** Emits null when the field is cleared, which is what puts a price back to its default. */
 @Composable
-private fun PriceField(value: Double, label: String, onValue: (Double?) -> Unit) {
+private fun PriceField(
+    value: Double,
+    label: String,
+    enabled: Boolean,
+    onValue: (Double?) -> Unit,
+) {
     var text by remember(value) { mutableStateOf(String.format(Locale.getDefault(), "%.1f", value)) }
     OutlinedTextField(
         value = text,
@@ -401,6 +445,7 @@ private fun PriceField(value: Double, label: String, onValue: (Double?) -> Unit)
             else typed.replace(',', '.').toDoubleOrNull()?.let { if (it >= 0) onValue(it) }
         },
         label = { Text(label) },
+        enabled = enabled,
         suffix = { Text(stringResource(R.string.power_price_unit)) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -425,7 +470,7 @@ private fun levelLabel(level: PowerLevel): Int = when (level) {
 private fun barLabels(window: PowerWindow, buckets: List<PowerBucket>): List<String> {
     val zone = ZoneId.systemDefault()
     val every = when (window.level) {
-        PowerLevel.HOUR -> 3
+        PowerLevel.HOUR -> 5
         PowerLevel.DAY -> 6
         PowerLevel.WEEK -> 1
         PowerLevel.MONTH -> 5

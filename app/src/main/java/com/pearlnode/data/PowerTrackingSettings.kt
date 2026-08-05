@@ -42,15 +42,17 @@ class PowerTrackingSettings(context: Context) {
         }
 
     /**
-     * Whether this plug reports with reverse metering. Kept here rather than
-     * asked for on every read, because it decides how the stored energy is to
-     * be understood and the statistics have to work with the plug out of
-     * reach.
+     * Which archive format the stored blocks for this device came from.
+     *
+     * Version 3 was where the sign stopped depending on the plug's reverse
+     * metering flag, so blocks copied before it mean something else and cannot
+     * be told apart afterwards. Knowing what is in the database is the only way
+     * to notice.
      */
-    fun isReversed(deviceId: String): Boolean = prefs.getBoolean("${deviceId}_reverse", false)
+    fun archiveVersion(deviceId: String): Int = prefs.getInt("${deviceId}_archive_v", 0)
 
-    fun setReversed(deviceId: String, reversed: Boolean) {
-        prefs.edit().putBoolean("${deviceId}_reverse", reversed).apply()
+    fun setArchiveVersion(deviceId: String, version: Int) {
+        prefs.edit().putInt("${deviceId}_archive_v", version).apply()
     }
 
     /** Unix second of the last successful sync, so a stale view can say so. */

@@ -13,7 +13,7 @@ import com.pearlnode.model.DeviceType
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.ShellyGeneration
 
-@Database(entities = [Device::class, PowerBlock::class], version = 2, exportSchema = false)
+@Database(entities = [Device::class, PowerBlock::class], version = 3, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
@@ -45,13 +45,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Up to version 3 of the plug's archive, the sign of a stored block
+        // followed the plug's reverse metering flag, and nothing in a row said
+        // how that flag stood when it was written. Rows from before then cannot
+        // be told apart from rows after, so they go and the archive is fetched
+        // again. It costs whatever the plug no longer holds -- hours, in
+        // practice -- and it is the only way to be sure the history does not
+        // have an invisible sign flip in the middle of it.
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM power_blocks")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "shelly.db"
-                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
             }
     }
 }

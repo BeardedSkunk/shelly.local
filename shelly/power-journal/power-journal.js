@@ -87,7 +87,7 @@ let CFG = {
 
 // ---------------------------------------------------------------- constants
 
-let VERSION = 2;
+let VERSION = 3;
 let META_KEY = 'm';
 // Twelve storage slots exist in total. One holds the metadata, the other
 // eleven can hold pages -- but the tier page allowances add up to ten, so one
@@ -125,7 +125,9 @@ let ST = {
   kvsBusy: false,
   kvsDirty: false,
   lastUnix: 0,
-  timeProbe: 0
+  timeProbe: 0,
+  flip: false,     // the meter orientation turned since the last run
+  stale: false     // the KVS entry was written by an older version of this
 };
 
 function log(level, message) {
@@ -277,12 +279,13 @@ function pageInfo(text) {
 function metaParse(text) {
   if (text === null) return null;
   let fields = text.split('|');
-  if (fields.length !== 4) return null;
+  if (fields.length !== 5) return null;
   if (toInt(fields[0]) !== VERSION) return null;
   let generation = toInt(fields[1]);
   let attic = toInt(fields[2]);
-  if (generation === null || attic === null) return null;
-  let rows = fields[3].split(';');
+  let rev = toInt(fields[3]);
+  if (generation === null || attic === null || rev === null) return null;
+  let rows = fields[4].split(';');
   if (rows.length !== CFG.tiers.length) return null;
   let tiers = [];
   let i, j, parts, names, pages, nums, ok;
@@ -309,7 +312,7 @@ function metaParse(text) {
       pd: nums[3], pe: nums[4], pr: nums[5], cy: nums[6]
     });
   }
-  return { g: generation, attic: attic, tiers: tiers };
+  return { g: generation, attic: attic, rev: rev, tiers: tiers };
 }
 
 // Built one short concatenation at a time, and inlined into the writer rather
@@ -321,7 +324,7 @@ function metaParse(text) {
 function metaWrite() {
   let meta = ST.meta;
   meta.g = meta.g + 1;
-  let text = VERSION + '|' + meta.g + '|' + meta.attic + '|';
+  let text = VERSION + '|' + meta.g + '|' + meta.attic + '|' + meta.rev + '|';
   let i, t, row;
   for (i = 0; i < meta.tiers.length; i++) {
     t = meta.tiers[i];
@@ -373,7 +376,7 @@ function metaRebuild() {
       found[best] = null;
     }
   }
-  return { g: 0, attic: 0, tiers: tiers };
+  return { g: 0, attic: 0, rev: 0, tiers: tiers };
 }
 
 // ------------------------------------------------------------------ archive
@@ -877,7 +880,40 @@ function fillGap(untilTime) {
 function netMeter(sw) {
   let gross = Math.round(sw.aenergy.total * 1000);
   let returned = sw.ret_aenergy && isNum(sw.ret_aenergy.total) ? Math.round(sw.ret_aenergy.total * 1000) : 0;
-  return { gross: gross, net: gross - 2 * returned };
+  // The gross counter is not oriented. It is only ever compared with itself to
+  // notice a reset, and it climbs whichever way the energy is going.
+  return { gross: gross, net: orient(gross - 2 * returned) };
+}
+
+// Everything the script measures passes through here, and everything it stores
+// is therefore in one fixed convention: positive is drawn from the grid.
+//
+// The plug's reverse metering flag exists to make a solar plant read positive,
+// which is nicer on a live display and useless in an archive -- the flag can be
+// flipped at any point in a plug's life, and the same physical afternoon would
+// then be recorded twice with opposite signs. Nothing in the numbers could tell
+// the two apart afterwards, so the sign is settled here, once, on the way in.
+function orient(mw) {
+  return ST.meta !== null && ST.meta.rev === 1 ? -mw : mw;
+}
+
+// Which way round the plug is reporting, decided at startup and then left
+// alone.
+//
+// Startup is the only moment this can be read safely, and it is enough:
+// changing reverse needs a device restart, and a restart starts this script.
+// Until that restart happens the plug still measures the old way while
+// GetConfig already reports the new flag, so a pending restart means the
+// answer on file is the true one and the configured one is a promise.
+function orientation(current) {
+  let sys = Shelly.getComponentStatus('sys');
+  if (sys && sys.restart_required === true) {
+    log(1, 'a restart is pending, keeping the meter orientation that is in force');
+    return current;
+  }
+  let cfg = Shelly.getComponentConfig('switch:' + CFG.switch_id);
+  if (!cfg || typeof cfg.reverse !== 'boolean') return current;
+  return cfg.reverse ? 1 : 0;
 }
 
 function sample() {
@@ -908,7 +944,7 @@ function sample() {
     return;
   }
 
-  let power = sw.output === false ? 0 : Math.round(sw.apower * 1000);
+  let power = sw.output === false ? 0 : orient(Math.round(sw.apower * 1000));
   let reading = netMeter(sw);
 
   // The gross counter cannot fall. If it did, it was reset, and the running
@@ -932,20 +968,50 @@ function sample() {
 // ----------------------------------------------------------------- start up
 
 function begin() {
-  ST.meta = metaParse(stGet(META_KEY));
+  let raw = stGet(META_KEY);
+  // An archive from an older version of this script is thrown away rather than
+  // carried forward. From version 3 the stored energy is oriented -- positive
+  // is drawn from the grid whatever the plug's reverse flag says -- so older
+  // pages mean something else, and there is nothing in them that says which.
+  // Mixing the two would put a silent sign flip in the middle of the history,
+  // which is worse than starting again.
+  let i;
+  if (raw !== null && toInt(raw.split('|')[0]) !== VERSION) {
+    log(1, 'the archive is version ' + raw.split('|')[0] + ' and this is ' + VERSION + ', starting a new one');
+    for (i = 0; i < SLOTS.length; i++) stDel(SLOTS[i]);
+    stDel(META_KEY);
+    raw = null;
+    // The running block in the KVS was written by that older script and means
+    // what it meant, which is no longer knowable. Starting the block again
+    // costs one stretch; keeping it would poison the first sample.
+    ST.stale = true;
+  }
+  ST.meta = metaParse(raw);
   if (ST.meta === null) {
-    log(1, 'metadata missing or damaged, rebuilding it from the pages');
+    if (raw !== null) log(1, 'metadata missing or damaged, rebuilding it from the pages');
     ST.meta = metaRebuild();
   }
+  let was = ST.meta.rev;
+  ST.meta.rev = orientation(was);
+  // The running block in the KVS carries a bookmark into the plug's lifetime
+  // counter, and that bookmark is only comparable with readings taken the same
+  // way round. When the orientation has changed since it was written, the
+  // bookmark is turned with it -- otherwise the very next sample would book the
+  // difference between plus and minus the whole lifetime total as the energy of
+  // one ten second interval.
+  ST.flip = ST.meta.rev !== was;
+  log(2, 'meter orientation ' + (ST.meta.rev === 1 ? 'reversed' : 'normal') +
+    (ST.flip ? ', turned since the last run' : ''));
   ST.archiveEnd = archiveEndTime();
-  let i, counts = [];
+  let counts = [];
   for (i = 0; i < ST.meta.tiers.length; i++) counts.push(ST.meta.tiers[i].pages.length);
   log(2, 'archive pages ' + counts.join('/') + ', reaching to ' + ST.archiveEnd);
   Shelly.call('KVS.Get', { key: CFG.kvs_key }, onKvsRead);
 }
 
 function onKvsRead(result, code) {
-  if (code === 0 && result) ST.cur = curParse(result.value);
+  if (code === 0 && result && !ST.stale) ST.cur = curParse(result.value);
+  if (ST.stale) log(1, 'the running block in the KVS predates this version, starting again');
   if (ST.cur === null) log(2, 'no usable running block in the KVS');
   waitForTime();
 }
@@ -957,15 +1023,18 @@ function curParse(value) {
   if (!isNum(value.start_time) || value.start_time < CFG.min_valid_unix) return null;
   if (!isNum(value.duration_sec)) return { start: value.start_time, zero: true };
   if (!isNum(value.energy_mwh) || !isNum(value.meter_net_mwh) || !isNum(value.watt)) return null;
+  // Everything signed turns together, or none of it does. The gross counter is
+  // not signed and stays as it is.
+  let sign = ST.flip ? -1 : 1;
   return {
     start: value.start_time,
     zero: false,
     dur: value.duration_sec,
-    energy: value.energy_mwh,
-    meter: value.meter_net_mwh,
+    energy: sign * value.energy_mwh,
+    meter: sign * value.meter_net_mwh,
     gross: isNum(value.meter_gross_mwh) ? value.meter_gross_mwh : null,
-    watt: value.watt,
-    reference: isNum(value.reference_watt) ? value.reference_watt : value.watt
+    watt: sign * value.watt,
+    reference: sign * (isNum(value.reference_watt) ? value.reference_watt : value.watt)
   };
 }
 
@@ -991,7 +1060,7 @@ function recover(now) {
   let sw = Shelly.getComponentStatus('switch:' + CFG.switch_id);
   let usable = sw && sw.aenergy && isNum(sw.aenergy.total);
   let reading = usable ? netMeter(sw) : { gross: 0, net: 0 };
-  let power = sw && isNum(sw.apower) && sw.output !== false ? Math.round(sw.apower * 1000) : 0;
+  let power = sw && isNum(sw.apower) && sw.output !== false ? orient(Math.round(sw.apower * 1000)) : 0;
   let bootTs = now - Math.floor(Shelly.getUptimeMs() / 1000);
   let cur = ST.cur;
   ST.gross = usable ? reading.gross : null;
@@ -1130,7 +1199,8 @@ function httpIndex() {
       ',"open_mwh":' + Math.round(row.acc) +
       ',"carry_mwh":' + Math.round(row.cy) + '}';
   }
-  return out + '],"archive_end":' + (ST.archiveEnd === null ? 'null' : ST.archiveEnd) +
+  return out + '],"reversed":' + (ST.meta.rev === 1 ? 'true' : 'false') +
+    ',"archive_end":' + (ST.archiveEnd === null ? 'null' : ST.archiveEnd) +
     ',"current":' + (ST.blk === null ? 'null' : JSON.stringify(kvsPayload(ST.lastUnix))) + '}';
 }
 

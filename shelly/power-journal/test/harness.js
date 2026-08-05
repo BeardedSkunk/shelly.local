@@ -48,6 +48,10 @@ function createPlug(options) {
     meterStepSec: opt.meterStepSec || 0,
     lastStepAt: opt.unixtime || 1785870000,
     watt: opt.watt === undefined ? 0 : opt.watt,
+    // Reverse metering: with it on the plug reports a plant's generation as
+    // positive, so every reading means the opposite of what its sign says.
+    reverse: opt.reverse === undefined ? false : opt.reverse,
+    restartRequired: opt.restartRequired === undefined ? false : opt.restartRequired,
     output: opt.output === undefined ? true : opt.output,
     storage: Object.assign({}, opt.storage),
     kvs: Object.assign({}, opt.kvs),
@@ -98,6 +102,10 @@ function createPlug(options) {
           unixtime: plug.unixtime,
           uptime: Math.floor(plug.uptimeMs / 1000),
           utc_offset: plug.utcOffset,
+          // True after a config change that only takes effect on reboot.
+          // Reverse metering is one of those, which is why the script has to
+          // look at this before believing what GetConfig tells it.
+          restart_required: plug.restartRequired,
         };
       }
       if (name === 'switch:0') {
@@ -112,6 +120,12 @@ function createPlug(options) {
     },
     getUptimeMs() {
       return plug.uptimeMs;
+    },
+    // Synchronous on the device, verified on a Plug M Gen3: no RPC needed to
+    // find out which way round the meter is reporting.
+    getComponentConfig(name) {
+      if (name !== 'switch:0') return null;
+      return { id: 0, reverse: plug.reverse };
     },
     // RPC is asynchronous on the device, so callbacks queue here and only run
     // when the harness drains them. That is what lets a test see the script
@@ -367,8 +381,8 @@ function decodePage(text) {
 function parseMeta(text) {
   if (typeof text !== 'string') return null;
   const fields = text.split('|');
-  if (fields.length !== 4) return null;
-  const tiers = fields[3].split(';').map((row) => {
+  if (fields.length !== 5) return null;
+  const tiers = fields[4].split(';').map((row) => {
     const parts = row.split(',');
     return {
       pages: parts[0] === '' ? [] : parts[0].split('.'),
@@ -377,7 +391,12 @@ function parseMeta(text) {
       cy: Number(parts[7]),
     };
   });
-  return { version: Number(fields[0]), g: Number(fields[1]), attic: Number(fields[2]), tiers };
+  return {
+    version: Number(fields[0]), g: Number(fields[1]), attic: Number(fields[2]),
+    // 1 while the plug reports with reverse metering, which the script has
+    // already undone on everything it stored.
+    rev: Number(fields[3]), tiers,
+  };
 }
 
 module.exports = {
