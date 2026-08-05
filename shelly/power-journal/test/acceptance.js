@@ -1,455 +1,536 @@
-// The acceptance tests from the specification, section 17, run against the
-// real power-journal.js on a simulated plug.
+// Acceptance tests for the power journal.
 //
-// Two of them have moved: tests 11 and 12 were written for a compaction stage
-// that summarised old blocks before deleting any. That stage is not being
-// built -- shelly.local will carry the history off the device long before the
-// archive fills -- so they now check what actually happens instead, which is
-// that the oldest page gives way and says so in the log.
+//   node test/acceptance.js                 run them
+//   node test/acceptance.js -v              and show the script's own log
+//   PJ_STRIPPED=1 node test/acceptance.js   against what the device gets
 //
-//   node test/acceptance.js          run them
-//   node test/acceptance.js -v       and show the script's own log
+// The tests drive the real power-journal.js through the simulated plug in
+// harness.js. Nothing is reimplemented, so a passing run says something about
+// the file that gets uploaded rather than about a copy of it.
 
 'use strict';
 
-const { createPlug } = require('./harness');
+const {
+  createPlug, decodePage, parseMeta, encode, decodeAt,
+  STORAGE_VALUE_LIMIT, A64,
+} = require('./harness');
 
 const VERBOSE = process.argv.indexOf('-v') >= 0;
 
-let failures = 0;
 let checks = 0;
-
-function check(label, ok, detail) {
-  checks++;
-  if (ok) return;
-  failures++;
-  console.log('   FAIL  ' + label + (detail === undefined ? '' : '  -- ' + detail));
-}
-
-function near(actual, expected, slack) {
-  return Math.abs(actual - expected) <= slack;
-}
+let failures = 0;
 
 function test(name, body) {
-  console.log('\n' + name);
-  const t0 = Date.now();
-  const before = failures;
+  process.stdout.write('\n' + name + '\n');
   try {
     body();
   } catch (error) {
     failures++;
-    console.log('   THREW ' + error.stack);
+    console.log('   !! threw: ' + error.message);
+    console.log((error.stack || '').split('\n').slice(1, 4).join('\n'));
   }
-  const verdict = failures === before ? 'ok' : 'FAILED';
-  console.log('   ' + verdict + ' (' + (Date.now() - t0) + ' ms)');
 }
 
-// A plug that has already settled into a steady block at the given power.
-function steadyPlug(watt, primeSamples, options) {
-  const plug = createPlug(Object.assign({ watt, verbose: VERBOSE }, options || {}));
+function ok(condition, what) {
+  checks++;
+  if (condition) {
+    console.log('   ok   ' + what);
+  } else {
+    failures++;
+    console.log('   FAIL ' + what);
+  }
+}
+
+function eq(actual, expected, what) {
+  const same = actual === expected;
+  ok(same, what + '  (' + JSON.stringify(actual) + (same ? '' : ' != ' + JSON.stringify(expected)) + ')');
+}
+
+function near(actual, expected, tolerance, what) {
+  ok(Math.abs(actual - expected) <= tolerance,
+    what + '  (' + actual + ' vs ' + expected + ' +/- ' + tolerance + ')');
+}
+
+// A plug that has already been through startup and is sampling. waitForTime
+// wants two probes that agree time is moving forwards, hence the settle.
+function running(options) {
+  const plug = createPlug(Object.assign({ verbose: VERBOSE }, options));
   plug.boot();
-  plug.feed(watt, primeSamples === undefined ? 10 : primeSamples);
+  plug.settle(4);
   return plug;
 }
 
+const sum = (list, pick) => list.reduce((total, item) => total + pick(item), 0);
+
+function gapless(blocks) {
+  for (let i = 1; i < blocks.length; i++) {
+    if (blocks[i - 1].start + blocks[i - 1].duration !== blocks[i].start) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 
-test('1  steady power for two hours', () => {
-  const plug = steadyPlug(3.5, 0);
-  const kvsBefore = plug.kvsWrites;
-  plug.feed(3.5, 720); // 7200 s at ten seconds a sample
+test('1  the codec round trips, including negatives', () => {
+  const pj = running().pj;
 
-  const entry = plug.kvs['pj/current'];
-  const live = JSON.parse(plug.request('').body).current;
-  check('nothing was archived', plug.archive().length === 0, JSON.stringify(plug.archive()));
-  check('one block is running', live.duration_sec > 7100, JSON.stringify(live));
-  // The entry is a checkpoint, not a live reading, so it lags by up to the
-  // checkpoint interval. That lag is the whole point of not writing more often.
-  check('the checkpoint is at most half an hour behind',
-    live.duration_sec - entry.duration_sec <= 1800,
-    'live=' + live.duration_sec + ' stored=' + entry.duration_sec);
-  check('its average is 3.5 W', near(live.watt, 3.5, 0.05), 'watt=' + live.watt);
-  // Once when the block opened, then every thirty minutes across two hours.
-  const writes = plug.kvsWrites - kvsBefore;
-  check('about five KVS writes in two hours', writes >= 4 && writes <= 6, 'writes=' + writes);
-  check('the entry fits a KVS value', JSON.stringify(entry).length <= 253,
-    JSON.stringify(entry).length + ' bytes');
-});
-
-test('2  a single outlier does not open a block', () => {
-  const plug = steadyPlug(3.5);
-  const start = plug.kvs['pj/current'].start_time;
-  plug.feed(4.2, 1);
-  plug.feed(3.5, 3);
-
-  check('nothing was archived', plug.archive().length === 0);
-  check('the block still starts where it did', plug.kvs['pj/current'].start_time === start);
-  check('the outlier was dropped', plug.logsMatching('candidate run').length >= 0);
-});
-
-test('3  a sustained change opens a block at the first disagreeing sample', () => {
-  const plug = steadyPlug(3.5);
-  const firstStart = plug.kvs['pj/current'].start_time;
-
-  plug.feed(4.2, 1);
-  const boundary = plug.unixtime; // the first sample that disagreed
-  plug.feed(4.3, 1);
-  plug.feed(4.1, 1); // third in a row -- the change is confirmed here
-
-  const archived = plug.archive();
-  check('exactly one block was archived', archived.length === 1, JSON.stringify(archived));
-  check('it starts where the first block did', archived[0].start === firstStart);
-  check('it ends at the first disagreeing sample',
-    archived[0].start + archived[0].duration === boundary,
-    'end=' + (archived[0].start + archived[0].duration) + ' boundary=' + boundary);
-  check('the new block begins there', plug.kvs['pj/current'].start_time === boundary,
-    'start=' + plug.kvs['pj/current'].start_time);
-});
-
-test('4  small fluctuations stay in one block', () => {
-  const plug = steadyPlug(3.5);
-  const start = plug.kvs['pj/current'].start_time;
-  [3.5, 3.7, 3.4, 3.8, 3.6].forEach((w) => plug.feed(w, 1));
-
-  check('nothing was archived', plug.archive().length === 0, JSON.stringify(plug.archive()));
-  check('the block still starts where it did', plug.kvs['pj/current'].start_time === start);
-});
-
-test('5  a twelve hour null phase costs one write', () => {
-  const plug = steadyPlug(5);
-
-  plug.feed(0, 1);
-  const nullStart = plug.unixtime;
-  plug.feed(0, 2); // confirmed here: the running block closes at nullStart
-
-  const afterOpen = plug.kvsWrites;
-  const entry = plug.kvs['pj/current'];
-  check('the null block is in the KVS', entry.watt === 0 && entry.start_time === nullStart,
-    JSON.stringify(entry));
-  check('a null entry carries no duration', entry.duration_sec === undefined);
-  check('a null entry carries no meter bookmark', entry.meter_total_mwh === undefined);
-
-  const storageBefore = plug.storageWrites;
-  plug.feed(0, 4320); // twelve hours
-  check('twelve hours of zero cost no writes at all', plug.kvsWrites === afterOpen,
-    'writes=' + (plug.kvsWrites - afterOpen));
-  check('and no storage traffic either', plug.storageWrites === storageBefore,
-    'writes=' + (plug.storageWrites - storageBefore));
-
-  plug.feed(5, 1);
-  const back = plug.unixtime;
-  plug.feed(5, 2);
-
-  const archived = plug.archive();
-  const nullBlock = archived[archived.length - 1];
-  check('the null block was archived last', nullBlock.energy === 0, JSON.stringify(nullBlock));
-  check('with the full twelve hours', nullBlock.duration === back - nullStart,
-    'duration=' + nullBlock.duration);
-});
-
-test('6  a power cut during a null phase does not duplicate it', () => {
-  const plug = steadyPlug(5);
-  plug.feed(0, 3);
-  const nullStart = plug.kvs['pj/current'].start_time;
-  plug.feed(0, 60);
-  const archivedBefore = plug.archive().length;
-
-  plug.powerCut(3600);
-  plug.watt = 0;
-  plug.output = false;
-  plug.boot();
-
-  check('the null block kept its start', plug.kvs['pj/current'].start_time === nullStart,
-    'start=' + plug.kvs['pj/current'].start_time + ' expected=' + nullStart);
-  check('nothing was archived on the way', plug.archive().length === archivedBefore,
-    JSON.stringify(plug.archive()));
-  check('the script says it is continuing', plug.logsMatching('continuing the null block').length === 1);
-
-  const writesAfterBoot = plug.kvsWrites;
-  plug.feed(0, 10);
-  check('and taking it over cost no write', plug.kvsWrites === writesAfterBoot,
-    'writes=' + (plug.kvsWrites - writesAfterBoot));
-});
-
-test('7  a script restart carries the running block over', () => {
-  const plug = steadyPlug(3.5);
-  plug.feed(3.5, 200);
-  const before = plug.kvs['pj/current'];
-
-  plug.restartScript();
-  plug.boot();
-  plug.feed(3.5, 10);
-
-  const after = plug.kvs['pj/current'];
-  check('the block kept its start', after.start_time === before.start_time,
-    after.start_time + ' vs ' + before.start_time);
-  check('nothing was archived', plug.archive().length === 0, JSON.stringify(plug.archive()));
-  check('the energy carried over', after.energy_mwh >= before.energy_mwh,
-    after.energy_mwh + ' vs ' + before.energy_mwh);
-  check('it is recognised as a script restart',
-    plug.logsMatching('script restart').length === 1);
-  check('the average is still about 3.5 W', near(after.watt, 3.5, 0.1), 'watt=' + after.watt);
-});
-
-test('8  a power cut mid block is reconstructed and the outage recorded', () => {
-  const plug = steadyPlug(5);
-  plug.feed(5, 180);                       // past the first checkpoint
-  const checkpoint = plug.kvs['pj/current'];
-  const checkpointEnd = checkpoint.start_time + checkpoint.duration_sec;
-  plug.feed(5, 60);                        // 600 s the checkpoint never saw
-  const cutAt = plug.unixtime;
-
-  plug.powerCut(7200);
-  plug.watt = 5;
-  plug.output = true;
-  plug.boot();
-
-  const archived = plug.archive();
-  check('the interrupted block was archived', archived.length === 1, JSON.stringify(archived));
-  check('it starts where it always did', archived[0].start === checkpoint.start_time);
-  // The counter kept the energy, so the estimate should land on the real cut.
-  check('its end was estimated back to the cut',
-    near(archived[0].start + archived[0].duration, cutAt, 20),
-    'end=' + (archived[0].start + archived[0].duration) + ' cut=' + cutAt);
-  check('the estimate is not before the checkpoint',
-    archived[0].start + archived[0].duration >= checkpointEnd);
-  check('the outage became a null phase',
-    plug.kvs['pj/current'].watt === 0, JSON.stringify(plug.kvs['pj/current']));
-
-  plug.feed(5, 3);
-  const after = plug.archive();
-  check('the outage was archived as a null block',
-    after.length === 2 && after[1].energy === 0, JSON.stringify(after));
-  check('and a new block is running',
-    plug.kvs['pj/current'].watt > 0, JSON.stringify(plug.kvs['pj/current']));
-});
-
-test('9  an invalid clock stops everything until it is set', () => {
-  const plug = createPlug({ unixtime: 1600, watt: 3.5, verbose: VERBOSE });
-  plug.boot();
-
-  check('sampling has not started', plug.sampleTimer() === undefined);
-  check('nothing was written to the KVS', plug.kvsWrites === 0);
-  check('nothing was written to storage', plug.storageWrites === 0);
-  check('and it says what it is waiting for',
-    plug.logsMatching('waiting for a valid unix time').length > 0);
-
-  plug.unixtime = 1785870000;
-  plug.settle();
-  check('sampling starts once the clock is set', plug.sampleTimer() !== undefined);
-
-  plug.feed(3.5, 10);
-  check('and a block appears', plug.kvs['pj/current'] !== undefined);
-});
-
-test('10  a reset energy counter never becomes negative energy', () => {
-  const plug = steadyPlug(3.5);
-  plug.feed(3.5, 100);
-  const before = plug.kvs['pj/current'].energy_mwh;
-
-  plug.setMeter(0);
-  plug.feed(3.5, 200);
-  const after = plug.kvs['pj/current'];
-
-  check('the counter drop was noticed',
-    plug.logsMatching('energy counter fell').length === 1, plug.logsMatching('energy').join(' / '));
-  check('energy did not go backwards', after.energy_mwh >= before,
-    after.energy_mwh + ' vs ' + before);
-  check('the new counter became the base', after.meter_total_mwh < 5000,
-    'meter=' + after.meter_total_mwh);
-  check('the block was not switched over it',
-    plug.archive().length === 0, JSON.stringify(plug.archive()));
-});
-
-test('11  a full archive drops its oldest page and says so', () => {
-  const plug = steadyPlug(3.5, 0);
-  const pj = plug.pj;
-  let at = 1785000000;
-
-  // Straight at the archive: producing seven hundred blocks by sampling would
-  // take hours of simulated time and prove nothing extra.
-  for (let i = 0; i < 2000; i++) {
-    pj.archiveAppend(at, 600, 3500, false);
-    at += 600;
+  let bad = 0;
+  for (let n = 0; n < 3000; n++) {
+    pj.DEC.i = 0; pj.DEC.ok = true;
+    if (pj.dec(pj.enc(n)) !== n) bad++;
   }
+  eq(bad, 0, 'three thousand unsigned values survive the script codec');
 
-  const meta = pj.metaParse(plug.storage.m);
-  check('the metadata still parses', meta !== null, plug.storage.m);
-  check('the page count stops at the limit', meta.pages.length === pj.CFG.max_pages,
-    'pages=' + meta.pages.length);
-  check('a spare slot is always free',
-    Object.keys(plug.storage).length <= 11, Object.keys(plug.storage).join(','));
-  check('dropping was reported', plug.logsMatching('archive is full').length > 0);
+  bad = 0;
+  for (let n = -2000; n < 2000; n++) {
+    pj.DEC.i = 0; pj.DEC.ok = true;
+    if (pj.decZ(pj.encZ(n)) !== n) bad++;
+  }
+  eq(bad, 0, 'four thousand signed values survive it too');
 
-  const blocks = plug.archive();
-  check('the newest block survived',
-    blocks[blocks.length - 1].start === at - 600, 'last=' + blocks[blocks.length - 1].start);
-  check('the oldest ones are gone', blocks[0].start > 1785000000, 'first=' + blocks[0].start);
-  check('what is left is contiguous', blocks.every((b, i) =>
-    i === 0 || b.start === blocks[i - 1].start + blocks[i - 1].duration));
+  bad = 0;
+  for (const n of [0, 31, 32, 1023, 1024, 19750, 19429, 86400, 2000000, 1785870000]) {
+    if (decodeAt(pj.enc(n), 0)[0] !== n) bad++;
+    pj.DEC.i = 0; pj.DEC.ok = true;
+    if (pj.dec(encode(n)) !== n) bad++;
+  }
+  eq(bad, 0, 'and the script and the harness agree in both directions');
+
+  eq(A64.length, 64, 'the alphabet has 64 characters');
+  eq(new Set(A64).size, 64, 'all of them distinct');
+  ok(!/["\\]/.test(A64), 'none of them a quote or a backslash, so a page survives JSON');
+  ok([...A64].every((c) => c.charCodeAt(0) > 32 && c.charCodeAt(0) < 127), 'all printable ASCII');
+
+  eq(pj.enc(19750).length, 3, '19750 costs three characters where decimal costs five');
+  // Zigzag spends one bit on the sign, and a character boundary falls every
+  // five, so only values just under a boundary pay for it. This is one of them.
+  eq(pj.encZ(19429).length, 4, 'carrying a sign costs 19429 a fourth character');
+  eq(pj.encZ(-19429).length, 4, 'and the negative of it exactly the same');
+  eq(pj.encZ(3000).length, pj.enc(3000).length, 'while most values pay nothing for it');
+
+  eq(pj.pageInfo(''), null, 'an empty page is refused rather than trusted');
+  eq(pj.pageInfo('9' + pj.enc(1785870000)), null, 'so is one naming a tier that does not exist');
+  eq(pj.pageInfo('0' + pj.enc(100)), null, 'and one whose start predates the clock');
 });
 
-test('12  appending keeps working after the archive has wrapped', () => {
-  const plug = steadyPlug(3.5, 0);
+test('2  a first block appears and the page names its tier', () => {
+  const plug = running();
+  plug.feed(500, 3);
+  eq(plug.logsMatching('first block at').length, 1, 'the first block is announced once');
+  eq(plug.kvs['pj/current'].version, 2, 'the KVS entry says version 2');
+  near(plug.kvs['pj/current'].reference_watt, 500, 1, 'the reference is the level it opened at');
+
+  plug.feedFor(500, 300);
+  plug.feed(50, 3);
+  const blocks = plug.tierBlocks(0);
+  ok(blocks.length >= 1, 'a block reached the archive');
+  const page = plug.storage[parseMeta(plug.storage.m).tiers[0].pages[0]];
+  eq(page[0], '0', 'the page begins with its tier digit');
+  eq(decodePage(page)[0].start, blocks[0].start, 'and decodes to the start the script reports');
+});
+
+test('3  a change of level splits a block, a sign flip always does', () => {
+  const plug = running();
+  plug.feed(500, 10);
+  plug.feed(505, 10);
+  eq(plug.tierBlocks(0).length, 0, 'one percent is not a change');
+
+  plug.feed(50, 4);
+  plug.feed(50, 10);
+  eq(plug.tierBlocks(0).length, 1, 'a tenfold drop is');
+
+  const before = plug.tierBlocks(0).length;
+  plug.feed(900, 2);
+  plug.feed(50, 5);
+  eq(plug.tierBlocks(0).length, before, 'a two sample excursion is not, it has to be confirmed');
+
   const pj = plug.pj;
-  let at = 1785000000;
-  for (let i = 0; i < 2000; i++) { pj.archiveAppend(at, 600, 3500, false); at += 600; }
-
-  const before = plug.archive().length;
-  const ok = pj.archiveAppend(at, 900, 1234, false);
-  const blocks = plug.archive();
-
-  check('the append succeeded', ok === true);
-  check('the block is there',
-    blocks[blocks.length - 1].duration === 900 && blocks[blocks.length - 1].energy === 1234,
-    JSON.stringify(blocks[blocks.length - 1]));
-  check('the archive did not grow without bound',
-    Math.abs(blocks.length - before) < 100, before + ' -> ' + blocks.length);
-  check('the metadata is still consistent',
-    pj.metaParse(plug.storage.m).pages.every((k) => plug.storage[k] !== undefined));
+  ok(pj.levelChanged(300000, -300000), 'plus and minus three hundred watts are different levels');
+  ok(pj.levelChanged(-300000, 300000), 'and so they are the other way round');
+  ok(!pj.levelChanged(-300000, -305000), 'two exporting levels one percent apart are not');
+  ok(pj.levelChanged(-300000, -400000), 'a third more export is');
+  ok(pj.levelChanged(0, 300), 'and nothing to something always is, however small');
 });
 
-test('13  a power cut during an archive write leaves one valid version', () => {
-  // Case A: the new page reached a spare slot but the metadata never switched.
-  const a = steadyPlug(3.5, 0);
-  a.pj.archiveAppend(1785000000, 600, 3500, false);
-  const goodMeta = a.storage.m;
-  const goodBlocks = JSON.stringify(a.archive());
-  a.storage.p9 = '1785000000|600,3500|600,3500'; // the half-finished copy
-  a.restartScript();
-  a.boot();
-  check('A: the orphaned slot is ignored', JSON.stringify(a.archive()) === goodBlocks,
-    JSON.stringify(a.archive()));
-  check('A: the metadata is untouched', a.storage.m === goodMeta);
+test('4  exporting is recorded as negative energy', () => {
+  const plug = running();
+  plug.feed(-400, 3);
+  near(plug.kvs['pj/current'].reference_watt, -400, 1, 'the running block knows it is exporting');
 
-  // Case B: the metadata switched, the old slot was never released.
-  const b = steadyPlug(3.5, 0);
-  b.pj.archiveAppend(1785000000, 600, 3500, false);
-  const liveKey = b.pj.metaParse(b.storage.m).pages[0];
-  b.storage.p8 = b.storage[liveKey]; // the stale predecessor, not in the list
-  b.restartScript();
-  b.boot();
-  check('B: the stale slot counts for nothing', b.archive().length === 1,
-    JSON.stringify(b.archive()));
+  plug.feedFor(-400, 1800);
+  plug.feed(0, 4);
+  plug.feed(0, 3);
 
-  // Case C: the block was archived but its successor never reached the KVS,
-  // so the entry still names a block the archive already holds.
-  const c = steadyPlug(3.5, 0);
-  c.pj.archiveAppend(1785000000, 600, 3500, false);
-  c.kvs['pj/current'] = {
-    version: 1, start_time: 1785000000, duration_sec: 600,
-    energy_mwh: 3500, meter_total_mwh: 0, watt: 21,
-  };
-  c.restartScript();
-  c.boot();
-  check('C: it is not archived a second time', c.archive().length === 1,
-    JSON.stringify(c.archive()));
-  check('C: and the duplicate was named', c.logsMatching('already archived').length === 1);
-
-  // Case D: damaged metadata is rebuilt from the pages, never by deleting them.
-  const d = steadyPlug(3.5, 0);
-  d.pj.archiveAppend(1785000000, 600, 3500, false);
-  d.pj.archiveAppend(1785000600, 600, 3500, false);
-  const pageCount = Object.keys(d.storage).filter((k) => k !== 'm').length;
-  d.storage.m = 'nonsense';
-  d.restartScript();
-  d.boot();
-  // The rebuild lives in memory and is only persisted by the next append, so
-  // this has to ask the script rather than read the damaged metadata back.
-  const rebuilt = JSON.parse(d.request('').body);
-  check('D: the pages were found again', rebuilt.pages.length === 1, JSON.stringify(rebuilt));
-  check('D: with both blocks',
-    JSON.parse(d.request('page=' + rebuilt.pages[0]).body).blocks.length === 2);
-  check('D: no page was deleted',
-    Object.keys(d.storage).filter((k) => k !== 'm').length === pageCount);
-  check('D: the rebuild was reported', d.logsMatching('rebuilding it from the pages').length === 1);
-  check('D: and the next append repairs the metadata',
-    d.pj.archiveAppend(1785001200, 600, 100, false) === true &&
-    d.pj.metaParse(d.storage.m) !== null, d.storage.m);
+  const blocks = plug.tierBlocks(0);
+  ok(blocks.length >= 1, 'the export block was archived');
+  ok(blocks[0].energy < 0, 'with negative energy  (' + blocks[0].energy + ' mWh)');
+  const watt = (blocks[0].energy * 3600) / blocks[0].duration / 1000;
+  near(watt, -400, 15, 'and it reads back as about minus four hundred watts');
 });
 
-test('14  the read out endpoint answers', () => {
-  // The block is established first: opening one afterwards would notice the
-  // gap between the archive and now and honestly file it as a null block,
-  // which is right but would make this test about something else.
-  const plug = steadyPlug(3.5, 10);
-  plug.pj.archiveAppend(1785000000, 600, 3500, false);
-  plug.pj.archiveAppend(1785000600, 43200, 0, true);
+test('5  a null block costs almost nothing and never checkpoints', () => {
+  const plug = running();
+  plug.feed(0, 5);
+  eq(plug.kvs['pj/current'].watt, 0, 'the KVS says nothing is flowing');
+  eq(plug.kvs['pj/current'].duration_sec, undefined, 'and leaves out what a null block does not need');
+
+  const writes = plug.kvsWrites;
+  plug.feedFor(0, 4 * 3600);
+  eq(plug.kvsWrites, writes, 'four hours of nothing cost no further KVS write');
+
+  plug.feed(600, 4);
+  plug.feedFor(600, 60);
+  const blocks = plug.tierBlocks(0);
+  // The sample that ends a null block already carries the new load's first
+  // interval. A block that records that nothing flowed must not hold energy,
+  // so that interval is handed to the successor instead.
+  eq(blocks[0].energy, 0, 'the archived null block carries no energy at all');
+  const page = plug.storage[parseMeta(plug.storage.m).tiers[0].pages[0]];
+  ok(page.length <= 1 + 7 + 3 + 1, 'and the whole page is only ' + page.length + ' characters');
+});
+
+test('6  quarter hours land on real quarter hours and never get shorter', () => {
+  const plug = running();
+  // Deliberately ragged: the level changes at times that are not quarter hours.
+  plug.feedFor(400, 1000);
+  plug.feedFor(1500, 1400);
+  plug.feedFor(300, 2000);
+  plug.feedFor(1200, 1700);
+  plug.feedFor(250, 2600);
+
+  const quarters = plug.tierBlocks(1);
+  ok(quarters.length >= 3, 'the quarter hour tier holds ' + quarters.length + ' blocks');
+  ok(quarters.every((b) => b.start % 900 === 0), 'every one starts on a real quarter hour');
+  ok(quarters.every((b) => b.duration >= 900), 'none is shorter than a quarter hour');
+  ok(quarters.every((b) => b.duration % 900 === 0), 'and every duration is a whole number of them');
+  ok(gapless(quarters), 'and they follow one another without a gap');
+});
+
+test('7  steady power merges, a staircase does not', () => {
+  const plug = running();
+  plug.feedFor(500, 6 * 3600);
+  // A tier is fed by blocks that have closed, so the run only flushes once the
+  // stretch after it has closed too -- not merely started.
+  plug.feed(0, 4);
+  plug.feedFor(0, 2 * 900);
+  plug.feed(900, 4);
+  plug.feedFor(900, 900);
+
+  const quarters = plug.tierBlocks(1);
+  ok(quarters.length <= 2, 'six steady hours are ' + quarters.length + ' block(s), not twenty four');
+  ok(quarters[0].duration >= 5 * 3600, 'the merged block spans ' + Math.round(quarters[0].duration / 3600) + ' hours');
+
+  const other = running();
+  for (const watt of [200, 800, 200, 900, 300, 1000, 250, 1100]) other.feedFor(watt, 1800);
+  const steps = other.tierBlocks(1);
+  ok(steps.length >= 6, 'a staircase keeps ' + steps.length + ' separate quarter hour blocks');
+});
+
+test('8  hours and days line up too, days on local midnight', () => {
+  const plug = running({ utcOffset: 7200 });
+  for (let i = 0; i < 8; i++) plug.feedFor(300 + i * 500, 1800);
+
+  const hours = plug.tierBlocks(2);
+  ok(hours.length >= 2, 'the hour tier holds ' + hours.length + ' blocks');
+  ok(hours.every((b) => b.start % 3600 === 0), 'every hour block starts on the hour');
+  ok(hours.every((b) => b.duration % 3600 === 0), 'and lasts whole hours');
+  ok(gapless(hours), 'and they are contiguous');
+
+  // Days go through the reducer directly: two simulated days at ten second
+  // samples would be seventeen thousand ticks for one assertion.
+  eq(plug.pj.bucketStart(1785913800, 86400) % 86400, 7200,
+    'a day bucket starts at 02:00 UTC, which is local midnight at UTC+2');
+  const winter = running({ utcOffset: 3600 });
+  eq(winter.pj.bucketStart(1785913800, 86400) % 86400, 3600,
+    'and at 01:00 UTC once the clocks go back');
+});
+
+test('9  the tiers agree about how much energy there was', () => {
+  const plug = running();
+  for (const watt of [600, 1800, 400, 2200, 900, 150, 1300]) plug.feedFor(watt, 2700);
+  plug.feed(0, 4);
+  plug.feedFor(0, 120);
 
   const index = JSON.parse(plug.request('').body);
-  check('the index lists the pages', index.pages.length === 1, JSON.stringify(index));
-  check('it reports where the archive ends', index.archive_end === 1785043800,
-    'archive_end=' + index.archive_end);
-  check('and shows the running block', index.current !== null && index.current.watt > 0,
-    JSON.stringify(index.current));
+  // A coarse tier's newest stretch is not on a page yet: a bucket is still
+  // filling and a merged run is waiting to see whether the next bucket joins
+  // it. Both are in the index, and a reader that ignored them would think the
+  // tier stops hours short -- so the accounting has to include them.
+  const total = (tier) => sum(plug.tierBlocks(tier), (b) => b.energy) +
+    (index.tiers[tier].pending === null ? 0 : index.tiers[tier].pending[2]) +
+    index.tiers[tier].open_mwh;
 
-  const page = JSON.parse(plug.request('page=' + index.pages[0]).body);
-  check('a page expands into triples', page.blocks.length === 2, JSON.stringify(page));
-  check('the fields are named once', page.fields.join(',') === 'start_time,duration_sec,energy_mwh');
-  check('the null block reads as zero energy', page.blocks[1][2] === 0, JSON.stringify(page.blocks));
-  check('starts are derived in order', page.blocks[1][0] === 1785000600, JSON.stringify(page.blocks));
-
-  const raw = JSON.parse(plug.request('page=' + index.pages[0] + '&raw=1').body);
-  check('raw gives the stored form', raw.raw === '1785000000|600,3500|43200', raw.raw);
-
-  const bad = JSON.parse(plug.request('page=nope').body);
-  check('an unknown page is refused', bad.error !== undefined, JSON.stringify(bad));
+  const native = total(0);
+  ok(native > 0, 'the native tier recorded ' + Math.round(native / 1000) + ' Wh');
+  near(total(1) / native, 1, 0.02, 'the quarter hour tier accounts for the same energy');
+  near(total(2) / native, 1, 0.02, 'and so does the hour tier');
+  near(total(3) / native, 1, 0.02, 'and the day tier');
+  ok(total(1) <= native * 1.01, 'and none of them claims more energy than actually flowed');
 });
 
-test('16  a counter that jumps instead of running does not split a block', () => {
-  // The real plug holds aenergy.total still for minutes at a time, so a young
-  // block has counted no energy at all and its average reads 0 W. Restarting
-  // there must not make it disagree with its own load.
-  const plug = createPlug({ watt: 3.6, meterStepSec: 600, verbose: VERBOSE });
-  plug.boot();
-  plug.feed(3.6, 12); // two minutes: the counter has not moved once
+test('10  a page never exceeds what the device accepts', () => {
+  const plug = running();
+  for (let i = 0; i < 400; i++) {
+    plug.pj.tierWrite(1, 1785870000 + i * 900, 900, 1200 + (i % 97) * 13);
+  }
+  const pages = parseMeta(plug.storage.m).tiers[1].pages;
+  ok(pages.length > 0, 'the quarter hour tier filled ' + pages.length + ' page(s)');
 
-  const entry = plug.kvs['pj/current'];
-  check('the average is still zero', entry.watt === 0, JSON.stringify(entry));
-  check('but the level was recorded', near(entry.reference_watt, 3.6, 0.05),
-    'reference_watt=' + entry.reference_watt);
+  let widest = 0;
+  let over = 0;
+  for (const key of Object.keys(plug.storage)) {
+    widest = Math.max(widest, plug.storage[key].length);
+    if (plug.storage[key].length > STORAGE_VALUE_LIMIT) over++;
+  }
+  eq(over, 0, 'no slot exceeds the 1022 bytes the firmware silently drops');
+  ok(widest > 900, 'and pages really are filled up, the widest is ' + widest + ' bytes');
+  ok(Object.keys(plug.storage).length <= 12, 'never more than twelve slots are in use');
+});
 
-  const start = entry.start_time;
+test('11  each tier keeps its own page allowance and drops the oldest', () => {
+  const plug = running();
+  for (let i = 0; i < 900; i++) {
+    plug.pj.tierWrite(1, 1785870000 + i * 900, 900, 900 + (i % 61) * 29);
+  }
+  eq(parseMeta(plug.storage.m).tiers[1].pages.length, 3, 'the quarter hour tier stops at three pages');
+  ok(plug.logsMatching('dropped').length > 0, 'and says when it drops one');
+
+  const blocks = plug.tierBlocks(1);
+  let ordered = true;
+  for (let i = 1; i < blocks.length; i++) if (blocks[i].start < blocks[i - 1].start) ordered = false;
+  ok(ordered, 'what is left is still in chronological order');
+  ok(Object.keys(plug.storage).length <= 12, 'and still inside twelve slots');
+});
+
+test('12  day pages that fall out of storage go to the attic', () => {
+  const plug = running();
+  for (let i = 0; i < 1500; i++) {
+    plug.pj.tierWrite(3, 1785870000 + i * 86400, 86400, 500 + (i % 37) * 11);
+    plug.drain();
+  }
+  eq(parseMeta(plug.storage.m).tiers[3].pages.length, 3, 'the day tier stops at three pages');
+  ok(plug.atticWrites.length > 0, plug.atticWrites.length + ' page(s) went to the attic instead of being lost');
+
+  const attic = plug.scripts.find((s) => s.name === 'pj-attic');
+  const lines = attic.code.split('\n').filter((line) => line.indexOf('//3') === 0);
+  eq(lines.length, plug.atticWrites.length, 'each one is a comment line of its own');
+
+  const recovered = decodePage(lines[0].slice(2));
+  eq(recovered[0].tier, 3, 'and a line decodes back into a day page');
+  ok(recovered.length > 10, 'holding ' + recovered.length + ' days');
+  eq(recovered[0].duration, 86400, 'each entry one day long');
+  ok(parseMeta(plug.storage.m).attic > 0, 'the metadata tracks the attic at ' +
+    parseMeta(plug.storage.m).attic + ' bytes');
+
+  let free = 0;
+  for (const slot of 'abcdefghijk') if (plug.storage[slot] === undefined) free++;
+  ok(free >= 1, 'and a spare slot is still free for the next copy on write');
+});
+
+test('13  a missing or full attic loses the page but not the script', () => {
+  const plug = running({ scripts: [] });
+  for (let i = 0; i < 1500; i++) {
+    plug.pj.tierWrite(3, 1785870000 + i * 86400, 86400, 400);
+    plug.drain();
+  }
+  ok(plug.logsMatching('attic').length > 0, 'it says the attic is missing');
+  eq(parseMeta(plug.storage.m).tiers[3].pages.length, 3, 'and carries on with three day pages');
+  ok(Object.keys(plug.storage).length <= 12, 'without leaking a slot');
+
+  const full = running();
+  full.pj.ST.meta.attic = 19900;
+  for (let i = 0; i < 1500; i++) {
+    full.pj.tierWrite(3, 1785870000 + i * 86400, 86400, 400);
+    full.drain();
+  }
+  ok(full.logsMatching('attic is full').length > 0, 'a full attic says so');
+  eq(full.atticWrites.length, 0, 'and nothing more is written to it');
+});
+
+test('14  metadata survives a round trip and can be rebuilt without itself', () => {
+  const plug = running();
+  plug.feedFor(700, 2 * 3600);
+  plug.feedFor(1600, 2 * 3600);
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+
+  const pj = plug.pj;
+  const text = pj.metaText(pj.ST.meta);
+  const parsed = pj.metaParse(text);
+  ok(parsed !== null, 'the metadata parses back');
+  eq(pj.metaText(parsed), text, 'and re-serialises identically');
+  eq(pj.metaParse('nonsense'), null, 'nonsense is refused');
+  eq(pj.metaParse('2|1|0|,-1,0,-1,0,0,0'), null, 'so is a row count that does not match the tiers');
+  eq(pj.metaParse('1|1|0|' + text.split('|')[3]), null, 'and so is the wrong version');
+
+  const before = JSON.stringify([0, 1, 2, 3].map((t) => plug.tierBlocks(t).length));
+  const rebuilt = pj.metaRebuild();
+  for (let t = 0; t < 4; t++) {
+    eq(rebuilt.tiers[t].pages.join('.'), pj.ST.meta.tiers[t].pages.join('.'),
+      'tier ' + t + ' is put back together from the tier digits alone');
+  }
+  eq(JSON.stringify([0, 1, 2, 3].map((t) => plug.tierBlocks(t).length)), before,
+    'and nothing was deleted to do it');
+});
+
+test('15  the archive stays gapless across a restart and a power cut', () => {
+  const plug = running();
+  plug.feedFor(800, 2400);
+  plug.feed(300, 4);
+  plug.feedFor(300, 1200);
+
   plug.restartScript();
   plug.boot();
-  plug.feed(3.6, 6);
+  plug.settle(4);
+  plug.feedFor(300, 600);
+  plug.feed(1400, 4);
+  plug.feedFor(1400, 900);
 
-  check('the block survived the restart', plug.kvs['pj/current'].start_time === start,
-    plug.kvs['pj/current'].start_time + ' vs ' + start);
-  check('and was not split', plug.archive().length === 0, JSON.stringify(plug.archive()));
+  ok(gapless(plug.tierBlocks(0)), 'a script restart leaves no gap between blocks');
+  ok(plug.logsMatching('script restart').length > 0, 'and it knows the device never stopped');
 
-  plug.feed(3.6, 900); // long enough for the counter to jump many times
-  const later = JSON.parse(plug.request('').body).current;
-  // The average always trails, because the elapsed time is current while the
-  // energy is as old as the last jump. It converges from below and can never
-  // be short by more than one step's worth -- that bound is the guarantee.
-  const floor = (3.6 * (later.duration_sec - 600)) / later.duration_sec;
-  check('the average converges from below as the counter catches up',
-    later.watt <= 3.61 && later.watt >= floor,
-    'watt=' + later.watt + ' floor=' + floor.toFixed(3));
-  check('no energy went missing',
-    later.energy_mwh >= (3.6 * 1000 * (later.duration_sec - 600)) / 3600 &&
-    later.energy_mwh <= (3.6 * 1000 * later.duration_sec) / 3600,
-    'energy=' + later.energy_mwh + ' over ' + later.duration_sec + ' s');
+  plug.powerCut(3 * 3600);
+  plug.boot();
+  plug.settle(4);
+  plug.feedFor(600, 1800);
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+
+  ok(gapless(plug.tierBlocks(0)), 'and neither does a three hour outage');
+  ok(plug.logsMatching('null block').length > 0 || plug.logsMatching('outage').length > 0,
+    'the outage itself is filed as time nothing happened');
+
+  const quarters = plug.tierBlocks(1);
+  ok(gapless(quarters), 'the quarter hour tier came through the outage gapless as well');
+  ok(quarters.every((b) => b.start % 900 === 0), 'and still aligned to real quarter hours');
+  ok(quarters.every((b) => b.duration >= 900), 'and still never finer than a quarter hour');
 });
 
-test('15  a failed KVS write is retried, not booked as done', () => {
-  const plug = steadyPlug(3.5);
-  plug.kvsFail = true;
+test('16  a block already in the archive is not archived twice', () => {
+  const plug = running();
+  plug.feedFor(900, 2400);
+  plug.feed(200, 4);
+  plug.feedFor(200, 600);
+  const archived = plug.tierBlocks(0).length;
+
+  plug.kvs['pj/current'] = {
+    version: 2, start_time: plug.tierBlocks(0)[0].start, duration_sec: 60,
+    energy_mwh: 10, meter_net_mwh: 5, meter_gross_mwh: 5, watt: 0.6, reference_watt: 0.6,
+  };
+  plug.powerCut(600);
+  plug.boot();
+  plug.settle(4);
+  plug.feed(500, 4);
+  plug.feedFor(500, 600);
+
+  ok(plug.logsMatching('already archived').length > 0, 'it recognises the leftover');
+  const starts = plug.tierBlocks(0).map((b) => b.start);
+  eq(new Set(starts).size, starts.length, 'and no block start appears twice');
+  ok(plug.tierBlocks(0).length >= archived, 'while the archive did not shrink');
+});
+
+test('17  a reset is noticed on the gross counter, not the net one', () => {
+  const plug = running();
+  plug.feedFor(1000, 1800);
+  const before = plug.pj.ST.blk.energy;
+  ok(before > 0, 'the block has counted ' + before + ' mWh');
+
+  plug.setMeters(0, 0);
+  plug.feed(1000, 2);
+  ok(plug.logsMatching('reset').length > 0, 'the reset is spotted');
+  // The block rebases on the new reading, so it keeps what it had and carries
+  // on. Only the two sampling intervals since the reset may be added.
+  near(plug.pj.ST.blk.energy, before, 6000,
+    'and the block keeps what it counted instead of swallowing the lifetime total');
+
+  const solar = running();
+  solar.feedFor(-500, 1800);
+  eq(solar.logsMatching('reset').length, 0, 'a plant running the net counter backwards is not a reset');
+  ok(solar.pj.ST.blk.energy < 0, 'it is simply negative energy  (' + solar.pj.ST.blk.energy + ' mWh)');
+});
+
+test('18  the KVS entry fits, and says what it is', () => {
+  const plug = running();
+  plug.feedFor(-2400, 4000);
+  const entry = plug.kvs['pj/current'];
+  const text = JSON.stringify(entry);
+  ok(text.length <= 253, 'a full entry is ' + text.length + ' of the 253 bytes allowed');
+  for (const key of ['version', 'start_time', 'duration_sec', 'energy_mwh',
+    'meter_net_mwh', 'meter_gross_mwh', 'watt', 'reference_watt']) {
+    ok(entry[key] !== undefined, 'it carries ' + key);
+  }
+  ok(entry.watt < 0, 'the average is negative while exporting');
+  ok(entry.meter_gross_mwh > 0, 'while the gross counter only ever climbs');
+
   const before = plug.kvsWrites;
-  plug.feed(4.5, 4); // forces a block change, which wants to write
-
-  check('the failure was logged', plug.logsMatching('KVS write failed').length >= 1);
-  check('nothing was stored', plug.kvsWrites === before, 'writes=' + plug.kvsWrites);
-
+  plug.kvsFail = true;
+  plug.feed(60, 4);
+  plug.feedFor(60, 60);
+  ok(plug.logsMatching('KVS write failed').length > 0, 'a failed write is reported');
   plug.kvsFail = false;
-  plug.feed(4.5, 2);
-  check('the next sample retries', plug.kvsWrites > before, 'writes=' + plug.kvsWrites);
-  check('and it was a retry', plug.logsMatching('(retry)').length >= 1);
+  plug.feedFor(60, 120);
+  ok(plug.kvsWrites > before, 'and retried on a later sample rather than forgotten');
+});
+
+test('19  the HTTP endpoint hands out the index and one page at a time', () => {
+  const plug = running();
+  for (const watt of [500, 1700, 350, 2100, 800]) plug.feedFor(watt, 2700);
+  plug.feed(0, 4);
+  plug.feedFor(0, 60);
+
+  const index = JSON.parse(plug.request('').body);
+  eq(index.version, 2, 'the index says version 2');
+  eq(index.tiers.length, 4, 'and lists four tiers');
+  eq(index.tiers[1].grid_sec, 900, 'with the quarter hour grid named');
+  eq(index.utc_offset, 7200, 'and the offset the day buckets use');
+  ok(index.archive_end > 0, 'it says how far the archive reaches');
+  ok(index.current !== null, 'and hands over the running block');
+
+  const key = index.tiers[1].pages[0];
+  const page = JSON.parse(plug.request('page=' + key).body);
+  eq(page.tier, 1, 'a page knows which tier it is');
+  eq(page.grid_sec, 900, 'and at what resolution');
+  ok(page.blocks.length > 0, 'it decoded ' + page.blocks.length + ' blocks');
+  ok(page.blocks.every((b) => b.length === 3), 'each one a triple');
+  ok(page.blocks.every((b) => b[1] % 900 === 0), 'with durations in real seconds, not grid steps');
+  eq(page.blocks[0][0], plug.tierBlocks(1)[0].start, 'and the first start matches the archive');
+
+  const sliced = JSON.parse(plug.request('page=' + key + '&skip=1&max=1').body);
+  ok(sliced.blocks.length <= 1, 'skip and max cut the response down');
+  eq(sliced.total, page.total, 'while it still reports the whole page');
+
+  const raw = JSON.parse(plug.request('page=' + key + '&raw=1').body);
+  eq(raw.raw, plug.storage[key], 'raw hands back exactly what is stored, through JSON unharmed');
+  ok(JSON.parse(plug.request('page=zz').body).error !== undefined,
+    'an unknown page is an error, not a crash');
+});
+
+test('20  test mode writes nothing at all', () => {
+  const plug = running();
+  plug.pj.CFG.test_mode = true;
+  const storageBefore = JSON.stringify(plug.storage);
+  const kvsBefore = JSON.stringify(plug.kvs);
+  for (const watt of [400, 1500, 200, 1900]) plug.feedFor(watt, 2000);
+  eq(JSON.stringify(plug.storage), storageBefore, 'storage is untouched');
+  eq(JSON.stringify(plug.kvs), kvsBefore, 'and so is the KVS');
+  ok(plug.logsMatching('test mode').length > 0, 'while it says what it would have written');
+});
+
+test('21  the switch is never written to', () => {
+  const source = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'power-journal.js'), 'utf8');
+  ok(source.indexOf('Switch.Set') < 0, 'the source never mentions Switch.Set');
+  ok(source.indexOf('Switch.Toggle') < 0, 'nor Switch.Toggle');
+
+  const plug = running();
+  const output = plug.output;
+  plug.feedFor(700, 3600);
+  eq(plug.output, output, 'and the relay is where it was');
 });
 
 // ---------------------------------------------------------------------------
 
-console.log('\n' + (failures === 0 ? 'all ' + checks + ' checks passed' :
-  failures + ' of ' + checks + ' checks failed'));
+console.log('\n' + '-'.repeat(64));
+console.log((process.env.PJ_STRIPPED === '1' ? 'stripped source' : 'commented source') +
+  ': ' + checks + ' checks, ' + failures + ' failed');
 process.exit(failures === 0 ? 0 : 1);

@@ -7,6 +7,11 @@
 // a storage value is dropped above 1022 bytes, the thirteenth entry is
 // refused, and both failures are silent. Modelling them here is the point --
 // they are what the script has to notice by reading back.
+//
+// The decoder at the bottom is deliberately a second, independent
+// implementation of the page format. If it and the script ever disagree, one
+// of them is wrong, and a test that reads the archive back through this one
+// is a real check rather than a tautology.
 
 'use strict';
 
@@ -17,6 +22,7 @@ const SOURCE = path.join(__dirname, '..', 'power-journal.js');
 
 const STORAGE_VALUE_LIMIT = 1022;
 const STORAGE_ITEM_LIMIT = 12;
+const A64 = '#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abc';
 
 function createPlug(options) {
   const opt = options || {};
@@ -24,16 +30,21 @@ function createPlug(options) {
   const plug = {
     unixtime: opt.unixtime || 1785870000,
     uptimeMs: opt.uptimeMs === undefined ? 3600000 : opt.uptimeMs,
-    // The meter is carried at full precision and reported quantised, the way
-    // the plug does it: aenergy.total has three decimals in Wh, so whole mWh.
+    utcOffset: opt.utcOffset === undefined ? 7200 : opt.utcOffset,
+    // Two lifetime counters, exactly as the plug keeps them: gross counts
+    // everything that crossed the meter in either direction, returned counts
+    // only the part that went back out. Both are carried at full precision and
+    // reported quantised, because aenergy.total has three decimals in Wh.
     // Rounding on the way in instead would make the simulated plug run a few
     // percent fast at low power and quietly poison every average in here.
-    meterExact: opt.meterMwh || 0,
-    // What the device is currently willing to report. The real plug does not
-    // advance aenergy.total continuously -- it stands still for minutes and
-    // then jumps -- so meterStepSec holds the reported value back until that
-    // long has passed. Zero means a counter that keeps up.
-    meterVisible: opt.meterMwh || 0,
+    grossExact: opt.grossMwh || 0,
+    returnedExact: opt.returnedMwh || 0,
+    grossVisible: opt.grossMwh || 0,
+    returnedVisible: opt.returnedMwh || 0,
+    // The real plug does not advance its counters continuously -- they stand
+    // still for minutes and then jump by a fixed quantum -- so this holds the
+    // reported value back until that long has passed. Zero means a counter
+    // that keeps up.
     meterStepSec: opt.meterStepSec || 0,
     lastStepAt: opt.unixtime || 1785870000,
     watt: opt.watt === undefined ? 0 : opt.watt,
@@ -46,6 +57,11 @@ function createPlug(options) {
     kvsWrites: 0,
     kvsRev: 0,
     storageWrites: 0,
+    // The attic: other scripts on the device, and every code append made to
+    // them. Names matter because the journal finds the attic by name.
+    scripts: opt.scripts === undefined ? [{ id: 9, name: 'pj-attic', code: '// attic\n' }] : opt.scripts,
+    atticWrites: [],
+    putCodeFail: false,
     logs: [],
     timers: [],
     pending: [],
@@ -78,13 +94,18 @@ function createPlug(options) {
   const Shelly = {
     getComponentStatus(name) {
       if (name === 'sys') {
-        return { unixtime: plug.unixtime, uptime: Math.floor(plug.uptimeMs / 1000) };
+        return {
+          unixtime: plug.unixtime,
+          uptime: Math.floor(plug.uptimeMs / 1000),
+          utc_offset: plug.utcOffset,
+        };
       }
       if (name === 'switch:0') {
         return {
           output: plug.output,
           apower: plug.output ? plug.watt : 0,
-          aenergy: { total: Math.floor(plug.meterVisible) / 1000 },
+          aenergy: { total: Math.floor(plug.grossVisible) / 1000 },
+          ret_aenergy: { total: Math.floor(plug.returnedVisible) / 1000 },
         };
       }
       return null;
@@ -100,27 +121,27 @@ function createPlug(options) {
       plug.pending.push(() => {
         if (method === 'KVS.Get') {
           const value = plug.kvs[params.key];
-          if (value === undefined) {
-            callback(null, -105, 'No such key', userdata);
-            return;
-          }
-          callback({ etag: 'e', value: JSON.parse(JSON.stringify(value)) }, 0, '', userdata);
-          return;
+          if (value === undefined) return callback(null, -105, 'No such key', userdata);
+          return callback({ etag: 'e', value: JSON.parse(JSON.stringify(value)) }, 0, '', userdata);
         }
         if (method === 'KVS.Set') {
-          if (plug.kvsFail) {
-            callback(null, -104, 'simulated failure', userdata);
-            return;
-          }
+          if (plug.kvsFail) return callback(null, -104, 'simulated failure', userdata);
           const text = JSON.stringify(params.value);
-          if (text.length > 253) {
-            callback(null, -103, 'value too long', userdata);
-            return;
-          }
+          if (text.length > 253) return callback(null, -103, 'value too long', userdata);
           plug.kvs[params.key] = JSON.parse(text);
           plug.kvsWrites++;
-          callback({ rev: ++plug.kvsRev }, 0, '', userdata);
-          return;
+          return callback({ rev: ++plug.kvsRev }, 0, '', userdata);
+        }
+        if (method === 'Script.List') {
+          return callback({ scripts: plug.scripts.map((s) => ({ id: s.id, name: s.name })) }, 0, '', userdata);
+        }
+        if (method === 'Script.PutCode') {
+          if (plug.putCodeFail) return callback(null, -103, 'simulated failure', userdata);
+          const target = plug.scripts.find((s) => s.id === params.id);
+          if (!target) return callback(null, -105, 'no such script', userdata);
+          target.code = params.append ? target.code + params.code : params.code;
+          plug.atticWrites.push({ id: params.id, code: params.code });
+          return callback({ len: target.code.length }, 0, '', userdata);
         }
         callback(null, -1, 'unsupported ' + method, userdata);
       });
@@ -146,7 +167,7 @@ function createPlug(options) {
 
   function drain() {
     let guard = 0;
-    while (plug.pending.length > 0 && guard++ < 100) {
+    while (plug.pending.length > 0 && guard++ < 200) {
       plug.pending.shift()();
     }
   }
@@ -155,22 +176,27 @@ function createPlug(options) {
     plug.unixtime += seconds;
     plug.uptimeMs += seconds * 1000;
     const drawn = plug.output ? plug.watt : 0;
-    plug.meterExact += (drawn * 1000 * seconds) / 3600;
+    const mwh = (Math.abs(drawn) * 1000 * seconds) / 3600;
+    plug.grossExact += mwh;
+    if (drawn < 0) plug.returnedExact += mwh;
     if (!plug.meterStepSec || plug.unixtime - plug.lastStepAt >= plug.meterStepSec) {
       plug.lastStepAt = plug.unixtime;
-      plug.meterVisible = plug.meterExact;
+      plug.grossVisible = plug.grossExact;
+      plug.returnedVisible = plug.returnedExact;
     }
   }
 
-  // What the script would read right now.
-  function meter() {
-    return Math.floor(plug.meterVisible);
+  // What the script would compute right now, signed.
+  function netMwh() {
+    return Math.floor(plug.grossVisible) - 2 * Math.floor(plug.returnedVisible);
   }
 
-  // A counter that was reset, or replaced by a device that does not keep it.
-  function setMeter(mwh) {
-    plug.meterExact = mwh;
-    plug.meterVisible = mwh;
+  // Counters that were reset, or a device that does not keep them.
+  function setMeters(grossMwh, returnedMwh) {
+    plug.grossExact = grossMwh;
+    plug.grossVisible = grossMwh;
+    plug.returnedExact = returnedMwh || 0;
+    plug.returnedVisible = returnedMwh || 0;
   }
 
   // Runs the one-shot timers the startup path sets, advancing the clock by
@@ -190,7 +216,7 @@ function createPlug(options) {
     return plug.timers.find((t) => t.repeat);
   }
 
-  // One sampling interval: time moves, the meter moves with it, the script
+  // One sampling interval: time moves, the meters move with it, the script
   // takes its reading.
   function tick(count) {
     const timer = sampleTimer();
@@ -202,17 +228,24 @@ function createPlug(options) {
     }
   }
 
-  // Hold this many watts for this many samples.
+  // Hold this many watts for this many samples. Negative means exporting.
   function feed(watt, count) {
     plug.watt = watt;
-    plug.output = watt > 0;
+    plug.output = true;
     tick(count);
+  }
+
+  // Hold this many watts for this many seconds, whatever the sample interval.
+  function feedFor(watt, seconds) {
+    const timer = sampleTimer();
+    feed(watt, Math.round(seconds / (timer.ms / 1000)));
   }
 
   function boot() {
     let source = fs.readFileSync(SOURCE, 'utf8');
     // PJ_STRIPPED=1 runs the tests against what the device actually gets,
-    // which is the file with its comments removed to fit the 20480 byte limit.
+    // which is the file with its comments removed and its names shortened to
+    // fit the 20480 byte limit.
     if (process.env.PJ_STRIPPED === '1') source = require('../tools/strip').strip(source);
     const factory = new Function(
       'Shelly', 'Script', 'Timer', 'HTTPServer', 'print',
@@ -250,25 +283,15 @@ function createPlug(options) {
     return response;
   }
 
-  // Every block in the archive, oldest first, read back the way the app would.
-  function archive() {
-    const meta = plug.storage.m;
+  // Every block of one tier, oldest first, read back the way the app would.
+  function tierBlocks(tier) {
+    const meta = parseMeta(plug.storage.m);
     if (!meta) return [];
-    const pages = meta.split('|')[2];
-    if (!pages) return [];
     const out = [];
-    for (const key of pages.split(',')) {
+    for (const key of meta.tiers[tier].pages) {
       const page = plug.storage[key];
-      if (!page) continue;
-      const fields = page.split('|');
-      let at = Number(fields[0]);
-      for (let i = 1; i < fields.length; i++) {
-        const comma = fields[i].indexOf(',');
-        const duration = Number(comma < 0 ? fields[i] : fields[i].slice(0, comma));
-        const energy = comma < 0 ? 0 : Number(fields[i].slice(comma + 1));
-        out.push({ start: at, duration, energy, page: key });
-        at += duration;
-      }
+      if (page === undefined) continue;
+      for (const block of decodePage(page)) out.push(Object.assign({ page: key }, block));
     }
     return out;
   }
@@ -278,9 +301,85 @@ function createPlug(options) {
   }
 
   return Object.assign(plug, {
-    boot, tick, feed, advance, settle, drain, powerCut, restartScript,
-    request, archive, logsMatching, sampleTimer, meter, setMeter,
+    boot, tick, feed, feedFor, advance, settle, drain, powerCut, restartScript,
+    request, tierBlocks, logsMatching, sampleTimer, netMwh, setMeters,
   });
 }
 
-module.exports = { createPlug, STORAGE_VALUE_LIMIT, STORAGE_ITEM_LIMIT };
+// ---------------------------------------------------------------- the format
+
+// Grid seconds and energy unit per tier, mirrored from the script's CFG. A
+// test that changes one has to change the other, which is the point: the
+// numbers are part of the format, not an implementation detail.
+const TIERS = [
+  { grid: 1, unit: 1 },
+  { grid: 900, unit: 100 },
+  { grid: 3600, unit: 1000 },
+  { grid: 86400, unit: 10000 },
+];
+
+function encode(n) {
+  let out = '';
+  n = Math.round(n);
+  for (;;) {
+    const group = n % 32;
+    n = Math.floor(n / 32);
+    out += A64[n > 0 ? group + 32 : group];
+    if (n === 0) return out;
+  }
+}
+const encodeSigned = (n) => encode(n < 0 ? -n * 2 - 1 : n * 2);
+
+function decodeAt(text, i) {
+  let n = 0;
+  let shift = 1;
+  for (;;) {
+    const code = text.charCodeAt(i++);
+    const v = code < 92 ? code - 35 : code - 93 + 57;
+    if (v < 0 || v > 63) throw new Error('bad character in page: ' + JSON.stringify(text[i - 1]));
+    n += (v % 32) * shift;
+    if (v < 32) return [n, i];
+    shift *= 32;
+  }
+}
+function decodeSignedAt(text, i) {
+  const [v, next] = decodeAt(text, i);
+  return [v % 2 === 1 ? -(v + 1) / 2 : v / 2, next];
+}
+
+// [{ tier, start, duration, energy }, ...] in real seconds and real mWh.
+function decodePage(text) {
+  const tier = text.charCodeAt(0) - 48;
+  if (tier < 0 || tier >= TIERS.length) throw new Error('bad tier digit: ' + text[0]);
+  const { grid, unit } = TIERS[tier];
+  let [at, i] = decodeAt(text, 1);
+  const out = [];
+  while (i < text.length) {
+    let steps, units;
+    [steps, i] = decodeAt(text, i);
+    [units, i] = decodeSignedAt(text, i);
+    out.push({ tier, start: at, duration: steps * grid, energy: units * unit });
+    at += steps * grid;
+  }
+  return out;
+}
+
+function parseMeta(text) {
+  if (typeof text !== 'string') return null;
+  const fields = text.split('|');
+  if (fields.length !== 4) return null;
+  const tiers = fields[3].split(';').map((row) => {
+    const parts = row.split(',');
+    return {
+      pages: parts[0] === '' ? [] : parts[0].split('.'),
+      bs: Number(parts[1]), acc: Number(parts[2]),
+      ps: Number(parts[3]), pd: Number(parts[4]), pe: Number(parts[5]), pr: Number(parts[6]),
+    };
+  });
+  return { version: Number(fields[0]), g: Number(fields[1]), attic: Number(fields[2]), tiers };
+}
+
+module.exports = {
+  createPlug, decodePage, parseMeta, encode, encodeSigned, decodeAt, decodeSignedAt,
+  STORAGE_VALUE_LIMIT, STORAGE_ITEM_LIMIT, TIERS, A64,
+};
