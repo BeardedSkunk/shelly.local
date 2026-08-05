@@ -397,10 +397,16 @@ test('14  metadata survives a round trip and can be rebuilt without itself', () 
   plug.feedFor(0, 60);
 
   const pj = plug.pj;
-  const text = pj.metaText(pj.ST.meta);
+  const text = plug.storage.m;
   const parsed = pj.metaParse(text);
   ok(parsed !== null, 'the metadata parses back');
-  eq(pj.metaText(parsed), text, 'and re-serialises identically');
+  // Round trip through the real writer rather than a serialiser kept for the
+  // test, so what is checked is what the device runs. The writer bumps the
+  // generation on its way out, so wind it back to land on the same string.
+  parsed.g = parsed.g - 1;
+  pj.ST.meta = parsed;
+  ok(pj.metaWrite(), 'and writes back');
+  eq(plug.storage.m, text, 'identically');
   eq(pj.metaParse('nonsense'), null, 'nonsense is refused');
   eq(pj.metaParse('2|1|0|,-1,0,-1,0,0,0'), null, 'so is a row count that does not match the tiers');
   eq(pj.metaParse('1|1|0|' + text.split('|')[3]), null, 'and so is the wrong version');
@@ -569,6 +575,56 @@ test('21  the switch is never written to', () => {
   const output = plug.output;
   plug.feedFor(700, 3600);
   eq(plug.output, output, 'and the relay is where it was');
+});
+
+// The plug refuses a call stack it believes is about to overflow, and it kills
+// the script when it does -- mid-write, with the archive half switched over.
+// Measured on a Plug M Gen3 running 2.0.0, the budget is 15 nested frames from
+// a timer callback and 14 from an RPC callback, and those were counted with
+// small functions; the ones in here are bigger and cost more. So the ceiling
+// held below is well under the measured limit, and it is a real ceiling: the
+// script once ran twelve deep on the recovery path and died there.
+//
+// Frames of the script read "at name (eval at boot (harness.js), ...)" because
+// the harness loads the file with new Function. A frame without that is the
+// harness itself, which is where the script's own chain ends.
+test('22  the archive never nests deeper than the plug allows', () => {
+  const CEILING = 10;
+  let deepest = { n: 0, chain: '' };
+  const realRound = Math.round;
+  Math.round = function (x) {
+    const names = [];
+    for (const line of new Error().stack.split('\n').slice(2)) {
+      if (!/eval at/.test(line)) break;
+      const m = /at (?:new )?([A-Za-z_$][\w$]*)/.exec(line);
+      names.push(m ? m[1] : '<anon>');
+    }
+    if (names.length > deepest.n) deepest = { n: names.length, chain: names.join(' <- ') };
+    return realRound(x);
+  };
+
+  try {
+    // Long enough that every tier fills a page, retires one, and reaches the
+    // attic, and with a reboot in the middle so the recovery path is walked
+    // too -- that is the entry point that is already two frames down before
+    // the script's own code starts.
+    const plug = running();
+    let watt = 0;
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < 6 * 60 * 24 * 2; i++) {
+        if (i % 5 === 0) watt = watt > 0 ? 0 : 300 + (i % 11) * 40;
+        plug.watt = watt;
+        plug.tick();
+      }
+      plug.powerCut(600);
+      plug.boot();
+      plug.settle(4);
+    }
+    ok(deepest.n > 0, 'the run actually reached the archive  (' + deepest.n + ' frames)');
+    ok(deepest.n <= CEILING, 'and never deeper than ' + CEILING + ': ' + deepest.chain);
+  } finally {
+    Math.round = realRound;
+  }
 });
 
 // ---------------------------------------------------------------------------

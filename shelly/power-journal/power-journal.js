@@ -115,6 +115,7 @@ let ST = {
   boot: [],         // samples collected before the first block exists
   meta: null,       // see metaParse
   red: [],          // one reducer per tier, index 0 unused
+  q: [],            // closed blocks waiting to be archived, see queueBlock
   archiveEnd: null, // unix second the archive reaches up to
   cur: null,        // what the KVS held when the script started
   offset: 0,        // seconds east of UTC, so day buckets land on local midnight
@@ -311,21 +312,31 @@ function metaParse(text) {
   return { g: generation, attic: attic, tiers: tiers };
 }
 
-function metaText(meta) {
-  let rows = [];
-  let i, t;
+// Built one short concatenation at a time, and inlined into the writer rather
+// than kept as a function of its own. Both are for the same reason: this runs
+// at the deep end of the only chain in the script that nests at all, and mJS
+// gives up on a stack it thinks is about to overflow -- counting a long
+// expression's operands towards it, not just the frames. This one statement
+// used to hold fifteen.
+function metaWrite() {
+  let meta = ST.meta;
+  meta.g = meta.g + 1;
+  let text = VERSION + '|' + meta.g + '|' + meta.attic + '|';
+  let i, t, row;
   for (i = 0; i < meta.tiers.length; i++) {
     t = meta.tiers[i];
-    rows.push(t.pages.join('.') + ',' + t.bs + ',' + Math.round(t.acc) + ',' + t.ps +
-      ',' + t.pd + ',' + t.pe + ',' + t.pr + ',' + Math.round(t.cy));
+    if (i > 0) text = text + ';';
+    row = t.pages.join('.');
+    row = row + ',' + t.bs;
+    row = row + ',' + Math.round(t.acc);
+    row = row + ',' + t.ps;
+    row = row + ',' + t.pd;
+    row = row + ',' + t.pe;
+    row = row + ',' + t.pr;
+    row = row + ',' + Math.round(t.cy);
+    text = text + row;
   }
-  return VERSION + '|' + meta.g + '|' + meta.attic + '|' + rows.join(';');
-}
-
-function metaWrite() {
-  ST.meta.g = ST.meta.g + 1;
-  if (!stPut(META_KEY, metaText(ST.meta))) return false;
-  return true;
+  return stPut(META_KEY, text);
 }
 
 // Metadata gone or unreadable: look at every slot and rebuild from the pages
@@ -600,14 +611,39 @@ function emitBucket(tier, start, mwh) {
 // still filling unrecorded until the tier happened to close a page, and a
 // restart would then find a reducer whose state is older than its own archive.
 function emitBlock(start, durationSec, mwh) {
+  let i;
+  for (i = 1; i < CFG.tiers.length; i++) feedTier(i, start, start + durationSec, mwh);
+  tierWrite(0, start, durationSec, mwh);
+}
+
+// Closed blocks are not archived where they are found. They queue here and are
+// written at the top of the next sample, because mJS refuses a call stack it
+// thinks is about to overflow and the archive is the deepest thing the script
+// does -- feedTier, emitBucket, tierWrite, metaWrite and the storage call are
+// five frames on their own. Reached from a block that closed inside an RPC
+// callback during recovery, that chain ran twelve deep and the plug killed the
+// script mid-write. Queueing puts it at a fixed two.
+//
+// The archive's reach moves when a block is queued rather than when it is
+// written, so a gap check made before the queue drains does not see a hole
+// that is already accounted for.
+function queueBlock(start, durationSec, mwh) {
   if (durationSec <= 0) {
     log(1, 'block at ' + start + ' had no duration and was not archived');
     return;
   }
-  let i;
-  for (i = 1; i < CFG.tiers.length; i++) feedTier(i, start, start + durationSec, mwh);
-  tierWrite(0, start, durationSec, mwh);
+  ST.q.push({ s: start, d: durationSec, e: mwh });
   ST.archiveEnd = start + durationSec;
+}
+
+function drainBlocks() {
+  if (ST.q.length === 0) return;
+  let queued = ST.q;
+  // Swapped out first: archiving can close a bucket, and nothing may append to
+  // the list being walked.
+  ST.q = [];
+  let i;
+  for (i = 0; i < queued.length; i++) emitBlock(queued[i].s, queued[i].d, queued[i].e);
 }
 
 // ---------------------------------------------------------------------- KVS
@@ -784,7 +820,7 @@ function switchBlock(now, meter) {
 function closeBlock(endTime) {
   let block = ST.blk;
   log(2, 'block ' + block.start + ' closed after ' + (endTime - block.start) + ' s with ' + block.energy + ' mWh');
-  emitBlock(block.start, endTime - block.start, block.energy);
+  queueBlock(block.start, endTime - block.start, block.energy);
 }
 
 // No block yet: take a few samples before committing to one, so a single odd
@@ -829,7 +865,7 @@ function fillGap(untilTime) {
   if (ST.archiveEnd === null) return;
   if (untilTime <= ST.archiveEnd) return;
   log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s of unrecorded time with a null block');
-  emitBlock(ST.archiveEnd, untilTime - ST.archiveEnd, 0);
+  queueBlock(ST.archiveEnd, untilTime - ST.archiveEnd, 0);
 }
 
 // ---------------------------------------------------------------- measuring
@@ -845,6 +881,10 @@ function netMeter(sw) {
 }
 
 function sample() {
+  // First, and unconditionally: whatever is queued has to be archived even if
+  // this sample turns out to be unusable. See queueBlock for why it happens
+  // here rather than where the block closed.
+  drainBlocks();
   let sw = Shelly.getComponentStatus('switch:' + CFG.switch_id);
   let sys = Shelly.getComponentStatus('sys');
   if (!sw || !sys) {
@@ -882,6 +922,11 @@ function sample() {
 
   log(3, now + ': ' + power + ' mW, net ' + reading.net + ' mWh');
   onSample(now, power, reading.net);
+  // Again, because this sample may have closed a block. Here it costs nothing:
+  // the sample has already returned to this frame, so the archive still runs
+  // shallow, and a block reaches the archive in the same sample that ended it
+  // rather than ten seconds later where a power cut could take it.
+  drainBlocks();
 }
 
 // ----------------------------------------------------------------- start up
@@ -1144,8 +1189,9 @@ function selftest() {
     'CFG': CFG, 'ST': ST,
     'enc': enc, 'encZ': encZ, 'dec': dec, 'decZ': decZ, 'DEC': DEC,
     'sample': sample, 'onSample': onSample, 'deviates': deviates, 'levelChanged': levelChanged,
-    'pageInfo': pageInfo, 'metaParse': metaParse, 'metaText': metaText, 'metaRebuild': metaRebuild,
+    'pageInfo': pageInfo, 'metaParse': metaParse, 'metaWrite': metaWrite, 'metaRebuild': metaRebuild,
     'tierWrite': tierWrite, 'feedTier': feedTier, 'emitBlock': emitBlock, 'bucketStart': bucketStart,
+    'queueBlock': queueBlock, 'drainBlocks': drainBlocks,
     'kvsPayload': kvsPayload, 'httpIndex': httpIndex, 'httpPage': httpPage
   };
 }
