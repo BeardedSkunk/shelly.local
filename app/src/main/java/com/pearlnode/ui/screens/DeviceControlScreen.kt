@@ -53,6 +53,7 @@ fun DeviceControlScreen(
     repo: DeviceRepository,
     deviceId: String,
     onBack: () -> Unit,
+    onPower: () -> Unit = {},
 ) {
     val firmwareRepo = (LocalContext.current.applicationContext as PearlnodeApp).firmwareRepository
     val alarmSyncConfigStore = (LocalContext.current.applicationContext as PearlnodeApp).alarmSyncConfigStore
@@ -147,7 +148,15 @@ fun DeviceControlScreen(
                 }
 
                 uiState.channels.forEachIndexed { idx, channel ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    // The energy history lives behind the card that shows the
+                    // watts. Only the first channel of a metering Gen2 device
+                    // leads anywhere: the journal is an mJS script and it reads
+                    // switch:0, so there is nothing behind the others.
+                    val hasJournal = idx == 0 &&
+                        device.generation == com.pearlnode.model.ShellyGeneration.GEN2 &&
+                        channel.power != null
+                    val cardModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                    val body: @Composable () -> Unit = {
                         Row(
                             modifier = Modifier.padding(16.dp).fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -165,9 +174,24 @@ fun DeviceControlScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            Switch(checked = channel.isOn, onCheckedChange = { vm.toggle(idx, it) },
-                                enabled = uiState.isOnline)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (hasJournal) {
+                                    Icon(
+                                        Icons.Default.ShowChart,
+                                        contentDescription = stringResource(R.string.power_title),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                }
+                                Switch(checked = channel.isOn, onCheckedChange = { vm.toggle(idx, it) },
+                                    enabled = uiState.isOnline)
+                            }
                         }
+                    }
+                    if (hasJournal) {
+                        Card(onClick = onPower, modifier = cardModifier) { body() }
+                    } else {
+                        Card(modifier = cardModifier) { body() }
                     }
                 }
 

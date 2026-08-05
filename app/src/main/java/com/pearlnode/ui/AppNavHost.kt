@@ -10,6 +10,7 @@ import com.pearlnode.data.DeviceRepository
 import com.pearlnode.ui.screens.AddEditDeviceScreen
 import com.pearlnode.ui.screens.DeviceControlScreen
 import com.pearlnode.ui.screens.DeviceListScreen
+import com.pearlnode.ui.screens.PowerScreen
 
 @Composable
 fun AppNavHost(repo: DeviceRepository, initialDeviceId: String? = null) {
@@ -47,7 +48,15 @@ fun AppNavHost(repo: DeviceRepository, initialDeviceId: String? = null) {
                 repo = repo,
                 deviceId = deviceId,
                 onBack = { nav.popBackStack() },
+                onPower = { nav.navigate("power/$deviceId") },
             )
+        }
+        composable(
+            "power/{deviceId}",
+            arguments = listOf(navArgument("deviceId") { type = NavType.StringType })
+        ) { back ->
+            val deviceId = back.arguments?.getString("deviceId") ?: return@composable
+            PowerScreen(repo = repo, deviceId = deviceId, onBack = { nav.popBackStack() })
         }
     }
 }

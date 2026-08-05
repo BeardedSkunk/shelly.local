@@ -74,6 +74,34 @@
     <string name="device_info">Geräteinformationen</string>
     <string name="device_card_expand">Gerätedetails anzeigen</string>
     <string name="device_card_collapse">Gerätedetails ausblenden</string>
+    <!-- Energie-Verlauf -->
+    <string name="power_title">Energie</string>
+    <string name="power_settings">Einstellungen</string>
+    <string name="power_tracking">Stromverbrauch aufzeichnen</string>
+    <string name="power_checking">Gerät wird gefragt…</string>
+    <string name="power_deploying">Aufzeichnung wird installiert…</string>
+    <string name="power_unreachable">Gerät ist nicht erreichbar</string>
+    <string name="power_running">Zeichnet auf dem Gerät auf</string>
+    <string name="power_not_running">Installiert, läuft aber nicht</string>
+    <string name="power_installed_stopped">Installiert und gestoppt, Verlauf bleibt</string>
+    <string name="power_off">Aus</string>
+    <string name="power_script_error">Die Aufzeichnung meldet: %1$s</string>
+    <string name="power_offline_hint">Die Statistik funktioniert offline. Ein- und Ausschalten braucht das Gerät.</string>
+    <string name="power_history">Verlauf</string>
+    <string name="power_history_dormant">Aufzeichnung einschalten, um einen Verlauf zu sammeln. Für dieses Gerät liegt noch nichts vor.</string>
+    <string name="power_range_day">24 h</string>
+    <string name="power_range_week">Woche</string>
+    <string name="power_range_month">Monat</string>
+    <string name="power_range_year">Jahr</string>
+    <string name="power_total_energy">Energie</string>
+    <string name="power_cost">Kosten</string>
+    <string name="power_earned">Ertrag</string>
+    <string name="power_price">Preis</string>
+    <string name="power_price_unit">ct/kWh</string>
+    <string name="power_sync_now">Jetzt holen</string>
+    <string name="power_never_synced">Noch nie vom Gerät geholt</string>
+    <string name="power_last_sync">Zuletzt geholt %1$s · %2$d Blöcke gespeichert</string>
+
     <string name="kvs_title">Schlüssel-Wert-Speicher</string>
     <string name="kvs_show_all">Alle Einträge anzeigen</string>
     <string name="kvs_show_fewer">Weniger Einträge anzeigen</string>

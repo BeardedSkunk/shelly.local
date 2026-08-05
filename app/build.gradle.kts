@@ -84,4 +84,8 @@ dependencies {
     implementation("androidx.glance:glance-material3:1.1.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Plain JVM tests. The pieces worth testing without a device are the ones
+    // that decide what a number means -- see PowerHistoryTest.
+    testImplementation("junit:junit:4.13.2")
 }

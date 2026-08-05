@@ -76,6 +76,34 @@
     <string name="device_info">Device info</string>
     <string name="device_card_expand">Show device details</string>
     <string name="device_card_collapse">Hide device details</string>
+    <!-- Energy history -->
+    <string name="power_title">Energy</string>
+    <string name="power_settings">Settings</string>
+    <string name="power_tracking">Record energy use</string>
+    <string name="power_checking">Asking the device…</string>
+    <string name="power_deploying">Installing the recorder…</string>
+    <string name="power_unreachable">The device cannot be reached</string>
+    <string name="power_running">Recording on the device</string>
+    <string name="power_not_running">Installed, but not running</string>
+    <string name="power_installed_stopped">Installed and stopped, history kept</string>
+    <string name="power_off">Off</string>
+    <string name="power_script_error">The recorder reported: %1$s</string>
+    <string name="power_offline_hint">Statistics work offline. Switching recording on or off needs the device.</string>
+    <string name="power_history">History</string>
+    <string name="power_history_dormant">Switch recording on to collect a history. Nothing has been recorded for this device yet.</string>
+    <string name="power_range_day">24 h</string>
+    <string name="power_range_week">Week</string>
+    <string name="power_range_month">Month</string>
+    <string name="power_range_year">Year</string>
+    <string name="power_total_energy">Energy</string>
+    <string name="power_cost">Cost</string>
+    <string name="power_earned">Earned</string>
+    <string name="power_price">Price</string>
+    <string name="power_price_unit">ct/kWh</string>
+    <string name="power_sync_now">Fetch now</string>
+    <string name="power_never_synced">Never fetched from the device yet</string>
+    <string name="power_last_sync">Last fetched %1$s · %2$d blocks stored</string>
+
     <string name="kvs_title">Key-value store</string>
     <string name="kvs_show_all">Show all entries</string>
     <string name="kvs_show_fewer">Show fewer entries</string>
