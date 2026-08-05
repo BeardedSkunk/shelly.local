@@ -13,7 +13,7 @@ import com.pearlnode.model.DeviceType
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.ShellyGeneration
 
-@Database(entities = [Device::class, PowerBlock::class], version = 4, exportSchema = false)
+@Database(entities = [Device::class, PowerBlock::class], version = 5, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
@@ -66,13 +66,23 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // A device that has no network of its own: a Shelly BLU sensor, which
+        // is reached through the Shelly it was paired with.
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE devices ADD COLUMN hostDeviceId TEXT")
+                db.execSQL("ALTER TABLE devices ADD COLUMN bleAddress TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "shelly.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .build().also { INSTANCE = it }
             }
     }
 }

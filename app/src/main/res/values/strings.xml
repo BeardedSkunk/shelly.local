@@ -18,6 +18,7 @@
     <string name="offline">Offline</string>
     <string name="stop">Stop</string>
     <string name="scan">Scan</string>
+    <string name="open">Open</string>
 
     <!-- Settings / language -->
     <string name="settings">Settings</string>
@@ -52,6 +53,37 @@
     <string name="settings_celsius">Celsius (°C)</string>
     <string name="settings_fahrenheit">Fahrenheit (°F)</string>
     <string name="settings_preview">Now: %1$s</string>
+
+    <!-- Shelly BLU sensors -->
+    <string name="blu_title">BLU sensor</string>
+    <string name="blu_via">via %1$s</string>
+    <string name="blu_temperature">Temperature</string>
+    <string name="blu_humidity">Humidity</string>
+    <string name="blu_battery">Battery</string>
+    <string name="blu_illuminance">Light</string>
+    <string name="blu_moisture">Moisture</string>
+    <string name="blu_contact">Contact</string>
+    <string name="blu_movement">Movement</string>
+    <string name="blu_button_label">Button</string>
+    <string name="blu_rotation">Rotation</string>
+    <string name="blu_open">Open</string>
+    <string name="blu_closed">Closed</string>
+    <string name="blu_motion">Movement</string>
+    <string name="blu_still">Quiet</string>
+    <string name="blu_button">Pressed</string>
+    <string name="blu_signal">Signal</string>
+    <string name="blu_last_seen">Last heard %1$s</string>
+    <string name="blu_never_heard">Not heard from yet</string>
+    <string name="blu_address">Bluetooth address</string>
+    <string name="blu_host">Reached through</string>
+    <string name="blu_host_hint">A BLU sensor has no network of its own. Everything it reports comes through this Shelly, so it is only there while that one is.</string>
+    <string name="blu_readings">Readings</string>
+    <string name="blu_other_reading">Sensor %1$d</string>
+    <string name="blu_found">Paired sensors</string>
+    <string name="blu_found_hint">Found on the Shellys you have already added.</string>
+    <string name="blu_scanning">Asking your Shellys…</string>
+    <string name="blu_add">Add</string>
+    <string name="blu_unreachable">The Shelly this sensor is heard through cannot be reached.</string>
 
     <!-- Device list -->
     <string name="no_devices_title">No devices yet</string>

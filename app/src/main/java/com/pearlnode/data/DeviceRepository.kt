@@ -1,8 +1,10 @@
 package com.pearlnode.data
 
+import com.pearlnode.data.api.BluClient
 import com.pearlnode.data.api.ShellyApiClient
 import com.pearlnode.data.api.ShellyClientFactory
 import com.pearlnode.data.db.DeviceDao
+import com.pearlnode.model.BluDevice
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceInfo
 import com.pearlnode.model.DeviceState
@@ -27,6 +29,9 @@ class DeviceRepository(
         withContext(Dispatchers.IO) {
             dao.upsert(device)
             if (username != null && password != null) credentials.save(device.id, username, password)
+            // A BLU sensor has no address to ask, and no credentials of its own:
+            // it is reached with the host's, which are already stored there.
+            if (device.isBluSensor) return@withContext
             val gen = ShellyClientFactory.detectGeneration(device.ipAddress, username, password)
             if (gen != ShellyGeneration.UNKNOWN) dao.updateGeneration(device.id, gen.name)
         }
@@ -43,11 +48,41 @@ class DeviceRepository(
         }
     }
 
+    /**
+     * Removes a device, and with a Shelly the BLU sensors that were only
+     * reachable through it. Leaving them behind would leave rows that can never
+     * show a reading again and cannot be told why.
+     */
     suspend fun deleteDevice(device: Device) {
         withContext(Dispatchers.IO) {
+            if (!device.isBluSensor) {
+                for (child in dao.getAll().filter { it.hostDeviceId == device.id }) {
+                    credentials.delete(child.id)
+                    dao.delete(child)
+                }
+            }
             credentials.delete(device.id)
             dao.delete(device)
         }
+    }
+
+    /**
+     * The BLU sensors one Shelly is paired with, read from the Shelly itself.
+     *
+     * The host's credentials are what opens this, which is why a BLU sensor can
+     * only be added once its host has been: before that there is no way in.
+     */
+    suspend fun bluDevices(host: Device): List<BluDevice> = withContext(Dispatchers.IO) {
+        if (host.generation == ShellyGeneration.GEN1 || host.ipAddress.isBlank()) return@withContext emptyList()
+        val (user, pass) = credentials.get(host.id).parts()
+        BluClient(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass)).devices()
+    }
+
+    /** One BLU sensor as its host currently describes it, or null if it is gone. */
+    suspend fun bluState(device: Device): BluDevice? = withContext(Dispatchers.IO) {
+        val hostId = device.hostDeviceId ?: return@withContext null
+        val host = dao.getAll().find { it.id == hostId } ?: return@withContext null
+        bluDevices(host).find { it.address.equals(device.bleAddress, ignoreCase = true) }
     }
 
     fun getCredentials(deviceId: String): Pair<String, String>? = credentials.get(deviceId)

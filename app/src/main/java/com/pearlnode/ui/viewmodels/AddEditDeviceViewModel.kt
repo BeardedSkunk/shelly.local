@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.discovery.DiscoveredDevice
+import com.pearlnode.model.BluDevice
 import com.pearlnode.data.discovery.ScanRange
 import com.pearlnode.data.discovery.blePermissionsToRequest
 import com.pearlnode.data.discovery.detectCurrentSubnet
@@ -30,6 +31,19 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/**
+ * A BLU sensor on offer: the sensor as its host describes it, and the host it
+ * was found on -- which is not decoration, since it is the only way back to it.
+ */
+data class DiscoveredBlu(
+    val host: Device,
+    val sensor: BluDevice,
+) {
+    /** What it called itself when it was paired, or what it measures. */
+    val suggestedName: String
+        get() = sensor.name?.takeIf { it.isNotBlank() } ?: sensor.type.label
+}
+
 data class AddEditUiState(
     val name: String = "",
     val ip: String = "",
@@ -49,6 +63,13 @@ data class AddEditUiState(
     val scanTotal: Int = 254,
     val discovered: List<DiscoveredDevice> = emptyList(),
     val discoveryError: String? = null,
+    /**
+     * BLU sensors found on the Shellys already added, minus the ones that are
+     * already here. They have no address of their own, so they cannot be found
+     * by scanning for one -- the host has to be asked.
+     */
+    val discoveredBlu: List<DiscoveredBlu> = emptyList(),
+    val scanningBlu: Boolean = false,
     // IP probe for manual add
     val detecting: Boolean = false,
     val detectError: String? = null,
@@ -167,11 +188,19 @@ class AddEditDeviceViewModel(
         }
 
         _uiState.update { it.copy(
-            discovering = true, discovered = emptyList(),
+            discovering = true, discovered = emptyList(), discoveredBlu = emptyList(),
             discoveryError = null, scanProgress = 0, scanTotal = total.coerceAtLeast(1),
         ) }
 
         discoveryJob = viewModelScope.launch {
+            // What is already here, so the scan can leave it out. A list of
+            // devices the app is already talking to is noise, not a result.
+            knownAddresses = runCatching { repo.getAllDevices() }.getOrDefault(emptyList())
+                .map { it.ipAddress }.filter { it.isNotBlank() }.toSet()
+
+            // The paired sensors, which no amount of scanning would turn up.
+            launch { scanForBluSensors() }
+
             // Subnet scan; sets discovering=false when done
             launch {
                 runCatching {
@@ -215,11 +244,82 @@ class AddEditDeviceViewModel(
         _uiState.update { it.copy(discovering = false) }
     }
 
+    /**
+     * Addresses already in the app, so a scan does not offer them again.
+     *
+     * Filled before a scan starts and left alone afterwards: a device added
+     * from the list mid-scan should not vanish from under the finger that is
+     * about to tap it, and the list is thrown away when the screen closes.
+     */
+    private var knownAddresses: Set<String> = emptySet()
+
     private fun addToDiscovered(device: DiscoveredDevice) {
+        if (device.ipAddress.isNotBlank() && device.ipAddress in knownAddresses) return
         _uiState.update { s ->
             if (s.discovered.none { it.ipAddress == device.ipAddress && device.ipAddress.isNotBlank() })
                 s.copy(discovered = s.discovered + device)
             else s
+        }
+    }
+
+    /**
+     * Asks every Shelly already added which BLU sensors it is paired with.
+     *
+     * This is the only way to find one: it has no address, answers nothing
+     * itself, and is only visible in the components of the Shelly that holds
+     * its readings. Which is also why a sensor can only be added after its host
+     * -- the host's credentials are what opens the door.
+     *
+     * A Shelly that cannot be reached, or is too old to pair with anything,
+     * simply contributes nothing.
+     */
+    private suspend fun scanForBluSensors() {
+        _uiState.update { it.copy(scanningBlu = true) }
+        val devices = runCatching { repo.getAllDevices() }.getOrDefault(emptyList())
+        val taken = devices.mapNotNull { it.bleAddress?.lowercase() }.toSet()
+        for (host in devices.filter { !it.isBluSensor }) {
+            val found = runCatching { repo.bluDevices(host) }.getOrNull().orEmpty()
+            val fresh = found
+                .filter { it.address.lowercase() !in taken }
+                .map { DiscoveredBlu(host = host, sensor = it) }
+            if (fresh.isEmpty()) continue
+            _uiState.update { s ->
+                val already = s.discoveredBlu.map { it.sensor.address.lowercase() }.toSet()
+                s.copy(discoveredBlu = s.discoveredBlu +
+                    fresh.filter { it.sensor.address.lowercase() !in already })
+            }
+        }
+        _uiState.update { it.copy(scanningBlu = false) }
+    }
+
+    /**
+     * Adds a BLU sensor: a real row of its own, pointing at the Shelly it is
+     * heard through. No address and no credentials -- both belong to the host,
+     * and copying them here would leave two places to keep in step.
+     */
+    fun addBluSensor(found: DiscoveredBlu, name: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(saving = true, error = null) }
+            val result = runCatching {
+                repo.addDevice(
+                    Device(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = name.ifBlank { found.suggestedName },
+                        ipAddress = "",
+                        type = found.sensor.type,
+                        generation = found.host.generation,
+                        hostDeviceId = found.host.id,
+                        bleAddress = found.sensor.address,
+                    ),
+                    null, null,
+                )
+            }
+            _uiState.update { s ->
+                if (result.isSuccess) s.copy(
+                    saving = false, saved = true,
+                    discoveredBlu = s.discoveredBlu.filter { it.sensor.address != found.sensor.address },
+                ) else s.copy(saving = false, error = result.exceptionOrNull()?.message)
+            }
         }
     }
 

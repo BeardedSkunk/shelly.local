@@ -223,7 +223,9 @@ class ShellyDeviceWidgetConfigActivity : ComponentActivity() {
         }
 
         val repo = (application as PearlnodeApp).repository
-        val devices = runBlocking { repo.getAllDevices() }
+        // A widget is a switch on a home screen, and a sensor has nothing to
+        // switch. Offering one would put a control there that does nothing.
+        val devices = runBlocking { repo.getAllDevices() }.filter { !it.isBluSensor }
 
         enableEdgeToEdge()
         setContent {

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.FirmwareRepository
+import com.pearlnode.model.BluDevice
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceState
 import com.pearlnode.model.FirmwareChannel
@@ -23,6 +24,16 @@ class DeviceListViewModel(
 
     private val _states = MutableStateFlow<Map<String, DeviceState>>(emptyMap())
     val states: StateFlow<Map<String, DeviceState>> = _states.asStateFlow()
+
+    /**
+     * The last reading of each BLU sensor, by device id.
+     *
+     * Kept apart from [states] because a BLU sensor has no channel and nothing
+     * to switch -- it has a temperature, or a door that is open. Squeezing that
+     * into a channel would mean inventing a switch that does not exist.
+     */
+    private val _bluStates = MutableStateFlow<Map<String, BluDevice>>(emptyMap())
+    val bluStates: StateFlow<Map<String, BluDevice>> = _bluStates.asStateFlow()
 
     // deviceId → true if a firmware update is available on the selected channel
     private val _firmwareUpdates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
@@ -65,6 +76,17 @@ class DeviceListViewModel(
         pollJob = viewModelScope.launch {
             while (true) {
                 devices.forEach { device ->
+                    // A BLU sensor is asked of its host, not of itself, and
+                    // there is no firmware to check on something with no
+                    // network of its own.
+                    if (device.isBluSensor) {
+                        launch {
+                            runCatching { repo.bluState(device) }.getOrNull()?.let { reading ->
+                                _bluStates.update { it + (device.id to reading) }
+                            }
+                        }
+                        return@forEach
+                    }
                     launch {
                         runCatching { repo.getStatus(device) }
                             .onSuccess { state ->

@@ -19,6 +19,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pearlnode.R
 import com.pearlnode.PearlnodeApp
 import com.pearlnode.data.DeviceRepository
+import com.pearlnode.data.Formats
+import com.pearlnode.model.BluDevice
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceCapability
 import com.pearlnode.model.DeviceState
@@ -32,6 +34,7 @@ fun DeviceListScreen(
     repo: DeviceRepository,
     onAdd: () -> Unit,
     onDevice: (String) -> Unit,
+    onBluDevice: (String) -> Unit,
     onEdit: (String) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -42,6 +45,10 @@ fun DeviceListScreen(
     val devices by vm.devices.collectAsStateWithLifecycle()
     val states  by vm.states.collectAsStateWithLifecycle()
     val fwUpdates by vm.firmwareUpdates.collectAsStateWithLifecycle()
+    val bluStates by vm.bluStates.collectAsStateWithLifecycle()
+    val settings = (LocalContext.current.applicationContext as PearlnodeApp).appSettings
+    val prefs by settings.flow.collectAsStateWithLifecycle()
+    val formats = Formats(prefs, settings.systemDefaults)
     var confirmDelete by remember { mutableStateOf<Device?>(null) }
 
     Scaffold(
@@ -83,9 +90,15 @@ fun DeviceListScreen(
                         state        = states[device.id],
                         hasFwUpdate  = fwUpdates[device.id] == true,
                         onToggle     = { channel, on -> vm.toggle(device, channel, on) },
-                        onClick      = { onDevice(device.id) },
+                        blu          = bluStates[device.id],
+                        onClick      = {
+                            if (device.isBluSensor) onBluDevice(device.id) else onDevice(device.id)
+                        },
                         onLongClick  = { confirmDelete = device },
                         onEdit       = { onEdit(device.id) },
+                        formats      = formats,
+                        hostName     = device.hostDeviceId
+                            ?.let { id -> devices.find { it.id == id }?.name },
                     )
                     HorizontalDivider()
                 }
@@ -118,6 +131,9 @@ private fun DeviceRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onEdit: () -> Unit,
+    blu: BluDevice?,
+    formats: Formats,
+    hostName: String?,
 ) {
     val isOn     = state?.channels?.firstOrNull()?.isOn ?: false
     val isOnline = state?.isOnline ?: true
@@ -148,14 +164,38 @@ private fun DeviceRow(
         },
         supportingContent = {
             Column {
-                Text("${device.ipAddress} • ${device.type.label}",
-                    style = MaterialTheme.typography.bodySmall)
-                if (!isOnline) {
+                // A BLU sensor has no address, so the line says where it is
+                // heard instead -- which is the useful fact about it anyway.
+                Text(
+                    if (device.isBluSensor)
+                        listOfNotNull(
+                            hostName?.let { stringResource(R.string.blu_via, it) },
+                            device.type.label,
+                        ).joinToString(" • ")
+                    else "${device.ipAddress} • ${device.type.label}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (!isOnline && !device.isBluSensor) {
                     Text(stringResource(R.string.offline), color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
                 state?.channels?.firstOrNull()?.power?.let { w ->
                     Text("${String.format(Locale.ROOT, "%.1f", w)} W", style = MaterialTheme.typography.bodySmall)
+                }
+                blu?.let { sensor ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(sensor.summary(formats), style = MaterialTheme.typography.bodySmall)
+                        sensor.batteryPercent?.let { percent ->
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                batteryIcon(percent), contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = if (percent < 20) MaterialTheme.colorScheme.error
+                                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text("$percent %", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
         },
@@ -171,7 +211,11 @@ private fun DeviceRow(
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_device))
                 }
-                if (state == null) {
+                // Nothing to switch on a sensor. A disabled switch would still
+                // be a switch, and invite the question of what it does.
+                if (device.isBluSensor) {
+                    if (blu == null) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                } else if (state == null) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 } else {
                     Switch(
@@ -187,6 +231,13 @@ private fun DeviceRow(
 }
 
 private fun deviceIcon(type: DeviceType) = when (type.capability) {
+    DeviceCapability.BLU -> when (type) {
+        DeviceType.BLU_HT -> Icons.Default.Thermostat
+        DeviceType.BLU_DOOR_WINDOW -> Icons.Default.DoorFront
+        DeviceType.BLU_MOTION -> Icons.Default.DirectionsWalk
+        DeviceType.BLU_BUTTON -> Icons.Default.TouchApp
+        else -> Icons.Default.Bluetooth
+    }
     DeviceCapability.PLUG -> Icons.Default.Power
     DeviceCapability.RGBW -> Icons.Default.LightMode
     DeviceCapability.DOOR -> Icons.Default.DoorFront

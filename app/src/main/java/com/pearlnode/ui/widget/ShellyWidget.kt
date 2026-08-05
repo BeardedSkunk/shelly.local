@@ -46,7 +46,7 @@ class ShellyWidgetReceiver : GlanceAppWidgetReceiver() {
 class ShellyWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repo = (context.applicationContext as PearlnodeApp).repository
-        val devices = repo.getAllDevices()
+        val devices = repo.getAllDevices().filter { !it.isBluSensor }
 
         val statuses = devices.associateWith { device ->
             runCatching { repo.getStatus(device) }.getOrNull()

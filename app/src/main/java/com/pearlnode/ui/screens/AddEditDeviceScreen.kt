@@ -26,10 +26,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pearlnode.PearlnodeApp
 import com.pearlnode.R
 import com.pearlnode.data.DeviceRepository
+import com.pearlnode.data.Formats
 import com.pearlnode.data.discovery.DiscoveredDevice
 import com.pearlnode.data.discovery.DiscoverySource
+import com.pearlnode.ui.viewmodels.DiscoveredBlu
 import com.pearlnode.data.discovery.ScanRange
 import com.pearlnode.model.DeviceType
 import com.pearlnode.ui.viewmodels.AddEditDeviceViewModel
@@ -166,7 +169,8 @@ private fun AddDeviceDiscoveryScaffold(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
 
-            if (uiState.discovered.isEmpty() && !uiState.discovering) {
+            val nothingAtAll = uiState.discovered.isEmpty() && uiState.discoveredBlu.isEmpty()
+            if (nothingAtAll && !uiState.discovering && !uiState.scanningBlu) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.tap_scan_hint),
                         style = MaterialTheme.typography.bodyMedium,
@@ -178,6 +182,40 @@ private fun AddDeviceDiscoveryScaffold(
                         DiscoveredDeviceRow(device, onAdd = { vm.selectDiscovered(device) })
                         HorizontalDivider()
                     }
+                    // Sensors that have no address to be found at. They come
+                    // from asking the Shellys already added, so they can only
+                    // appear under them -- which is also the order they are
+                    // useful in: a sensor without its host means nothing.
+                    if (uiState.discoveredBlu.isNotEmpty() || uiState.scanningBlu) {
+                        item {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Bluetooth, contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(R.string.blu_found),
+                                        style = MaterialTheme.typography.titleSmall)
+                                    if (uiState.scanningBlu) {
+                                        Spacer(Modifier.width(8.dp))
+                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    }
+                                }
+                                Text(
+                                    stringResource(
+                                        if (uiState.scanningBlu && uiState.discoveredBlu.isEmpty())
+                                            R.string.blu_scanning else R.string.blu_found_hint
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        items(uiState.discoveredBlu, key = { it.sensor.address }) { found ->
+                            DiscoveredBluRow(found, onAdd = { vm.addBluSensor(found, found.suggestedName) })
+                            HorizontalDivider()
+                        }
+                    }
                 }
             }
         }
@@ -186,6 +224,43 @@ private fun AddDeviceDiscoveryScaffold(
     if (uiState.showManualForm) {
         ManualAddBottomSheet(uiState = uiState, vm = vm)
     }
+}
+
+/**
+ * A paired sensor on offer.
+ *
+ * Says what it measures right now, because that is what makes it recognisable
+ * -- one of two identical thermometers is the one reading 22,6 -- and names the
+ * Shelly it was found on, which is where it will be reached from.
+ */
+@Composable
+private fun DiscoveredBluRow(found: DiscoveredBlu, onAdd: () -> Unit) {
+    val app = LocalContext.current.applicationContext as PearlnodeApp
+    val prefs by app.appSettings.flow.collectAsStateWithLifecycle()
+    val formats = Formats(prefs, app.appSettings.systemDefaults)
+    ListItem(
+        headlineContent = { Text(found.suggestedName) },
+        supportingContent = {
+            Column {
+                Text(
+                    stringResource(R.string.blu_via, found.host.name) + " • " + found.sensor.type.label,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                val summary = found.sensor.summary(formats)
+                if (summary.isNotBlank()) {
+                    Text(summary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        leadingContent = {
+            Icon(Icons.Default.Bluetooth, contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary)
+        },
+        trailingContent = {
+            TextButton(onClick = onAdd) { Text(stringResource(R.string.blu_add)) }
+        },
+        modifier = Modifier.clickable(onClick = onAdd),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

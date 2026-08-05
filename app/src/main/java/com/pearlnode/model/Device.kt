@@ -20,9 +20,22 @@ data class Device(
     val hasAuth: Boolean = false,
     val channelCount: Int = 1,
     val sortOrder: Int = 0,
-)
+    /**
+     * The Shelly this device is reached through, for one that has no network of
+     * its own. A Shelly BLU sensor is paired with a mains-powered Shelly and
+     * everything about it -- its readings, its battery, whether it is still
+     * being heard -- comes from there, so without the host there is no device.
+     * Null for anything that answers on its own address.
+     */
+    val hostDeviceId: String? = null,
+    /** The Bluetooth address, which is what identifies it on its host. */
+    val bleAddress: String? = null,
+) {
+    /** True for a device that lives behind another one and has no address here. */
+    val isBluSensor: Boolean get() = hostDeviceId != null
+}
 
-enum class DeviceCapability { RELAY, PLUG, DIMMER, RGBW, ROLLER, DOOR, SENSOR }
+enum class DeviceCapability { RELAY, PLUG, DIMMER, RGBW, ROLLER, DOOR, SENSOR, BLU }
 
 enum class DeviceType(
     val label: String,
@@ -91,6 +104,12 @@ enum class DeviceType(
     PRO_DIMMER_2PM("Shelly Pro Dimmer 2PM", DeviceCapability.DIMMER, 2),
     PRO_RGBW("Shelly Pro RGBW PM", DeviceCapability.RGBW, 4),
     WALL_DISPLAY("Shelly Wall Display", DeviceCapability.RELAY),
+    // Shelly BLU: Bluetooth sensors reached through a paired Shelly
+    BLU_HT("Shelly BLU H&T", DeviceCapability.BLU),
+    BLU_DOOR_WINDOW("Shelly BLU Door/Window", DeviceCapability.BLU),
+    BLU_MOTION("Shelly BLU Motion", DeviceCapability.BLU),
+    BLU_BUTTON("Shelly BLU Button", DeviceCapability.BLU),
+    BLU_GENERIC("Shelly BLU", DeviceCapability.BLU),
     // Special
     DOOR("Door / Gate (pulse)", DeviceCapability.DOOR),
     UNKNOWN("Generic Switch", DeviceCapability.RELAY),
