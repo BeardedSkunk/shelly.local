@@ -55,6 +55,17 @@ class PowerTrackingSettings(context: Context) {
         prefs.edit().putInt("${deviceId}_archive_v", version).apply()
     }
 
+    /**
+     * The archive generation this app has already read every page of. The plug
+     * bumps it on every page write, so an unchanged one means there is nothing
+     * on any page this app has not already got.
+     */
+    fun syncedGeneration(deviceId: String): Int = prefs.getInt("${deviceId}_gen", -1)
+
+    fun setSyncedGeneration(deviceId: String, generation: Int) {
+        prefs.edit().putInt("${deviceId}_gen", generation).apply()
+    }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 

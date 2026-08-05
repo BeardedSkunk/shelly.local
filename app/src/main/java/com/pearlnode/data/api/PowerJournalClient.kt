@@ -28,6 +28,13 @@ data class JournalTier(
 
 data class JournalIndex(
     val version: Int,
+    /**
+     * Counts every metadata write, and the metadata is written only when a page
+     * is. So an unchanged generation is a promise that no page has changed --
+     * which is what lets a background fetch skip the whole archive and cost one
+     * request.
+     */
+    val generation: Int,
     val utcOffsetSec: Int,
     val atticBytes: Int,
     val tiers: List<JournalTier>,
@@ -217,6 +224,7 @@ fun parseJournalIndex(body: String): JournalIndex {
     }
     return JournalIndex(
         version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
+        generation = root["generation"]?.jsonPrimitive?.intOrNull ?: 0,
         utcOffsetSec = root["utc_offset"]?.jsonPrimitive?.intOrNull ?: 0,
         atticBytes = root["attic_bytes"]?.jsonPrimitive?.intOrNull ?: 0,
         tiers = tiers,

@@ -130,16 +130,37 @@ class PowerJournalRepository(
 
         val blocks = ArrayList<PowerBlock>()
 
+        // The plug bumps its generation on every metadata write, and it writes
+        // metadata only when it writes a page. So an unchanged generation says
+        // no page has changed since the last fetch, and there is nothing on any
+        // of them this app has not already got.
+        //
+        // That is what makes a frequent background fetch affordable. Reading
+        // every page is ten requests; the index alone is one, and it already
+        // carries the two things that do change between page writes -- each
+        // tier's pending run and the block that is running now. So a quiet
+        // wake-up costs a single request, and only a wake-up that finds new
+        // pages pays for them.
+        //
+        // An empty table always counts as stale, whatever the generation says.
+        // A database migration can clear the rows without the plug's archive
+        // changing at all, and without this the generation on file would then
+        // skip every page for good.
+        val fresh = index.generation != settings.syncedGeneration(device.id) ||
+            dao.count(device.id) == 0
+
         index.tiers.forEachIndexed { tier, row ->
-            for (key in row.pages) {
-                var skip = 0
-                while (true) {
-                    val page = client.page(scriptId, key, skip, pageSlice)
-                    for (triple in page.blocks) {
-                        blocks.add(PowerBlock(device.id, tier, triple[0], triple[1], triple[2]))
+            if (fresh) {
+                for (key in row.pages) {
+                    var skip = 0
+                    while (true) {
+                        val page = client.page(scriptId, key, skip, pageSlice)
+                        for (triple in page.blocks) {
+                            blocks.add(PowerBlock(device.id, tier, triple[0], triple[1], triple[2]))
+                        }
+                        skip += page.blocks.size
+                        if (page.blocks.isEmpty() || skip >= page.total) break
                     }
-                    skip += page.blocks.size
-                    if (page.blocks.isEmpty() || skip >= page.total) break
                 }
             }
             // The merged run a tier is still extending has not reached a page
@@ -165,6 +186,9 @@ class PowerJournalRepository(
         }
 
         dao.upsertAll(blocks)
+        // Only once the rows are in. A generation recorded before the write
+        // would let a crash in between skip pages for good.
+        settings.setSyncedGeneration(device.id, index.generation)
         settings.setLastSync(device.id, System.currentTimeMillis() / 1000)
         SyncResult(blocks.size, index.atticBytes, index.archiveEnd)
     }
