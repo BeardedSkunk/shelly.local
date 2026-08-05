@@ -117,8 +117,8 @@ test('2  a first block appears and the page names its tier', () => {
   const plug = running();
   plug.feed(500, 3);
   eq(plug.logsMatching('first block at').length, 1, 'the first block is announced once');
-  eq(plug.kvs['pj/current'].version, 2, 'the KVS entry says version 2');
-  near(plug.kvs['pj/current'].reference_watt, 500, 1, 'the reference is the level it opened at');
+  eq(plug.kvs['current_power'].version, undefined, 'the KVS entry carries no version field');
+  near(plug.kvs['current_power'].reference_watt, 500, 1, 'the reference is the level it opened at');
 
   plug.feedFor(500, 300);
   plug.feed(50, 3);
@@ -155,7 +155,7 @@ test('3  a change of level splits a block, a sign flip always does', () => {
 test('4  exporting is recorded as negative energy', () => {
   const plug = running();
   plug.feed(-400, 3);
-  near(plug.kvs['pj/current'].reference_watt, -400, 1, 'the running block knows it is exporting');
+  near(plug.kvs['current_power'].reference_watt, -400, 1, 'the running block knows it is exporting');
 
   plug.feedFor(-400, 1800);
   plug.feed(0, 4);
@@ -171,8 +171,8 @@ test('4  exporting is recorded as negative energy', () => {
 test('5  a null block costs almost nothing and never checkpoints', () => {
   const plug = running();
   plug.feed(0, 5);
-  eq(plug.kvs['pj/current'].watt, 0, 'the KVS says nothing is flowing');
-  eq(plug.kvs['pj/current'].duration_sec, undefined, 'and leaves out what a null block does not need');
+  eq(plug.kvs['current_power'].watt, 0, 'the KVS says nothing is flowing');
+  eq(plug.kvs['current_power'].duration_sec, undefined, 'and leaves out what a null block does not need');
 
   const writes = plug.kvsWrites;
   plug.feedFor(0, 4 * 3600);
@@ -258,7 +258,7 @@ test('9  the tiers agree about how much energy there was', () => {
   // tier stops hours short -- so the accounting has to include them.
   const total = (tier) => sum(plug.tierBlocks(tier), (b) => b.energy) +
     (index.tiers[tier].pending === null ? 0 : index.tiers[tier].pending[2]) +
-    index.tiers[tier].open_mwh;
+    index.tiers[tier].open_mwh + index.tiers[tier].carry_mwh;
 
   const native = total(0);
   ok(native > 0, 'the native tier recorded ' + Math.round(native / 1000) + ' Wh');
@@ -266,6 +266,41 @@ test('9  the tiers agree about how much energy there was', () => {
   near(total(2) / native, 1, 0.02, 'and so does the hour tier');
   near(total(3) / native, 1, 0.02, 'and the day tier');
   ok(total(1) <= native * 1.01, 'and none of them claims more energy than actually flowed');
+});
+
+test('9b  brief tiny loads join the null run and are not thrown away', () => {
+  const plug = running();
+  // Thirty seconds of three watts, once per quarter hour, all night. Each is
+  // 25 mWh against a unit of 100, so on its own every one of them rounds away
+  // to nothing -- yet natively each is a block of its own.
+  const blips = 40;
+  for (let quarter = 0; quarter < blips; quarter++) {
+    plug.feedFor(0, 870);
+    plug.feed(3, 3);
+  }
+  plug.feedFor(0, 1800);
+  plug.feed(900, 4);
+  plug.feedFor(900, 1800);
+  plug.feed(0, 4);
+  plug.feedFor(0, 1800);
+
+  const native = plug.tierBlocks(0);
+  ok(native.length >= blips, 'natively the night is ' + native.length + ' blocks');
+
+  const night = plug.tierBlocks(1).filter((b) => b.start < native[native.length - 3].start);
+  ok(night.length <= 3, 'the quarter hour tier keeps ' + night.length + ' of them, not forty');
+  ok(night.some((b) => b.duration > 8 * 900),
+    'because the near-empty buckets merged into one long run');
+  ok(night.some((b) => b.energy > 0),
+    'and that run carries the energy rather than claiming zero  (' +
+    night.map((b) => b.energy).join(', ') + ' mWh)');
+
+  const index = JSON.parse(plug.request('').body);
+  const booked = sum(plug.tierBlocks(1), (b) => b.energy) +
+    (index.tiers[1].pending === null ? 0 : index.tiers[1].pending[2]) +
+    index.tiers[1].open_mwh + index.tiers[1].carry_mwh;
+  near(booked / sum(native, (b) => b.energy), 1, 0.02,
+    'and not a milliwatt hour of the whole night went missing');
 });
 
 test('10  a page never exceeds what the device accepts', () => {
@@ -413,8 +448,8 @@ test('16  a block already in the archive is not archived twice', () => {
   plug.feedFor(200, 600);
   const archived = plug.tierBlocks(0).length;
 
-  plug.kvs['pj/current'] = {
-    version: 2, start_time: plug.tierBlocks(0)[0].start, duration_sec: 60,
+  plug.kvs['current_power'] = {
+    start_time: plug.tierBlocks(0)[0].start, duration_sec: 60,
     energy_mwh: 10, meter_net_mwh: 5, meter_gross_mwh: 5, watt: 0.6, reference_watt: 0.6,
   };
   plug.powerCut(600);
@@ -452,13 +487,14 @@ test('17  a reset is noticed on the gross counter, not the net one', () => {
 test('18  the KVS entry fits, and says what it is', () => {
   const plug = running();
   plug.feedFor(-2400, 4000);
-  const entry = plug.kvs['pj/current'];
+  const entry = plug.kvs['current_power'];
   const text = JSON.stringify(entry);
   ok(text.length <= 253, 'a full entry is ' + text.length + ' of the 253 bytes allowed');
-  for (const key of ['version', 'start_time', 'duration_sec', 'energy_mwh',
+  for (const key of ['start_time', 'duration_sec', 'energy_mwh',
     'meter_net_mwh', 'meter_gross_mwh', 'watt', 'reference_watt']) {
     ok(entry[key] !== undefined, 'it carries ' + key);
   }
+  eq(Object.keys(entry).length, 7, 'and nothing else, no version among it');
   ok(entry.watt < 0, 'the average is negative while exporting');
   ok(entry.meter_gross_mwh > 0, 'while the gross counter only ever climbs');
 

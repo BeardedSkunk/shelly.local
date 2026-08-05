@@ -76,7 +76,7 @@ let CFG = {
   // on the device once the twelve storage slots are spoken for.
   attic_name: 'pj-attic',
   attic_limit: 19800,
-  kvs_key: 'pj/current',
+  kvs_key: 'current_power',
   endpoint: 'journal',
   // 0 silent, 1 errors and recovery, 2 blocks and writes, 3 every sample.
   log_level: 2,
@@ -269,9 +269,10 @@ function pageInfo(text) {
 // Metadata: "<version>|<generation>|<attic bytes>|<tier>;<tier>;<tier>;<tier>"
 //
 // A tier is "<slots joined by .>,<bucket start>,<bucket mWh>,<pending start>,
-// <pending seconds>,<pending units>,<pending mW>", where -1 stands for "none".
-// The reducer state rides along because it changes exactly when a page does,
-// so it costs no extra write. Losing it costs one partial bucket, nothing more.
+// <pending seconds>,<pending units>,<pending mW>,<carry mWh>", where -1 stands
+// for "none". The reducer state rides along because it changes exactly when a
+// page does, so it costs no extra write. Losing it costs one partial bucket
+// and one carry, nothing more.
 function metaParse(text) {
   if (text === null) return null;
   let fields = text.split('|');
@@ -286,7 +287,7 @@ function metaParse(text) {
   let i, j, parts, names, pages, nums, ok;
   for (i = 0; i < rows.length; i++) {
     parts = rows[i].split(',');
-    if (parts.length !== 7) return null;
+    if (parts.length !== 8) return null;
     pages = [];
     if (parts[0].length > 0) {
       names = parts[0].split('.');
@@ -297,12 +298,15 @@ function metaParse(text) {
     }
     nums = [];
     ok = true;
-    for (j = 1; j < 7; j++) {
+    for (j = 1; j < 8; j++) {
       if (toInt(parts[j]) === null) ok = false;
       else nums.push(toInt(parts[j]));
     }
     if (!ok) return null;
-    tiers.push({ pages: pages, bs: nums[0], acc: nums[1], ps: nums[2], pd: nums[3], pe: nums[4], pr: nums[5] });
+    tiers.push({
+      pages: pages, bs: nums[0], acc: nums[1], ps: nums[2],
+      pd: nums[3], pe: nums[4], pr: nums[5], cy: nums[6]
+    });
   }
   return { g: generation, attic: attic, tiers: tiers };
 }
@@ -312,7 +316,8 @@ function metaText(meta) {
   let i, t;
   for (i = 0; i < meta.tiers.length; i++) {
     t = meta.tiers[i];
-    rows.push(t.pages.join('.') + ',' + t.bs + ',' + Math.round(t.acc) + ',' + t.ps + ',' + t.pd + ',' + t.pe + ',' + t.pr);
+    rows.push(t.pages.join('.') + ',' + t.bs + ',' + Math.round(t.acc) + ',' + t.ps +
+      ',' + t.pd + ',' + t.pe + ',' + t.pr + ',' + Math.round(t.cy));
   }
   return VERSION + '|' + meta.g + '|' + meta.attic + '|' + rows.join(';');
 }
@@ -333,7 +338,7 @@ function metaRebuild() {
   let found = [];
   let i, j, text, info, best;
   for (i = 0; i < CFG.tiers.length; i++) {
-    tiers.push({ pages: [], bs: -1, acc: 0, ps: -1, pd: 0, pe: 0, pr: 0 });
+    tiers.push({ pages: [], bs: -1, acc: 0, ps: -1, pd: 0, pe: 0, pr: 0, cy: 0 });
   }
   for (i = 0; i < SLOTS.length; i++) {
     text = stGet(SLOTS[i]);
@@ -538,13 +543,35 @@ function feedTier(tier, from, until, mwh) {
 // A finished bucket. It is not written straight away: a bucket that carries
 // the same power as the one before it is merged into it instead, which is what
 // turns a night into a single entry rather than thirty two identical ones.
+//
+// A coarse tier stores whole units, and a bucket can hold less than one -- a
+// thirty second switch-on at three watts is 25 mWh against a quarter hour unit
+// of 100. Two separate things have to be decided about such a bucket, and they
+// pull in opposite directions.
+//
+// What level it is, is decided by the bucket alone. Under half a unit there is
+// nothing at this resolution to tell it apart from nothing at all, so it reads
+// as null and merges into the run around it. That threshold is 0.2 W over a
+// quarter hour, 0.5 W over an hour and 0.2 W over a day -- the same order as
+// the 200 mW floor below which the block detector does not react either.
+//
+// What gets booked is decided by the bucket plus everything earlier buckets
+// could not express. The remainder is carried rather than dropped, so a night
+// of brief switch-ons comes out as one long block that honestly says a watt
+// hour flowed, rather than as forty blocks each saying zero -- or, if the carry
+// were allowed to decide the level too, as ten blocks interrupting the night
+// for no reason anyone could see. Nothing is lost; it is merely attributed to
+// the stretch it happened in rather than to the minute.
 function emitBucket(tier, start, mwh) {
   let row = ST.meta.tiers[tier];
   let grid = CFG.tiers[tier][0];
   let unit = CFG.tiers[tier][1];
   let span = CFG.tiers[tier][3] * grid;
-  let units = Math.round(mwh / unit);
-  let mw = Math.round(mwh * 3600 / grid);
+  let own = Math.round(mwh / unit);
+  let mw = own === 0 ? 0 : Math.round(mwh * 3600 / grid);
+  let total = mwh + row.cy;
+  let units = Math.round(total / unit);
+  row.cy = total - units * unit;
   if (row.ps >= 0 && row.ps + row.pd === start && row.pd + grid <= span &&
       !levelChanged(row.pr, mw)) {
     row.pd = row.pd + grid;
@@ -610,7 +637,7 @@ function emitBlock(start, durationSec, mwh) {
 //   {"version":2,"start_time":1785870000,"watt":0}
 function kvsPayload(now) {
   let block = ST.blk;
-  let payload = { version: VERSION, start_time: block.start };
+  let payload = { start_time: block.start };
   if (block.zero) {
     payload.watt = 0;
     return payload;
@@ -1050,7 +1077,8 @@ function httpIndex() {
       ',"pages":' + (row.pages.length === 0 ? '[]' : '["' + row.pages.join('","') + '"]') +
       ',"pending":' + (row.ps < 0 ? 'null' : '[' + row.ps + ',' + row.pd + ',' + row.pe * CFG.tiers[i][1] + ']') +
       ',"open_bucket":' + (row.bs < 0 ? 'null' : row.bs) +
-      ',"open_mwh":' + Math.round(row.acc) + '}';
+      ',"open_mwh":' + Math.round(row.acc) +
+      ',"carry_mwh":' + Math.round(row.cy) + '}';
   }
   return out + '],"archive_end":' + (ST.archiveEnd === null ? 'null' : ST.archiveEnd) +
     ',"current":' + (ST.blk === null ? 'null' : JSON.stringify(kvsPayload(ST.lastUnix))) + '}';

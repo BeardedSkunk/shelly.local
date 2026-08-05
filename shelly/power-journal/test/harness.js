@@ -374,6 +374,7 @@ function parseMeta(text) {
       pages: parts[0] === '' ? [] : parts[0].split('.'),
       bs: Number(parts[1]), acc: Number(parts[2]),
       ps: Number(parts[3]), pd: Number(parts[4]), pe: Number(parts[5]), pr: Number(parts[6]),
+      cy: Number(parts[7]),
     };
   });
   return { version: Number(fields[0]), g: Number(fields[1]), attic: Number(fields[2]), tiers };

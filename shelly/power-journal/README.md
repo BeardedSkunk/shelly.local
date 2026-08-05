@@ -17,12 +17,22 @@ Twelve storage slots exist on the device, each holding 1022 bytes. One is the
 metadata and one always stays free for copy-on-write, which leaves ten pages.
 They are divided like this:
 
-| tier | grid | energy unit | pages | holds at least |
-|---|---|---|---|---|
-| native | — | 1 mWh | 1 | the last few hundred blocks |
-| quarter hour | 900 s | 100 mWh | 3 | a week |
-| hour | 3600 s | 1 Wh | 3 | five weeks |
-| day | 86400 s | 10 Wh | 3 | two years |
+| tier | grid | energy unit | pages | blocks/page | reaches back at least |
+|---|---|---|---|---|---|
+| native | — | 1 mWh | 1 | ~250 | the last few hundred blocks |
+| quarter hour | 900 s | 100 mWh | 3 | 250 | **7.8 days** |
+| hour | 3600 s | 1 Wh | 3 | 250 | **31 days** |
+| day | 86400 s | 10 Wh | 3 | 250 | **2.1 years** |
+| day, in the attic | 86400 s | 10 Wh | 20 | 250 | **13.7 years** more |
+
+Those are floors, not estimates: they assume every bucket is a block of its
+own and nothing ever merges. They also do not depend on the load — a block
+costs four characters anywhere between a balcony plant and a 16 A heater,
+because the duration is one grid step and the energy fits in three characters
+across that whole range. Real use does better, often much better: a night
+merges into one entry.
+
+**End to end, day resolution reaches back 5750 days — about 15.7 years.**
 
 Every closed block is fed to **all four tiers at once**. Tier 0 keeps it
 verbatim; the others drop it into buckets on their grid. The tiers do not
@@ -55,9 +65,9 @@ and a comment is the only shape that space can safely take:
 
 The journal appends to it with `Script.PutCode`, which one script may do to
 another; the call returns the new total length, which is also the capacity
-counter. That is roughly twenty more day pages, so about **thirteen years**
-before anything is genuinely lost — long enough that shelly.local will have
-carried the history off first.
+counter. That is twenty more day pages, so **13.7 years** before anything is
+genuinely lost — long enough that shelly.local will have carried the history
+off first.
 
 Deleting the journal takes its storage with it. The attic is a separate
 script and survives, which is why `--remove` leaves it alone unless you also
@@ -88,11 +98,11 @@ explanation and the plug gets the code — 44 KB of source, 18.6 KB uploaded.
 The running block, from anywhere on the network:
 
 ```bash
-curl -s http://192.168.178.23/rpc/KVS.Get?key=pj/current
+curl -s http://192.168.178.23/rpc/KVS.Get?key=current_power
 ```
 
 ```json
-{"version":2,"start_time":1785912166,"duration_sec":60,"energy_mwh":4807,
+{"start_time":1785912166,"duration_sec":60,"energy_mwh":4807,
  "meter_net_mwh":-47658,"meter_gross_mwh":258350,"watt":288.42,
  "reference_watt":304}
 ```
@@ -114,8 +124,12 @@ curl -s http://192.168.178.23/rpc/KVS.Get?key=pj/current
 A null block needs none of that and says so by leaving it out:
 
 ```json
-{"version":2,"start_time":1785870000,"watt":0}
+{"start_time":1785870000,"watt":0}
 ```
+
+There is no version field. The entry is meant to be read at a glance, and the
+one place a version actually matters — the archive — carries its own, in the
+metadata and in every page's tier digit.
 
 The archive is **not** reachable over RPC: `Script.storage` has no RPC methods
 at all, it exists only inside the script. So the script serves it over HTTP:
@@ -223,6 +237,30 @@ then the sum of both sides.
 
 Crossing between nothing and something always counts, however small the
 something is.
+
+### Loads too small for a coarse tier
+
+A thirty second switch-on at three watts is 25 mWh. Natively that is a block
+of its own; in the quarter hour tier, where the unit is 100 mWh, it is a
+quarter of the smallest number that can be written down.
+
+Two things get decided about such a bucket, and they are decided separately.
+**What level it is** comes from the bucket alone: under half a unit there is
+nothing at that resolution to tell it apart from nothing at all, so it reads as
+null and merges into the run around it. That threshold works out at 0.2 W over
+a quarter hour, 0.5 W over an hour and 0.2 W over a day — the same order as
+the 200 mW floor below which the block detector does not react either.
+
+**What gets booked** is the bucket plus everything earlier buckets could not
+express. The remainder is carried, never dropped. So a night of brief
+switch-ons comes out as *one* long block that honestly says a watt hour
+flowed, rather than as forty blocks each claiming zero — and equally not as
+ten blocks interrupting the night whenever the carry crossed a unit, which is
+what letting the carry decide the level too would have produced.
+
+Measured: 82 native blocks over a simulated night become a single quarter hour
+block carrying 1000 mWh, with the tier's total still matching the native
+total exactly.
 
 A sample taken at T reports a counter that already covers the interval ending
 at T, so the energy of the interval a change happened in lands in whichever
