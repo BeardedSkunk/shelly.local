@@ -174,10 +174,17 @@ private fun SettingsCard(
     onPrice: (Double) -> Unit,
     onFeedInPrice: (Double?) -> Unit,
 ) {
-    // Remembered against the installed state rather than Unit, so a card that
-    // opened because nothing was installed folds away once something is.
-    var expanded by rememberSaveable(state.scriptInstalled) {
-        mutableStateOf(!state.scriptInstalled)
+    // Open only when the device is in reach and has no recorder on it, because
+    // that is the one case where the switch is the only thing on the page that
+    // does anything. An unreachable device looks the same from here as one with
+    // nothing installed -- both report no script -- but there the switch is
+    // dead and the chart is the whole point, so the card stays out of the way.
+    //
+    // Keyed on both, so a card that opened because nothing was installed folds
+    // away once something is, and one that opened while the answer was still
+    // unknown folds away when the answer arrives.
+    var expanded by rememberSaveable(state.reachable, state.scriptInstalled) {
+        mutableStateOf(state.reachable && !state.scriptInstalled)
     }
 
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
