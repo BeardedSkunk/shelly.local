@@ -41,10 +41,15 @@ class Gen2Client(
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) error("HTTP ${resp.code}")
             val root = Json.parseToJsonElement(resp.body.string()).jsonObject
-            root["error"]?.let { err ->
-                error("RPC error: ${err.jsonObject["message"]?.jsonPrimitive?.content}")
+            // Cast rather than convert. A field that is present and JSON null
+            // is not a missing field to Kotlin -- ?.jsonObject on it throws
+            // rather than yielding null -- and Shelly.Update answers with a
+            // null result, which is how a perfectly good update came back as
+            // "Element JsonNull is not a JsonObject".
+            (root["error"] as? JsonObject)?.let { err ->
+                error("RPC error: ${err["message"]?.jsonPrimitive?.contentOrNull}")
             }
-            return root["result"]?.jsonObject ?: buildJsonObject {}
+            return root["result"] as? JsonObject ?: buildJsonObject {}
         }
     }
 
@@ -252,10 +257,20 @@ class Gen2Client(
      * it: no download through the phone, no file anywhere, one call.
      */
     override fun availableUpdates(): Map<String, String> {
-        val result = runCatching { rpc("Shelly.CheckForUpdate") }.getOrElse { return emptyMap() }
+        // The device's own standing answer first. Shelly.CheckForUpdate forces
+        // a fresh call out to Shelly and is not dependable when asked more than
+        // once in a row -- measured on a Plug M Gen3: it answered with 2.0.0,
+        // then returned an empty result to the next few calls. Sys.GetStatus
+        // carries what the device already knows and costs nothing.
+        val cached = runCatching { rpc("Sys.GetStatus")["available_updates"]?.jsonObject }
+            .getOrNull()
+        val stages = cached?.takeIf { it.isNotEmpty() }
+            ?: runCatching { rpc("Shelly.CheckForUpdate") }.getOrNull()
+            ?: return emptyMap()
+
         val out = LinkedHashMap<String, String>()
         for (stage in listOf("stable", "beta")) {
-            val entry = result[stage]?.jsonObject ?: continue
+            val entry = stages[stage]?.jsonObject ?: continue
             val version = entry["build_id"]?.jsonPrimitive?.contentOrNull
                 ?: entry["version"]?.jsonPrimitive?.contentOrNull ?: continue
             out[stage] = version

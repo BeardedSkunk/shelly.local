@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import android.content.ContentValues
 import android.content.Context
+import android.util.Log
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -86,6 +87,8 @@ sealed class AlarmSyncStatus {
     data class Success(val scheduleCount: Int) : AlarmSyncStatus()
     data class Error(val message: String)      : AlarmSyncStatus()
 }
+
+private const val TAG = "DeviceControl"
 
 /** How many failures in a row it takes before the device counts as unreachable. */
 private const val FAILURES_BEFORE_OFFLINE = 2
@@ -437,18 +440,42 @@ class DeviceControlViewModel(
         viewModelScope.launch {
             val offered = runCatching { repo.availableUpdates(device) }.getOrDefault(emptyMap())
             if (offered.containsKey(stage)) {
-                runCatching {
-                    _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Installing) }
-                    repo.installUpdate(device, stage)
-                    _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Rebooting) }
-                    awaitNewFirmware(device, info.currentVersion)
+                _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Installing) }
+                // The call itself is not the answer. A device that accepts the
+                // job starts on it at once and can tear the connection down
+                // before it has replied, so the request fails while the update
+                // goes perfectly well -- which is exactly what it did here: an
+                // error on screen and a plug that came back on 2.0.0 anyway.
+                //
+                // What settles it is the firmware version changing. So a failed
+                // request is remembered and waited out rather than reported,
+                // and only a version that never moves counts as a failure.
+                val dispatch = runCatching { repo.installUpdate(device, stage) }
+                dispatch.exceptionOrNull()?.let {
+                    Log.w(TAG, "Shelly.Update did not answer cleanly; waiting for the device anyway", it)
                 }
+                _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Rebooting) }
+                runCatching { awaitNewFirmware(device, info.currentVersion) }
                     .onSuccess { _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Success) } }
-                    .onFailure { e ->
+                    .onFailure { waited ->
+                        // If the request failed too, that is the more useful
+                        // half of the story and belongs in the message.
+                        val cause = dispatch.exceptionOrNull()?.message
+                        val text = listOfNotNull(waited.message, cause).joinToString(" -- ")
+                        Log.w(TAG, "firmware update failed: $text", waited)
                         _uiState.update {
-                            it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Error(e.message ?: "Update failed"))
+                            it.copy(firmwareUpdateProgress =
+                                FirmwareUpdateProgress.Error(text.ifBlank { "Update failed" }))
                         }
                     }
+                return@launch
+            }
+            // The device says there is nothing to fetch. The card offering an
+            // update means what it knew before, not what is true now, so this
+            // is a device that has already been updated rather than one to
+            // download a file for.
+            if (offered.isNotEmpty() || deviceIsUpToDate(device, info, ch)) {
+                _uiState.update { it.copy(firmwareUpdateProgress = FirmwareUpdateProgress.Success) }
                 return@launch
             }
             if (device.generation == ShellyGeneration.GEN2) {
@@ -499,6 +526,17 @@ class DeviceControlViewModel(
      * a failed request here means nothing and is ignored. Only a version that
      * has actually changed counts as done.
      */
+    /**
+     * Whether the device is already running what the card is offering. Asked
+     * only when the device reports nothing to fetch, which is either because it
+     * is up to date or because it cannot reach the update servers -- and those
+     * two need opposite answers.
+     */
+    private suspend fun deviceIsUpToDate(device: Device, info: FirmwareInfo, ch: FirmwareChannel): Boolean {
+        val running = runCatching { repo.getDeviceInfo(device).firmwareVersion }.getOrNull() ?: return false
+        return running.isNotBlank() && running == info.targetVersion(ch)
+    }
+
     private suspend fun awaitNewFirmware(device: Device, before: String) {
         val deadline = System.currentTimeMillis() + UPDATE_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {

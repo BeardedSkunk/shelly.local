@@ -31,7 +31,11 @@ class DeviceListViewModel(
     private val _firmwareChannel = MutableStateFlow(FirmwareChannel.STABLE)
     val firmwareChannel: StateFlow<FirmwareChannel> = _firmwareChannel.asStateFlow()
 
-    private val checkedFirmware = mutableSetOf<String>()
+    // deviceId -> the firmware it was running when its update state was worked
+    // out. Kept instead of a plain "already checked" set: a device that has
+    // been updated since is running something else, and that is what says the
+    // answer on file is stale.
+    private val checkedFirmware = mutableMapOf<String, String>()
     private var pollJob: Job? = null
     private var polledList: List<Device> = emptyList()
 
@@ -65,7 +69,7 @@ class DeviceListViewModel(
                         runCatching { repo.getStatus(device) }
                             .onSuccess { state ->
                                 _states.update { it + (device.id to state) }
-                                if (device.id !in checkedFirmware) checkFirmware(device)
+                                checkFirmware(device)
                             }
                             .onFailure {
                                 _states.update { map ->
@@ -82,16 +86,29 @@ class DeviceListViewModel(
         }
     }
 
+    /**
+     * Whether this device has an update, worked out again whenever it is
+     * running something other than what the answer on file was about.
+     *
+     * Checking once and never again left the red badge on a device that had
+     * just been updated -- from this very app, on the screen behind this one.
+     * Asking the device what it runs is a local request and costs nothing;
+     * resolving that against Shelly's servers is the expensive half, and that
+     * still only happens when the firmware has actually changed.
+     */
     private suspend fun checkFirmware(device: Device) {
-        runCatching {
-            val info = repo.getDeviceInfo(device)
-            firmwareRepo.resolveUpdate(info)
-        }.onSuccess { fw ->
-            _firmwareUpdates.update { it + (device.id to fw.hasUpdate(_firmwareChannel.value)) }
-            checkedFirmware.add(device.id)
-        }.onFailure {
-            checkedFirmware.add(device.id)
-        }
+        val info = runCatching { repo.getDeviceInfo(device) }.getOrNull() ?: return
+        if (checkedFirmware[device.id] == info.firmwareVersion) return
+        runCatching { firmwareRepo.resolveUpdate(info) }
+            .onSuccess { fw ->
+                _firmwareUpdates.update { it + (device.id to fw.hasUpdate(_firmwareChannel.value)) }
+                checkedFirmware[device.id] = info.firmwareVersion
+            }
+            .onFailure {
+                // Shelly could not be reached. Nothing is known, so nothing is
+                // claimed, and the next pass tries again.
+                _firmwareUpdates.update { it - device.id }
+            }
     }
 
     private fun stopPolling() {
