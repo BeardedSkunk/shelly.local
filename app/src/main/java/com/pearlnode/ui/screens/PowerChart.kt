@@ -28,6 +28,7 @@ import com.pearlnode.data.Formats
 import com.pearlnode.model.PowerBucket
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
@@ -73,21 +74,42 @@ data class PowerAxisLabel(val text: String, val at: Float)
  * either without arithmetic.
  */
 @Composable
-fun PowerChart(
+fun SeriesChart(
     buckets: List<PowerBucket>,
     labels: List<PowerAxisLabel>,
-    centsPerKwh: Double,
-    formats: Formats,
+    left: (Scale) -> Axis,
     modifier: Modifier = Modifier,
+    right: ((Scale) -> Axis)? = null,
+    /**
+     * Whether a negative value hangs below a zero line or is drawn upwards like
+     * any other and told apart by its colour.
+     *
+     * Energy is the second: direction is not height, and hanging the exported
+     * bars downwards would spend half the chart on a distinction the colour
+     * already makes. A temperature is the first, and for the plainest of
+     * reasons -- minus five degrees is below zero, not five degrees of
+     * something else, and a winter week drawn upside up would be a lie.
+     */
+    signed: Boolean = false,
+    barColor: Color = PowerDrawnColor,
+    negativeColor: Color = PowerEarnedColor,
+    /** The bar under the finger while scrubbing, drawn brighter than the rest. */
+    highlight: Int? = null,
     onBarTap: ((Int) -> Unit)? = null,
     onSwipe: ((Long) -> Unit)? = null,
+    /** A bar was scrubbed to, or null when the finger left the chart. */
+    onScrub: ((Int?) -> Unit)? = null,
     axisColor: Color = MaterialTheme.colorScheme.outlineVariant,
 ) {
-    val drawnColor = PowerDrawnColor
-    val peak = buckets.maxOfOrNull { abs(it.energyMwh) } ?: 0.0
-    val scale = Scale.forPeak(peak)
-    val energy = energyAxis(scale)
-    val money = moneyAxis(scale, centsPerKwh, formats)
+    val known = buckets.filter { it.coarsestTier != null }
+    val scale =
+        if (signed) Scale.forRange(
+            known.minOfOrNull { it.energyMwh } ?: 0.0,
+            known.maxOfOrNull { it.energyMwh } ?: 0.0,
+        )
+        else Scale.forPeak(known.maxOfOrNull { abs(it.energyMwh) } ?: 0.0)
+    val energy = left(scale)
+    val money = right?.invoke(scale)
 
     Column(modifier) {
         // The unit is written once at the head of its axis rather than after
@@ -98,7 +120,7 @@ fun PowerChart(
         Row(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
             UnitLabel(energy.unit, TextAlign.End)
             Spacer(Modifier.weight(1f))
-            UnitLabel(money.unit, TextAlign.Start)
+            if (money != null) UnitLabel(money.unit, TextAlign.Start)
         }
         Row(Modifier.fillMaxWidth()) {
             AxisLabels(values = energy.ticks, align = TextAlign.End)
@@ -108,10 +130,12 @@ fun PowerChart(
                         .fillMaxWidth()
                         .height(CHART_HEIGHT)
                         .then(tapModifier(buckets.size, onBarTap))
-                        .then(swipeModifier(onSwipe))
+                        .then(dragModifier(buckets.size, onSwipe, onScrub))
                 ) {
-                    if (scale.top <= 0.0 || buckets.isEmpty()) return@Canvas
-                    val baseline = size.height
+                    if (scale.span <= 0.0 || buckets.isEmpty()) return@Canvas
+                    // Where nothing is negative the zero line is the floor, so
+                    // an ordinary chart is unchanged by any of this.
+                    val baseline = size.height * (scale.top / scale.span).toFloat()
 
                     drawLine(
                         color = axisColor,
@@ -128,12 +152,19 @@ fun PowerChart(
                         // tallest bar -- otherwise the tallest bar touches the
                         // ceiling on every chart and the ticks beside it would
                         // be measuring something else.
-                        val length = abs(bucket.energyMwh / scale.top).toFloat() * baseline
+                        val length =
+                            (abs(bucket.energyMwh) / scale.span).toFloat() * size.height
                         if (length <= 0f) return@forEachIndexed
                         val left = index * slot + (slot - barWidth) / 2f
+                        val down = signed && bucket.energyMwh < 0
+                        val colour = when {
+                            signed -> barColor
+                            bucket.energyMwh >= 0 -> barColor
+                            else -> negativeColor
+                        }
                         drawRoundRect(
-                            color = if (bucket.energyMwh >= 0) drawnColor else PowerEarnedColor,
-                            topLeft = Offset(left, baseline - length),
+                            color = if (index == highlight) colour else colour.copy(alpha = 0.75f),
+                            topLeft = Offset(left, if (down) baseline else baseline - length),
                             size = Size(barWidth, length),
                             cornerRadius = CornerRadius(barWidth / 4f),
                         )
@@ -142,7 +173,7 @@ fun PowerChart(
 
                 if (labels.isNotEmpty()) BarLabels(labels)
             }
-            AxisLabels(values = money.ticks, align = TextAlign.Start)
+            if (money != null) AxisLabels(values = money.ticks, align = TextAlign.Start)
         }
     }
 }
@@ -157,16 +188,42 @@ fun PowerChart(
  *
  * Three steps, which is four figures counting the zero at the baseline.
  */
-private data class Scale(val step: Double, val steps: Int) {
+data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
     val top: Double get() = step * steps
 
-    /** Every tick from the top of the axis down, in mWh. */
-    val values: List<Double> get() = (steps downTo 0).map { it * step }
+    /** How far the axis reaches below zero. Zero unless the data goes there. */
+    val bottom: Double get() = -step * stepsBelow
+
+    /** Top to bottom, which is what a bar is measured against. */
+    val span: Double get() = top - bottom
+
+    /** Every tick from the top of the axis down. */
+    val values: List<Double> get() = (steps downTo -stepsBelow).map { it * step }
 
     companion object {
         private const val STEPS = 3
 
-        fun forPeak(peakMwh: Double): Scale = Scale(niceStep(peakMwh, STEPS), STEPS)
+        fun forPeak(peak: Double): Scale = Scale(niceStep(peak, STEPS), STEPS)
+
+        /**
+         * A scale with a real zero line, for a quantity where below zero means
+         * below zero.
+         *
+         * One step size for both halves, so the gridlines are evenly spaced
+         * across the whole axis and a degree is the same height above the line
+         * as below it. How many steps each half gets follows the data, so a
+         * chart that never goes below zero looks exactly like an unsigned one.
+         */
+        fun forRange(min: Double, max: Double): Scale {
+            val reach = maxOf(abs(min), abs(max))
+            if (reach <= 0.0) return Scale(niceStep(1.0, STEPS), 1, 0)
+            val step = niceStep(reach, STEPS)
+            val above = ceil(max / step).toInt().coerceAtLeast(0)
+            val below = ceil(-min / step).toInt().coerceAtLeast(0)
+            // Something has to be on the axis even if every reading is zero.
+            return if (above == 0 && below == 0) Scale(step, 1, 0)
+            else Scale(step, above, below)
+        }
     }
 }
 
@@ -194,7 +251,7 @@ private fun niceStep(peak: Double, steps: Int): Double {
 }
 
 /** One side of the chart: what it is measured in, and what it says at each step. */
-private class Axis(val unit: String, val ticks: List<String>)
+class Axis(val unit: String, val ticks: List<String>)
 
 /**
  * The energy axis, in whichever of milliwatt hours, watt hours or kilowatt
@@ -208,7 +265,7 @@ private class Axis(val unit: String, val ticks: List<String>)
  * axis reading zero four times over says nothing at all -- so the unit follows
  * the data down rather than the numbers being rounded away to fit a unit.
  */
-private fun energyAxis(scale: Scale): Axis {
+fun energyAxis(scale: Scale): Axis {
     if (scale.step <= 0.0) return Axis("", scale.values.map { "" })
     val unit: String
     val per: Double
@@ -228,13 +285,24 @@ private fun energyAxis(scale: Scale): Axis {
  * unit that suits it: the minor one is what keeps two minutes of a small load
  * readable, and where the user has cleared it the whole unit is all there is.
  */
-private fun moneyAxis(scale: Scale, centsPerKwh: Double, formats: Formats): Axis {
+fun moneyAxis(scale: Scale, centsPerKwh: Double, formats: Formats): Axis {
     if (scale.step <= 0.0) return Axis("", scale.values.map { "" })
     val perMwh = formats.moneyOnAxis(centsPerKwh / 1_000_000.0)
     return Axis(
         formats.moneyAxisUnit,
         ticks(scale.values.map { it * perMwh }, per = 1.0, step = scale.step * perMwh),
     )
+}
+
+/**
+ * An axis for a quantity with nothing to convert: degrees are degrees.
+ *
+ * [per] is the thousandths the values are carried in, so the ticks read 22
+ * rather than 22000.
+ */
+fun plainAxis(scale: Scale, unit: String, per: Double = 1000.0): Axis {
+    if (scale.step <= 0.0) return Axis(unit, scale.values.map { "" })
+    return Axis(unit, ticks(scale.values, per, scale.step / per))
 }
 
 /** The same number of decimals down the whole axis, taken from the step. */
@@ -356,22 +424,52 @@ private fun tapModifier(barCount: Int, onBarTap: ((Int) -> Unit)?): Modifier =
  * chart steps through several periods rather than one, because the count comes
  * out of the distance rather than out of the gesture ending.
  */
-private fun swipeModifier(onSwipe: ((Long) -> Unit)?): Modifier =
-    if (onSwipe == null) Modifier
-    else Modifier.pointerInput(Unit) {
+/**
+ * A drag means one of two things depending on where it starts.
+ *
+ * High up, near the period the chart is showing, it pages through history the
+ * way it always has. Low down, among the bars, it reads them: the bar under the
+ * finger lights up and its figures replace the totals underneath, so a value
+ * can be picked out of the chart without a tooltip that would be under the
+ * finger holding it.
+ *
+ * The zone is fixed when the drag starts, not followed as it moves, so a
+ * gesture that drifts upward does not change its mind halfway.
+ */
+private fun dragModifier(
+    barCount: Int,
+    onSwipe: ((Long) -> Unit)?,
+    onScrub: ((Int?) -> Unit)?,
+): Modifier =
+    if (onSwipe == null && onScrub == null) Modifier
+    else Modifier.pointerInput(barCount) {
         val stepPx = size.width / 3f
         var carried = 0f
+        var scrubbing = false
+        fun barAt(x: Float): Int? {
+            if (barCount <= 0) return null
+            val index = (x / (size.width.toFloat() / barCount)).toInt()
+            return index.coerceIn(0, barCount - 1)
+        }
         detectHorizontalDragGestures(
-            onDragStart = { carried = 0f },
-            onDragEnd = { carried = 0f },
-            onDragCancel = { carried = 0f },
+            onDragStart = { start ->
+                carried = 0f
+                scrubbing = onScrub != null && start.y > size.height / 2f
+                if (scrubbing) onScrub?.invoke(barAt(start.x))
+            },
+            onDragEnd = { if (scrubbing) onScrub?.invoke(null); carried = 0f },
+            onDragCancel = { if (scrubbing) onScrub?.invoke(null); carried = 0f },
         ) { change, dragAmount ->
             change.consume()
+            if (scrubbing) {
+                onScrub?.invoke(barAt(change.position.x))
+                return@detectHorizontalDragGestures
+            }
             carried += dragAmount
             val steps = (carried / stepPx).toInt()
             if (steps != 0) {
                 carried -= steps * stepPx
-                onSwipe(-steps.toLong())
+                onSwipe?.invoke(-steps.toLong())
             }
         }
     }

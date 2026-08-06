@@ -152,6 +152,8 @@
     <string name="power_range_week">Woche</string>
     <string name="power_range_month">Monat</string>
     <string name="power_range_year">Jahr</string>
+    <string name="power_now">Jetzt</string>
+    <string name="power_at_bar">An dieser Stelle</string>
     <string name="power_total_energy">Energie</string>
     <string name="power_cost">Kosten</string>
     <string name="power_earned">Ertrag</string>

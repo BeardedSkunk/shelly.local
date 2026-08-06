@@ -98,7 +98,33 @@ data class PowerUiState(
     val picker: PowerPicker? = null,
     /** The zone every time on this screen is read in -- the plug's, where known. */
     val zone: ZoneId = ZoneId.systemDefault(),
+    /** What the plug is drawing right now, or null while nobody has asked it. */
+    val livePowerW: Double? = null,
+    /** The bar being scrubbed, or null when the finger is off the chart. */
+    val scrubbed: Int? = null,
 ) {
+    /** The bar under the finger, if there is one. */
+    val scrubbedBucket: PowerBucket? get() = scrubbed?.let { buckets.getOrNull(it) }
+
+    /**
+     * The power a bar stands for: its energy spread over its own width.
+     *
+     * Not the energy, which is what the bar is drawn from -- an hour bar and a
+     * two minute bar of the same height hold very different amounts, and the
+     * figure that means the same thing in both is the rate.
+     */
+    val scrubbedWatt: Double? get() = scrubbedBucket?.let { bucket ->
+        val span = bucket.endUtc - bucket.startUtc
+        if (span <= 0 || bucket.coarsestTier == null) null
+        else bucket.energyMwh * 3600.0 / span / 1000.0
+    }
+
+    /** What that bar cost or earned, priced the same way the total is. */
+    val scrubbedCents: Double? get() = scrubbedBucket?.takeIf { it.coarsestTier != null }?.let { bucket ->
+        val kwh = bucket.energyMwh / 1_000_000.0
+        kwh * (if (kwh < 0) feedInCentsPerKwh ?: priceCentsPerKwh else priceCentsPerKwh)
+    }
+
     /**
      * Signed, in kWh: positive drawn from the grid, negative sent back.
      *
@@ -194,6 +220,35 @@ class PowerViewModel(
         observePicker()
         observeSettings()
         observeClock()
+        observeLivePower()
+    }
+
+    /**
+     * What the plug is drawing now, which the archive cannot answer.
+     *
+     * The chart is history and the figure under it is the present; both are
+     * wanted at once, and only one of them is in the database. Ten seconds is
+     * the plug's own sampling interval, so asking faster would only repeat an
+     * answer. A plug out of reach simply leaves the last figure standing --
+     * with its own timestamp beside it in the sync line.
+     */
+    private fun observeLivePower() {
+        viewModelScope.launch {
+            while (true) {
+                _uiState.value.device?.let { device ->
+                    runCatching { devices.getStatus(device) }.getOrNull()?.let { status ->
+                        val watt = status.channels.firstOrNull()?.power
+                        if (watt != null) _uiState.update { it.copy(livePowerW = watt) }
+                    }
+                }
+                delay(10_000)
+            }
+        }
+    }
+
+    /** The bar under a scrubbing finger, or null when it lifts. */
+    fun scrub(index: Int?) {
+        _uiState.update { it.copy(scrubbed = index) }
     }
 
     /** Wakes on the hour, so a window that runs up to now keeps up with now. */

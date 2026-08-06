@@ -161,6 +161,7 @@ fun PowerScreen(
                 onOpenPicker = vm::openPicker,
                 onStep = vm::step,
                 onDrill = vm::drillInto,
+                onScrub = vm::scrub,
             )
             Spacer(Modifier.padding(8.dp))
 
@@ -282,6 +283,7 @@ private fun ChartCard(
     onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
     onDrill: (Int) -> Unit,
+    onScrub: (Int?) -> Unit,
 ) {
     // Nothing has ever been recorded and nothing is recording: there is no
     // chart to show and no point pretending otherwise.
@@ -332,14 +334,17 @@ private fun ChartCard(
             PeriodPicker(state, onOpenPicker = onOpenPicker, onStep = onStep)
 
             Spacer(Modifier.padding(8.dp))
-            PowerChart(
+            val cents = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
+                        else state.priceCentsPerKwh
+            SeriesChart(
                 buckets = state.buckets,
                 labels = barLabels(state.window, state.buckets, state.zone, formats),
-                centsPerKwh = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
-                              else state.priceCentsPerKwh,
-                formats = formats,
+                left = ::energyAxis,
+                right = { scale -> moneyAxis(scale, cents, formats) },
+                highlight = state.scrubbed,
                 onBarTap = if (state.canDrill) onDrill else null,
                 onSwipe = onStep,
+                onScrub = onScrub,
             )
 
             Spacer(Modifier.padding(8.dp))
@@ -527,6 +532,34 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                         String.format(Locale.getDefault(), "%.2f", state.drawnKwh),
                         String.format(Locale.getDefault(), "%.2f", abs(state.exportedKwh)),
                     ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // The middle column is the one that changes under the finger. Left and
+        // right describe the whole period and do not move; this one answers
+        // "and right now?" until a bar is scrubbed, when it answers "and
+        // there?" instead. It is the only figure here that belongs to a moment
+        // rather than to the period, and the space was empty.
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            val watt = state.scrubbedWatt ?: state.livePowerW
+            Text(
+                stringResource(
+                    if (state.scrubbed != null) R.string.power_at_bar else R.string.power_now
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                watt?.let { String.format(Locale.getDefault(), "%.1f W", it) } ?: "—",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            // Only while scrubbing: a live reading is a rate and has not cost
+            // anything yet.
+            state.scrubbedCents?.let { cents ->
+                Text(
+                    formats.money(cents),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
