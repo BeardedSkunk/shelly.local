@@ -84,6 +84,28 @@ class SensorHistoryTest {
     }
 
     @Test
+    fun `a day is coloured by how warm it got, not by its average`() {
+        // A day that reached thirty at noon and eight at dawn averages to
+        // something mild that describes neither end of it.
+        val out = blocks(
+            points(0L to 8.0, 1800L to 30.0, 3600L to 9.0),
+            now = t0 + 3600,
+        )
+        val segments = mergeFinest(out.map { it.asSegmentSource() }, t0, t0 + 3600)
+        val edges = listOf(t0, t0 + 3600)
+        assertEquals(
+            30_000.0,
+            bucketize(segments, edges, BucketAggregate.MAX).single().energyMwh,
+            1.0,
+        )
+        assertEquals(
+            19_000.0,
+            bucketize(segments, edges, BucketAggregate.MEAN).single().energyMwh,
+            1.0,
+        )
+    }
+
+    @Test
     fun `an hour of two levels averages by how long each stood`() {
         val out = blocks(
             points(0L to 10.0, 900L to 30.0, 3600L to 0.0),

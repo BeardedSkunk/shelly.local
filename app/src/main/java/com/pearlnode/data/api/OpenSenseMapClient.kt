@@ -76,11 +76,11 @@ class OpenSenseMapClient(
     /**
      * Every box of the signed-in user, with the fields only its owner may see.
      *
-     * A POST that reads, which is unusual enough to be worth naming: the API
-     * puts this behind POST /users/me/boxes rather than a GET.
+     * A GET with the session on it. The generated documentation lists this as a
+     * POST; the route table the API itself serves at / lists it as a GET, and
+     * that is the one that answers -- a POST comes back "HTTP POST not allowed".
      */
-    fun boxes(token: String): List<OsmBox> =
-        parseBoxes(post("/users/me/boxes", buildJsonObject {}, token))
+    fun boxes(token: String): List<OsmBox> = parseBoxes(get("$base/users/me/boxes", token))
 
     // -------------------------------------------------------------- the data
 
@@ -116,8 +116,10 @@ class OpenSenseMapClient(
         }
     }
 
-    private fun get(url: String): String {
-        http.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+    private fun get(url: String, token: String? = null): String {
+        val builder = Request.Builder().url(url).get()
+        if (token != null) builder.header("Authorization", "Bearer $token")
+        http.newCall(builder.build()).execute().use { resp ->
             val text = resp.body.string()
             if (!resp.isSuccessful) error(message(text) ?: "HTTP ${resp.code}")
             return text

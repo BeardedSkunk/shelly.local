@@ -342,6 +342,7 @@ private fun ChartCard(
                 left = ::energyAxis,
                 right = { scale -> moneyAxis(scale, cents, formats) },
                 highlight = state.scrubbed,
+                projectFrom = System.currentTimeMillis() / 1000,
                 onBarTap = if (state.canDrill) onDrill else null,
                 onSwipe = onStep,
                 onScrub = onScrub,
@@ -473,13 +474,20 @@ fun PeriodPickerDialog(
                     items(picker.cells.size) { index ->
                         val cell = picker.cells[index]
                         val share = if (peak > 0) (abs(cell.energyMwh) / peak).toFloat() else 0f
-                        val tint = if (cell.energyMwh < 0) PowerEarnedColor else drawnColor
+                        val tint = when {
+                            // A reading is banded on its own scale; a quantity
+                            // is shaded against the biggest one on the page.
+                            cell.bandValue != null -> TemperatureColors.of(cell.bandValue)
+                            cell.energyMwh < 0 -> PowerEarnedColor
+                            else -> drawnColor
+                        }
                         Box(
                             Modifier
                                 .height(40.dp)
                                 .clip(MaterialTheme.shapes.small)
                                 .background(
                                     if (!cell.known) Color.Transparent
+                                    else if (cell.bandValue != null) tint.copy(alpha = 0.75f)
                                     else tint.copy(alpha = 0.15f + 0.6f * share)
                                 )
                                 .then(

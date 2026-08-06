@@ -66,6 +66,9 @@
     <string name="sensor_no_boxes">Keine Stationen in diesem Konto</string>
     <string name="sensor_no_account">Erst in den Einstellungen bei openSenseMap anmelden — daher kommen die Stationen.</string>
     <string name="sensor_unconfigured">Station wählen, auf die diese Werte gepusht werden, dann kommt die Historie von allein.</string>
+    <string name="sensor_deploy">Push-Skript einspielen</string>
+    <string name="sensor_script_hint">Spielt das Skript, das diese Werte veröffentlicht, auf %1$s — mit dem Token dieser Station.</string>
+    <string name="sensor_open_list_first">Einmal die Stationsliste öffnen, damit der Token gelesen werden kann.</string>
     <string name="sensor_low">Tiefstwert</string>
     <string name="sensor_high">Höchstwert</string>
     <string name="blu_title">BLU-Sensor</string>

@@ -60,7 +60,15 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
+            // imePadding, or the keyboard covers whatever is being typed into:
+            // the app draws edge to edge, so the scaffold's own padding knows
+            // nothing about the keyboard. Shrinking the scrolling area is what
+            // lets Compose bring the focused field into view.
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+                .verticalScroll(rememberScrollState()),
         ) {
             LanguageCard()
             RegionalCard(prefs, formats, settings)

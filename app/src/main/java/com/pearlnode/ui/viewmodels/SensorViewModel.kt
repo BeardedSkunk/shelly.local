@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -63,6 +65,8 @@ data class SensorUiState(
     val boxId: String? = null,
     val loadingBoxes: Boolean = false,
     val syncing: Boolean = false,
+    val deploying: Boolean = false,
+    val scriptDeployed: Boolean = false,
     val lastSyncUtc: Long = 0L,
     val storedBlocks: Int = 0,
     val earliestUtc: Long? = null,
@@ -113,6 +117,7 @@ class SensorViewModel(
         observe(SensorKind.HUMIDITY)
         observeClock()
         observeLive()
+        observePicker()
         load()
     }
 
@@ -235,6 +240,118 @@ class SensorViewModel(
         window.value = moved
     }
 
+    // ------------------------------------------------------------- the picker
+
+    /**
+     * The same grid the energy screen uses, tinted by the day's highest
+     * temperature rather than by how much energy went through it.
+     *
+     * Temperature drives it even on the humidity card: both charts show the
+     * same stretch, and a calendar that answered differently depending on which
+     * card it was opened from would be two calendars.
+     */
+    fun openPicker() {
+        val current = window.value
+        picker.value =
+            if (current.rolling) PowerWindow.of(PowerLevel.MONTH, now(), formats().firstDayOfWeek)
+            else current.pickingParent() ?: YEARS
+    }
+
+    fun closePicker() {
+        picker.value = null
+        _uiState.update { it.copy(picker = null) }
+    }
+
+    fun pagePicker(steps: Long) {
+        val open = picker.value ?: return
+        if (open === YEARS) return
+        picker.value = open.shifted(steps, now())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observePicker() {
+        viewModelScope.launch {
+            picker.flatMapLatest { parent ->
+                if (parent == null) flowOf(null to emptyList<com.pearlnode.model.SensorBlock>())
+                else {
+                    val span = pickerSpan(parent)
+                    sensors.observeRange(deviceId, SensorKind.TEMPERATURE, span.first, span.second)
+                        .map { parent to it }
+                }
+            }.collectLatest { (parent, blocks) ->
+                _uiState.update { it.copy(picker = parent?.let { p -> buildPicker(p, blocks) }) }
+            }
+        }
+    }
+
+    private fun pickerSpan(parent: PowerWindow): Pair<Long, Long> {
+        if (parent === YEARS) {
+            val from = _uiState.value.earliestUtc ?: nowUtc() - 365L * 86400
+            return from to nowUtc() + 86400
+        }
+        val edges = parent.edges(nowUtc(), zone())
+        return edges.first() to edges.last()
+    }
+
+    private fun buildPicker(
+        parent: PowerWindow,
+        blocks: List<com.pearlnode.model.SensorBlock>,
+    ): PowerPicker {
+        val child = if (window.value.rolling) PowerLevel.DAY
+            else if (parent === YEARS) PowerLevel.YEAR else window.value.level
+        val cells = if (parent === YEARS) yearWindows() else parent.subWindows(child, zone())
+        val edges = cells.map { it.edges(nowUtc(), zone()).first() } +
+            (cells.lastOrNull()?.edges(nowUtc(), zone()).let { it?.last() ?: nowUtc() })
+        val segments = mergeFinest(
+            blocks.map { it.asSegmentSource() }, edges.first(), edges.last()
+        )
+        // MAX, so a day is coloured by how warm it got rather than by an
+        // average that describes neither its noon nor its dawn.
+        val buckets = bucketize(segments, edges, BucketAggregate.MAX)
+        val shown = window.value
+
+        return PowerPicker(
+            parent = if (parent === YEARS) null else parent,
+            title = if (parent === YEARS) "" else parent.label(),
+            cells = cells.mapIndexed { index, cell ->
+                val bucket = buckets.getOrNull(index)
+                val known = bucket?.coarsestTier != null
+                PowerCell(
+                    window = cell,
+                    label = pickerCellLabel(child, cell),
+                    energyMwh = 0.0,
+                    known = known,
+                    selected = cell.anchor == shown.anchor && cell.level == shown.level,
+                    weekdayIndex = cell.anchor?.dayOfWeek?.ordinal ?: 0,
+                    bandValue = if (known) bucket!!.energyMwh / 1000.0 else null,
+                )
+            },
+            columns = when (child) {
+                PowerLevel.HOUR -> 6
+                PowerLevel.DAY -> 7
+                PowerLevel.WEEK -> 6
+                PowerLevel.MONTH -> 4
+                PowerLevel.YEAR -> 4
+            },
+            calendar = child == PowerLevel.DAY,
+            canPageForward = parent !== YEARS && !parent.isCurrent(nowUtc(), zone()),
+        )
+    }
+
+    private fun yearWindows(): List<PowerWindow> {
+        val first = _uiState.value.earliestUtc
+            ?.let { Instant.ofEpochSecond(it).atZone(zone()).toLocalDateTime() } ?: now()
+        val out = ArrayList<PowerWindow>()
+        var at = PowerWindow.of(PowerLevel.YEAR, first, formats().firstDayOfWeek)
+        val last = PowerWindow.of(PowerLevel.YEAR, now(), formats().firstDayOfWeek)
+        while (out.size < 40) {
+            out.add(at)
+            if (at.anchor == last.anchor) break
+            at = at.shifted(1, now())
+        }
+        return out
+    }
+
     fun scrub(kind: SensorKind, index: Int?) {
         _uiState.update { it.withSeries(it.series(kind).copy(scrubbed = index)) }
     }
@@ -249,7 +366,12 @@ class SensorViewModel(
             _uiState.update { it.copy(
                 loadingBoxes = false,
                 boxes = result.getOrDefault(emptyList()),
-                error = result.exceptionOrNull()?.let { e -> e.message ?: e.toString() },
+                // Named, because "HTTP POST not allowed" on its own leaves the
+                // reader to guess which of the three things on this screen
+                // went wrong.
+                error = result.exceptionOrNull()?.let { e ->
+                    "openSenseMap: " + (e.message ?: e.toString())
+                },
             ) }
         }
     }
@@ -266,6 +388,27 @@ class SensorViewModel(
         sync()
     }
 
+    /**
+     * Puts the publishing script on the Shelly this sensor is heard through.
+     *
+     * Needs both halves at once: the host, which is where it runs, and the box,
+     * whose token it has to be given. Neither is any use without the other,
+     * which is why this is one button rather than two.
+     */
+    fun deployScript() {
+        val host = _uiState.value.host ?: return
+        val box = _uiState.value.boxes.firstOrNull { it.id == _uiState.value.boxId } ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(deploying = true, error = null) }
+            val result = runCatching { sensors.deployScript(host, box) }
+            _uiState.update { it.copy(
+                deploying = false,
+                scriptDeployed = result.isSuccess,
+                error = result.exceptionOrNull()?.let { e -> e.message ?: e.toString() },
+            ) }
+        }
+    }
+
     fun sync() {
         viewModelScope.launch {
             _uiState.update { it.copy(syncing = true, error = null) }
@@ -278,6 +421,11 @@ class SensorViewModel(
                 earliestUtc = runCatching { sensors.earliestStart(deviceId) }.getOrNull(),
             ) }
         }
+    }
+
+    private companion object {
+        /** The sentinel that means "the years themselves", as on the energy screen. */
+        val YEARS = PowerWindow(PowerLevel.YEAR, null)
     }
 
     class Factory(

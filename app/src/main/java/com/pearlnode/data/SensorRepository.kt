@@ -3,6 +3,9 @@ package com.pearlnode.data
 import android.content.Context
 import com.pearlnode.data.api.OpenSenseMapClient
 import com.pearlnode.data.api.OsmBox
+import com.pearlnode.data.api.ScriptDeployer
+import com.pearlnode.data.api.ShellyClientFactory
+import com.pearlnode.model.Device
 import com.pearlnode.data.db.SensorBlockDao
 import com.pearlnode.model.SensorBlock
 import com.pearlnode.model.SensorHistory
@@ -93,6 +96,38 @@ class SensorRepository(
         client.boxes(fresh.token)
     }
 
+    // ------------------------------------------------------------- the script
+
+    /**
+     * Puts the publishing script on the Shelly the sensor is heard through.
+     *
+     * The template in the assets carries placeholders, not values. A token
+     * belongs to one box and to one person, so a copy of it checked in would be
+     * a copy of it in every build of the app and in the repository's history --
+     * it is filled in here, from the box the user picked out of their own
+     * account, and never leaves the device it is written to.
+     */
+    suspend fun deployScript(host: Device, box: OsmBox) = withContext(Dispatchers.IO) {
+        val token = box.accessToken
+            ?: error("this station has no access token -- sign in again")
+        val temperature = box.sensors.firstOrNull { it.title.contains("emperat", true) }
+            ?: error("the station has no temperature sensor")
+        val humidity = box.sensors.firstOrNull {
+            it.title.contains("umid", true) || it.title.contains("euchte", true)
+        } ?: error("the station has no humidity sensor")
+
+        val code = context.assets.open(ASSET).bufferedReader().use { it.readText() }
+            .replace("{{OSM_URL}}", "https://api.opensensemap.org/boxes/${box.id}/data")
+            .replace("{{OSM_TOKEN}}", token)
+            .replace("{{OSM_TEMPERATURE}}", temperature.id)
+            .replace("{{OSM_HUMIDITY}}", humidity.id)
+        check(!code.contains("{{")) { "the script template still has an unfilled placeholder" }
+
+        val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }
+        ScriptDeployer(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
+            .deploy(SCRIPT_NAME, code)
+    }
+
     // --------------------------------------------------------------- the data
 
     /**
@@ -158,6 +193,10 @@ class SensorRepository(
     private companion object {
         /** The id the account's password is filed under, alongside the devices. */
         const val OSM_ACCOUNT = "opensensemap"
+
+        /** The template, with its placeholders still in it. */
+        const val ASSET = "blu-osm.js"
+        const val SCRIPT_NAME = "blu-osm"
 
         /**
          * How far a first fetch reaches back. A month of a busy box is already

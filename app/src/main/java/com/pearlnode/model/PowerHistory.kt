@@ -109,6 +109,17 @@ enum class BucketAggregate {
      * added up is the integral either way; only the last step differs.
      */
     MEAN,
+
+    /**
+     * The highest value any block in the bucket stood at.
+     *
+     * For colouring a day by how warm it got, which the mean would flatten: a
+     * day that reached thirty at noon and eight at dawn averages to something
+     * mild that describes neither. Taken from the blocks rather than from
+     * sub-buckets, so it is the real peak and not the peak of some other
+     * averaging.
+     */
+    MAX,
 }
 
 fun bucketize(
@@ -119,6 +130,7 @@ fun bucketize(
     if (edges.size < 2) return emptyList()
     val energy = DoubleArray(edges.size - 1)
     val covered = DoubleArray(edges.size - 1)
+    val peak = DoubleArray(edges.size - 1) { Double.NEGATIVE_INFINITY }
     val coarsest = arrayOfNulls<Int>(edges.size - 1)
 
     for (segment in segments) {
@@ -135,6 +147,7 @@ fun bucketize(
             if (to > from) {
                 energy[index] += rate * (to - from)
                 covered[index] += (to - from).toDouble()
+                if (rate > peak[index]) peak[index] = rate
                 val seen = coarsest[index]
                 if (seen == null || segment.tier > seen) coarsest[index] = segment.tier
             }
@@ -144,6 +157,8 @@ fun bucketize(
     return (0 until energy.size).map {
         val value = when {
             aggregate == BucketAggregate.SUM -> energy[it]
+            aggregate == BucketAggregate.MAX ->
+                if (peak[it] > Double.NEGATIVE_INFINITY) peak[it] else 0.0
             covered[it] > 0 -> energy[it] / covered[it]
             // Nothing covered means nothing known, which coarsestTier already
             // says; the figure beside it must not read as a measured zero.

@@ -98,9 +98,9 @@ fun SensorScreen(
                 PeriodPickerDialog(
                     picker = picker,
                     onPick = vm::show,
-                    onPage = { },
+                    onPage = vm::pagePicker,
                     onNow = vm::showLatest,
-                    onDismiss = { vm.show(state.window) },
+                    onDismiss = vm::closePicker,
                 )
             }
         }
@@ -181,6 +181,46 @@ private fun SensorSettingsCard(state: SensorUiState, email: String?, vm: SensorV
                     )
                 }
             }
+
+            // The script that feeds the station. Offered once a station is
+            // chosen, because its token is what the script needs and the
+            // station is where the token comes from.
+            if (state.configured && state.host != null) {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.sensor_script_hint, state.host.name),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = vm::deployScript,
+                        enabled = !state.deploying && state.boxes.isNotEmpty(),
+                    ) { Text(stringResource(R.string.sensor_deploy)) }
+                    if (state.deploying) {
+                        Spacer(Modifier.width(12.dp))
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
+                    if (state.scriptDeployed) {
+                        Spacer(Modifier.width(12.dp))
+                        Icon(
+                            Icons.Default.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                if (state.boxes.isEmpty()) {
+                    Text(
+                        stringResource(R.string.sensor_open_list_first),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -243,7 +283,7 @@ private fun SeriesCard(
                 PeriodPicker(
                     window = state.window,
                     atLatest = state.atLatest,
-                    onOpenPicker = { },
+                    onOpenPicker = vm::openPicker,
                     onStep = vm::step,
                 )
             }

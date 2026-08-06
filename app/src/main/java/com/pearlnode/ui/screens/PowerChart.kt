@@ -101,6 +101,21 @@ fun SeriesChart(
     barColor: ((Double) -> Color)? = null,
     /** The bar under the finger while scrubbing, drawn brighter than the rest. */
     highlight: Int? = null,
+    /**
+     * Now, for the bar that has not finished yet.
+     *
+     * A bucket still filling holds only what has gone through it so far, so an
+     * hour that is ten minutes old draws a sixth of the bar it will become and
+     * looks like a drop in consumption that never happened. Given this, the bar
+     * is drawn to where it is heading if nothing changes -- and the part that
+     * has not happened yet is drawn faintly, so the projection is visible as a
+     * projection rather than passed off as a measurement.
+     *
+     * Only for quantities that accumulate. A temperature does not: the average
+     * of ten minutes is already the temperature, and stretching it would say
+     * the afternoon is going to be six times as warm.
+     */
+    projectFrom: Long? = null,
     onBarTap: ((Int) -> Unit)? = null,
     onSwipe: ((Long) -> Unit)? = null,
     /** A bar was scrubbed to, or null when the finger left the chart. */
@@ -112,12 +127,16 @@ fun SeriesChart(
     val earnedDefault = PowerEarnedColor
     val colourOf = barColor ?: { value -> if (value >= 0) drawnDefault else earnedDefault }
     val known = buckets.filter { it.coarsestTier != null }
+    // What each bar will read as, the last one included: the axis has to hold
+    // the projection or the bar it belongs to would run off the top.
+    val shown = buckets.map { projected(it, projectFrom) }
+    val knownShown = buckets.indices.filter { buckets[it].coarsestTier != null }.map { shown[it] }
     val scale =
         if (signed) Scale.forRange(
-            known.minOfOrNull { it.energyMwh } ?: 0.0,
-            known.maxOfOrNull { it.energyMwh } ?: 0.0,
+            knownShown.minOrNull() ?: 0.0,
+            knownShown.maxOrNull() ?: 0.0,
         )
-        else Scale.forPeak(known.maxOfOrNull { abs(it.energyMwh) } ?: 0.0)
+        else Scale.forPeak(knownShown.maxOfOrNull { abs(it) } ?: 0.0)
     val energy = left(scale)
     val money = right?.invoke(scale)
 
@@ -162,16 +181,30 @@ fun SeriesChart(
                         // tallest bar -- otherwise the tallest bar touches the
                         // ceiling on every chart and the ticks beside it would
                         // be measuring something else.
-                        val length =
+                        val value = shown[index]
+                        val measured =
                             (abs(bucket.energyMwh) / scale.span).toFloat() * size.height
+                        val length = (abs(value) / scale.span).toFloat() * size.height
                         if (length <= 0f) return@forEachIndexed
                         val left = index * slot + (slot - barWidth) / 2f
-                        val down = signed && bucket.energyMwh < 0
-                        val colour = colourOf(bucket.energyMwh)
+                        val down = signed && value < 0
+                        val colour = colourOf(value)
+                        val solid = if (index == highlight) colour else colour.copy(alpha = 0.75f)
+                        // The whole bar first, faintly, then the measured part
+                        // over it. Where nothing is being projected the two are
+                        // the same height and only the second one shows.
+                        if (length > measured) {
+                            drawRoundRect(
+                                color = colour.copy(alpha = 0.3f),
+                                topLeft = Offset(left, if (down) baseline else baseline - length),
+                                size = Size(barWidth, length),
+                                cornerRadius = CornerRadius(barWidth / 4f),
+                            )
+                        }
                         drawRoundRect(
-                            color = if (index == highlight) colour else colour.copy(alpha = 0.75f),
-                            topLeft = Offset(left, if (down) baseline else baseline - length),
-                            size = Size(barWidth, length),
+                            color = solid,
+                            topLeft = Offset(left, if (down) baseline else baseline - measured),
+                            size = Size(barWidth, measured),
                             cornerRadius = CornerRadius(barWidth / 4f),
                         )
                     }
@@ -182,6 +215,22 @@ fun SeriesChart(
             if (money != null) AxisLabels(values = money.ticks, align = TextAlign.Start)
         }
     }
+}
+
+/**
+ * Where a bar is heading, for the one bucket that is still filling.
+ *
+ * Only the bucket that now falls inside, and only when there is something to
+ * project from. A bucket in the middle of the chart can also be partly covered
+ * -- that is a gap in the record, where nobody was watching -- and stretching
+ * that one would turn missing data into a claim about it.
+ */
+private fun projected(bucket: PowerBucket, nowUtc: Long?): Double {
+    if (nowUtc == null || bucket.coarsestTier == null) return bucket.energyMwh
+    if (nowUtc <= bucket.startUtc || nowUtc >= bucket.endUtc) return bucket.energyMwh
+    val elapsed = (nowUtc - bucket.startUtc).toDouble()
+    if (elapsed <= 0) return bucket.energyMwh
+    return bucket.energyMwh * (bucket.endUtc - bucket.startUtc).toDouble() / elapsed
 }
 
 /**

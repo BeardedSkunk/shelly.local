@@ -45,6 +45,16 @@ data class PowerCell(
     val selected: Boolean,
     /** Where the first cell sits in a week, so a month grid lines up as a calendar. */
     val weekdayIndex: Int = 0,
+    /**
+     * A reading to colour the cell by, on a fixed scale, rather than by how it
+     * compares with the other cells.
+     *
+     * Energy cells are shaded by their share of the biggest one, which is right
+     * for a quantity: twice as much is twice as dark. A temperature has no such
+     * relation -- twenty degrees is not twice five -- so where this is set the
+     * cell takes the band colour of the value instead. Null everywhere else.
+     */
+    val bandValue: Double? = null,
 )
 
 data class PowerPicker(
@@ -237,20 +247,27 @@ class PowerViewModel(
      *
      * The chart is history and the figure under it is the present; both are
      * wanted at once, and only one of them is in the database. Ten seconds is
-     * the plug's own sampling interval, so asking faster would only repeat an
-     * answer. A plug out of reach simply leaves the last figure standing --
+     * the plug's own sampling interval once there is something to repeat, so
+     * asking faster than that would only get the same answer twice. A plug out of reach simply leaves the last figure standing --
      * with its own timestamp beside it in the sync line.
      */
     private fun observeLivePower() {
         viewModelScope.launch {
             while (true) {
-                _uiState.value.device?.let { device ->
-                    runCatching { devices.getStatus(device) }.getOrNull()?.let { status ->
-                        val watt = status.channels.firstOrNull()?.power
-                        if (watt != null) _uiState.update { it.copy(livePowerW = watt) }
-                    }
+                val device = _uiState.value.device
+                val watt = device?.let {
+                    runCatching { devices.getStatus(it) }.getOrNull()
+                        ?.channels?.firstOrNull()?.power
                 }
-                delay(10_000)
+                if (watt != null) _uiState.update { it.copy(livePowerW = watt) }
+                // Until there is a first reading, try again in a moment rather
+                // than after a full interval. The device is read from the
+                // database just after the screen appears, so the first attempt
+                // always finds nothing -- and waiting ten seconds on that left
+                // the figure showing a dash for ten seconds every time the
+                // screen was opened, which reads as "not supported" rather than
+                // as "not yet".
+                delay(if (_uiState.value.livePowerW == null) 1_000L else 10_000L)
             }
         }
     }
@@ -431,7 +448,7 @@ class PowerViewModel(
             val bucket = buckets.getOrNull(index)
             PowerCell(
                 window = cell,
-                label = cellLabel(child, cell),
+                label = pickerCellLabel(child, cell),
                 energyMwh = bucket?.energyMwh ?: 0.0,
                 known = bucket?.coarsestTier != null,
                 selected = cell.anchor == shown.anchor && cell.level == shown.level,
@@ -467,18 +484,6 @@ class PowerViewModel(
             at = at.shifted(1, now())
         }
         return out
-    }
-
-    private fun cellLabel(level: PowerLevel, cell: PowerWindow): String {
-        val at = cell.anchor ?: return ""
-        return when (level) {
-            PowerLevel.HOUR -> String.format(java.util.Locale.getDefault(), "%02d", at.hour)
-            PowerLevel.DAY -> at.dayOfMonth.toString()
-            PowerLevel.WEEK -> "" + at.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
-            PowerLevel.MONTH -> at.month.getDisplayName(
-                java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
-            PowerLevel.YEAR -> at.year.toString()
-        }
     }
 
     /** Keeps the moment being looked at and changes how much around it is shown. */
@@ -609,5 +614,17 @@ class PowerViewModel(
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
             PowerViewModel(devices, journal, settings, deviceId) as T
+    }
+}
+
+fun pickerCellLabel(level: PowerLevel, cell: PowerWindow): String {
+    val at = cell.anchor ?: return ""
+    return when (level) {
+        PowerLevel.HOUR -> String.format(java.util.Locale.getDefault(), "%02d", at.hour)
+        PowerLevel.DAY -> at.dayOfMonth.toString()
+        PowerLevel.WEEK -> "" + at.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
+        PowerLevel.MONTH -> at.month.getDisplayName(
+            java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+        PowerLevel.YEAR -> at.year.toString()
     }
 }
