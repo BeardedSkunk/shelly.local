@@ -58,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -72,6 +73,7 @@ import com.pearlnode.model.PowerBucket
 import com.pearlnode.model.PowerLevel
 import com.pearlnode.model.PowerWindow
 import com.pearlnode.ui.viewmodels.PowerPicker
+import com.pearlnode.ui.viewmodels.PowerTask
 import com.pearlnode.ui.viewmodels.PowerUiState
 import com.pearlnode.ui.viewmodels.PowerViewModel
 import java.time.DayOfWeek
@@ -115,7 +117,16 @@ fun PowerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.power_title)) },
+                // The device rather than the subject: which plug this is, is
+                // the one thing the page cannot say anywhere else, and the
+                // screen it was opened from is titled the same way.
+                title = {
+                    Text(
+                        uiState.device?.name ?: stringResource(R.string.power_title),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack,
@@ -128,9 +139,15 @@ fun PowerScreen(
         Column(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
         ) {
-            uiState.error?.let { message ->
+            uiState.error?.let { failure ->
                 Text(
-                    message,
+                    stringResource(
+                        when (failure.task) {
+                            PowerTask.SYNC -> R.string.power_error_sync
+                            PowerTask.TRACKING -> R.string.power_error_tracking
+                        },
+                        failure.detail,
+                    ),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -144,7 +161,6 @@ fun PowerScreen(
                 onOpenPicker = vm::openPicker,
                 onStep = vm::step,
                 onDrill = vm::drillInto,
-                onSync = vm::sync,
             )
             Spacer(Modifier.padding(8.dp))
 
@@ -266,7 +282,6 @@ private fun ChartCard(
     onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
     onDrill: (Int) -> Unit,
-    onSync: () -> Unit,
 ) {
     // Nothing has ever been recorded and nothing is recording: there is no
     // chart to show and no point pretending otherwise.
@@ -279,7 +294,11 @@ private fun ChartCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(stringResource(R.string.power_history), style = MaterialTheme.typography.titleMedium)
+                // No title. What the card holds is a chart, and a chart of
+                // energy over a named period says so already -- the word above
+                // it only cost a line of screen. The row stays for the spinner,
+                // which has nowhere else to sit.
+                Spacer(Modifier.weight(1f))
                 if (state.syncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
 
@@ -328,19 +347,11 @@ private fun ChartCard(
             Spacer(Modifier.padding(4.dp))
             Totals(state, formats)
 
-
-            Spacer(Modifier.padding(4.dp))
-            Text(
-                syncLine(state, formats),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (state.reachable && !state.syncing) {
-                androidx.compose.material3.TextButton(onClick = onSync) {
-                    Text(stringResource(R.string.power_sync_now))
-                }
-            }
+            // No line saying when the last fetch was and no button to ask for
+            // one. Opening the page fetches, and it now asks only for what has
+            // happened since the last time rather than for the whole archive,
+            // so it is over before there is anything to report -- the spinner
+            // beside the heading is the whole of what there is to say about it.
         }
     }
 }
@@ -545,35 +556,89 @@ private fun levelLabel(level: PowerLevel): Int = when (level) {
 }
 
 /**
- * One label per bar, most of them blank. Thirty day labels do not fit across a
- * phone, so only every few bars is named and the rest hold their place. The
- * labels are hung on the last bar and counted backwards, so the newest bar is
- * always one of the named ones.
+ * What is written under the bars.
+ *
+ * Each level is marked where a reader of that level actually looks, which is
+ * not the same as every nth bar:
+ *
+ *  - an hour at the quarters. Nobody looks for the bar that began at :38, and
+ *    the quarters are not bar boundaries anyway -- the bars are two minutes
+ *    wide. So they are put where the quarters fall along the axis: :15 and :45
+ *    land on the middle of a bar, and :30 on the seam between two, which is
+ *    exactly where the half hour is.
+ *  - a day every three hours. The ends stay bare: a label under the first or
+ *    last bar has half of itself hanging off the chart.
+ *  - a month at the fifths of the month, 5 through 25, and the 30th where the
+ *    month has a 31st for it not to be the end of. The round numbers are what a
+ *    date is looked up by, and the 1st and the last are the ends again.
+ *  - a week and a year every bar, because seven and twelve both fit.
  */
 private fun barLabels(
     window: PowerWindow,
     buckets: List<PowerBucket>,
     zone: ZoneId,
     formats: Formats,
-): List<String> {
-    val every = when (window.level) {
-        PowerLevel.HOUR -> 5
-        PowerLevel.DAY -> 6
-        PowerLevel.WEEK -> 1
-        PowerLevel.MONTH -> 5
-        PowerLevel.YEAR -> 1
+): List<PowerAxisLabel> {
+    if (buckets.isEmpty()) return emptyList()
+    if (window.level == PowerLevel.HOUR) {
+        return QUARTERS.map {
+            PowerAxisLabel(String.format(Locale.getDefault(), ":%02d", it), it / 60f)
+        }
     }
-    return buckets.mapIndexed { index, bucket ->
-        if ((buckets.size - 1 - index) % every != 0) return@mapIndexed ""
-        val at = ZonedDateTime.ofInstant(Instant.ofEpochSecond(bucket.startUtc), zone)
-        when (window.level) {
+    val dayOfMonth = { index: Int ->
+        ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone).dayOfMonth
+    }
+    val marked = when (window.level) {
+        PowerLevel.DAY -> everyThird(buckets, formats)
+        // The 30th only where it is not the last bar, which is to say only in a
+        // month of 31 days. In a shorter month it is the end of the chart and a
+        // label there hangs half off it; in a longer one it is an ordinary mark
+        // and the gap from the 25th to the end is wide enough to want one.
+        PowerLevel.MONTH -> buckets.indices.filter { index ->
+            val day = dayOfMonth(index)
+            day in MONTH_MARKS || (day == 30 && index < buckets.size - 1)
+        }
+        else -> buckets.indices.toList()
+    }
+    return marked.map { index ->
+        val at = ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone)
+        val text = when (window.level) {
             PowerLevel.HOUR -> String.format(Locale.getDefault(), ":%02d", at.minute)
-            PowerLevel.DAY -> formats.hour(bucket.startUtc * 1000)
+            PowerLevel.DAY -> formats.hour(buckets[index].startUtc * 1000)
             PowerLevel.WEEK -> at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
             PowerLevel.MONTH -> at.dayOfMonth.toString()
             PowerLevel.YEAR -> at.month.getDisplayName(TextStyle.NARROW, Locale.getDefault())
         }
+        PowerAxisLabel(text, (index + 0.5f) / buckets.size)
     }
+}
+
+/** The minutes an hour is read at. */
+private val QUARTERS = listOf(15, 30, 45)
+
+/**
+ * The days a month is always read at. The 30th joins them where the month is
+ * long enough for it not to be the end -- see the caller.
+ */
+private val MONTH_MARKS = listOf(5, 10, 15, 20, 25)
+
+/**
+ * Every third bar of a day, kept clear of both ends.
+ *
+ * Which of the two possible starts is used is decided by what it would write.
+ * Midnight is the hour that reads "0", and a lone zero under a chart of energy
+ * reads as a measurement rather than as a time -- so if one start hits midnight
+ * and the other does not, the other one is taken. The window is not always a
+ * calendar day: the rolling one ends at the next full hour, so which bars are
+ * which hour moves through the day, and neither start can be picked in advance.
+ */
+private fun everyThird(buckets: List<PowerBucket>, formats: Formats): List<Int> {
+    val last = buckets.size - 2
+    val options = listOf(1, 2).map { start -> (start..last step 3).toList() }
+    val midnight = { marks: List<Int> ->
+        marks.any { formats.hour(buckets[it].startUtc * 1000) == "0" }
+    }
+    return options.firstOrNull { !midnight(it) } ?: options.first()
 }
 
 @Composable
@@ -585,13 +650,4 @@ private fun trackingSubtitle(state: PowerUiState): String = when {
     state.trackingEnabled && !state.scriptRunning -> stringResource(R.string.power_not_running)
     state.scriptInstalled -> stringResource(R.string.power_installed_stopped)
     else -> stringResource(R.string.power_off)
-}
-
-@Composable
-private fun syncLine(state: PowerUiState, formats: Formats): String {
-    if (state.lastSyncUtc <= 0) return stringResource(R.string.power_never_synced)
-    // When the app last fetched is a fact about the phone, so it is read in the
-    // phone's zone -- unlike the chart, which is read in the plug's.
-    val stamp = formats.dateTime(state.lastSyncUtc * 1000)
-    return stringResource(R.string.power_last_sync, stamp, state.storedBlocks)
 }

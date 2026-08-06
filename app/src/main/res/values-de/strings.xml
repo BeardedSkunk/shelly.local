@@ -160,9 +160,17 @@
     <string name="power_price_feed_in">Preis Einspeisung</string>
     <string name="power_price_feed_in_hint">Was eine zurückgespeiste Kilowattstunde wert ist. Beim Bezugspreis lassen, wenn der Ertrag im Haus verbraucht wird.</string>
     <string name="power_split">%1$s kWh bezogen · %2$s kWh eingespeist</string>
-    <string name="power_sync_now">Jetzt holen</string>
-    <string name="power_never_synced">Noch nie vom Gerät geholt</string>
-    <string name="power_last_sync">Zuletzt geholt %1$s · %2$d Blöcke gespeichert</string>
+    <string name="power_error_sync">Verlauf holen fehlgeschlagen: %1$s</string>
+    <string name="power_error_tracking">Aufzeichnung schalten fehlgeschlagen: %1$s</string>
+
+    <!-- Wo etwas schiefging, steht dabei. Eine nackte technische Zeile oben im
+         Screen überlässt dem Leser die Frage, welche der Sachen, die der Screen
+         tut, gerade fehlgeschlagen ist. -->
+    <string name="error_control">Gerät schalten fehlgeschlagen: %1$s</string>
+    <string name="error_schedules">Zeitpläne laden fehlgeschlagen: %1$s</string>
+    <string name="error_kvs">Schlüssel-Wert-Speicher lesen fehlgeschlagen: %1$s</string>
+    <string name="error_firmware">Firmware-Prüfung fehlgeschlagen: %1$s</string>
+    <string name="error_discovery">Netzwerksuche fehlgeschlagen: %1$s</string>
 
     <string name="kvs_title">Schlüssel-Wert-Speicher</string>
     <string name="kvs_show_all">Alle Einträge anzeigen</string>

@@ -162,9 +162,17 @@
     <string name="power_price_feed_in">Price returned</string>
     <string name="power_price_feed_in_hint">What a kilowatt hour sent back out is worth. Leave it at the price drawn if the output is used in the house.</string>
     <string name="power_split">%1$s kWh drawn · %2$s kWh returned</string>
-    <string name="power_sync_now">Fetch now</string>
-    <string name="power_never_synced">Never fetched from the device yet</string>
-    <string name="power_last_sync">Last fetched %1$s · %2$d blocks stored</string>
+    <string name="power_error_sync">Fetching the history failed: %1$s</string>
+    <string name="power_error_tracking">Switching recording failed: %1$s</string>
+
+    <!-- Whatever went wrong, it is said where it went wrong. A bare line of
+         technical text at the top of a screen leaves the reader working out
+         which of the things the screen does has failed. -->
+    <string name="error_control">Switching the device failed: %1$s</string>
+    <string name="error_schedules">Loading the schedules failed: %1$s</string>
+    <string name="error_kvs">Reading the key-value store failed: %1$s</string>
+    <string name="error_firmware">Firmware check failed: %1$s</string>
+    <string name="error_discovery">Scanning the network failed: %1$s</string>
 
     <string name="kvs_title">Key-value store</string>
     <string name="kvs_show_all">Show all entries</string>

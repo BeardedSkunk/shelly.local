@@ -43,6 +43,19 @@ data class AppPrefs(
     val datePattern: String? = null,
     val temperature: TemperatureUnit? = null,
     val clock24h: Boolean? = null,
+    /**
+     * The openSenseMap account, for the half of that API that needs one.
+     *
+     * Reading measurements does not: the route is public, so the charts keep
+     * drawing whether or not this is set or current. What it buys is the list
+     * of the user's own boxes with their access tokens, which is the only way
+     * to learn the token a push script has to be given -- and the only way to
+     * offer boxes by name instead of by a twenty-four character id.
+     *
+     * The password is not here. It lives in the same encrypted store as the
+     * device passwords; this only says which account it belongs to.
+     */
+    val osmEmail: String? = null,
 ) {
     companion object {
         const val DEFAULT_PRICE_CT = 30.0
@@ -161,6 +174,7 @@ class AppSettings(context: Context) {
         temperature = prefs.getString(TEMPERATURE, null)
             ?.let { runCatching { TemperatureUnit.valueOf(it) }.getOrNull() },
         clock24h = if (prefs.contains(CLOCK)) prefs.getBoolean(CLOCK, true) else null,
+        osmEmail = prefs.getString(OSM_EMAIL, null),
     )
 
     fun setPrice(centsPerKwh: Double) = write { it.copy(priceCentsPerKwh = centsPerKwh) }
@@ -171,6 +185,52 @@ class AppSettings(context: Context) {
     fun setDatePattern(pattern: String?) = write { it.copy(datePattern = pattern) }
     fun setTemperature(unit: TemperatureUnit?) = write { it.copy(temperature = unit) }
     fun setClock24h(on: Boolean?) = write { it.copy(clock24h = on) }
+    fun setOsmEmail(email: String?) = write { it.copy(osmEmail = email?.takeIf { e -> e.isNotBlank() }) }
+
+    /**
+     * The session from the last sign-in. Kept apart from the settings flow
+     * because nothing on screen depends on it -- it is a key, not a preference,
+     * and a screen that redrew every time it was refreshed would be redrawing
+     * for nothing.
+     */
+    fun osmSession(): Pair<String, String>? {
+        val token = prefs.getString(OSM_TOKEN, null) ?: return null
+        return token to prefs.getString(OSM_REFRESH, null).orEmpty()
+    }
+
+    fun setOsmSession(token: String?, refreshToken: String?) {
+        prefs.edit().apply {
+            if (token == null) remove(OSM_TOKEN) else putString(OSM_TOKEN, token)
+            if (refreshToken == null) remove(OSM_REFRESH) else putString(OSM_REFRESH, refreshToken)
+        }.apply()
+    }
+
+    /** Which openSenseMap box a device's readings are fetched from. */
+    fun boxId(deviceId: String): String? = prefs.getString("${deviceId}_osm_box", null)
+
+    fun setBoxId(deviceId: String, boxId: String?) {
+        prefs.edit().apply {
+            if (boxId == null) remove("${deviceId}_osm_box") else putString("${deviceId}_osm_box", boxId)
+        }.apply()
+    }
+
+    /** The sensor of that box a reading of this kind comes from. */
+    fun sensorId(deviceId: String, kind: String): String? =
+        prefs.getString("${deviceId}_osm_${kind}", null)
+
+    fun setSensorId(deviceId: String, kind: String, sensorId: String?) {
+        prefs.edit().apply {
+            val key = "${deviceId}_osm_${kind}"
+            if (sensorId == null) remove(key) else putString(key, sensorId)
+        }.apply()
+    }
+
+    /** Unix second the readings of this device were last fetched. */
+    fun lastSensorSync(deviceId: String): Long = prefs.getLong("${deviceId}_osm_synced", 0L)
+
+    fun setLastSensorSync(deviceId: String, whenUtc: Long) {
+        prefs.edit().putLong("${deviceId}_osm_synced", whenUtc).apply()
+    }
 
     private fun write(change: (AppPrefs) -> AppPrefs) {
         val next = change(_prefs.value)
@@ -184,6 +244,7 @@ class AppSettings(context: Context) {
             putString(DATE_PATTERN, next.datePattern)
             putString(TEMPERATURE, next.temperature?.name)
             if (next.clock24h == null) remove(CLOCK) else putBoolean(CLOCK, next.clock24h)
+            if (next.osmEmail == null) remove(OSM_EMAIL) else putString(OSM_EMAIL, next.osmEmail)
         }.apply()
         _prefs.update { next }
     }
@@ -217,5 +278,8 @@ class AppSettings(context: Context) {
         const val TEMPERATURE = "temperature_unit"
         const val CLOCK = "clock_24h"
         const val MIGRATED = "migrated_from_power_tracking"
+        const val OSM_EMAIL = "osm_email"
+        const val OSM_TOKEN = "osm_token"
+        const val OSM_REFRESH = "osm_refresh"
     }
 }

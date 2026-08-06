@@ -143,7 +143,8 @@ fun DeviceControlScreen(
                 }
 
                 uiState.controlError?.let { err ->
-                    Text(err, color = MaterialTheme.colorScheme.error,
+                    Text(stringResource(R.string.error_control, err),
+                        color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .clickable { vm.refresh() }
                             .padding(horizontal = 16.dp))
@@ -360,7 +361,8 @@ private fun SchedulesSection(
 
             uiState.schedulesError?.let { err ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(err, color = MaterialTheme.colorScheme.error,
+                    Text(stringResource(R.string.error_schedules, err),
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                     TextButton(onClick = onRetry) { Text(stringResource(R.string.retry)) }
                 }

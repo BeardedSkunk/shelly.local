@@ -47,8 +47,13 @@ let CFG = {
   min_change_mw: 200,
   // ... in this many samples in a row before a new block is opened.
   confirm_samples: 3,
-  // Power at or below this counts as nothing at all, in either direction.
-  zero_mw: 0,
+  // Below this the plug cannot tell one level from another, in either
+  // direction, so everything under it counts as one level. Measured on a Plug M
+  // Gen3: apower only ever reads 0 or 1.0 to 1.3 W down here and flips between
+  // them every few seconds, which the detector used to cut a block at. The
+  // energy is unaffected -- it comes from the meter, not from apower -- so a
+  // low block records what really flowed without inventing the changes.
+  low_mw: 1500,
   // 2024-01-01. Anything earlier means the clock has not been set yet.
   min_valid_unix: 1704067200,
   // A storage value holds 1022 bytes; pages close early to leave room for the
@@ -682,7 +687,7 @@ function drainBlocks() {
 function kvsPayload(now) {
   let block = ST.blk;
   let payload = { start_time: block.start };
-  if (block.zero) {
+  if (block.low && block.energy === 0) {
     payload.watt = 0;
     return payload;
   }
@@ -735,8 +740,8 @@ function kvsWritten(result, code, message, reason) {
 
 // ------------------------------------------------------------ block finding
 
-function isZero(mw) {
-  return (mw < 0 ? -mw : mw) <= CFG.zero_mw;
+function isLow(mw) {
+  return (mw < 0 ? -mw : mw) <= CFG.low_mw;
 }
 
 // Two power levels differ enough to be called a change: at least a share of
@@ -744,10 +749,10 @@ function isZero(mw) {
 // so an exporting plant gets the same relative tolerance a consuming one does,
 // and a sign flip is always a change because the gap is then the sum of both.
 function levelChanged(ref, power) {
-  let refZero = isZero(ref);
-  let powerZero = isZero(power);
-  if (refZero !== powerZero) return true;
-  if (powerZero) return false;
+  let refLow = isLow(ref);
+  let powerLow = isLow(power);
+  if (refLow !== powerLow) return true;
+  if (powerLow) return false;
   let magnitude = ref < 0 ? -ref : ref;
   let gap = power - ref;
   if (gap < 0) gap = -gap;
@@ -755,8 +760,8 @@ function levelChanged(ref, power) {
 }
 
 function deviates(block, power) {
-  if (isZero(power) !== block.zero) return true;
-  if (block.zero) return false;
+  if (isLow(power) !== block.low) return true;
+  if (block.low) return false;
   return levelChanged(block.ref, power);
 }
 
@@ -803,8 +808,13 @@ function switchBlock(now, meter) {
   // block hands its final interval to its successor instead, which is also
   // where the load that ended it actually belongs. Nothing is lost either way,
   // the counter difference only moves across the boundary.
+  // A low block keeps everything it collected up to the last accepted sample
+  // and hands the transition interval on. That interval already belongs to
+  // whatever ended the block: ten seconds of a 600 W load is 1.7 Wh, which
+  // would swamp the fraction of a watt hour a low block legitimately holds and
+  // put it under a block that says almost nothing was flowing.
   let handover = ST.blk.meter;
-  if (!ST.blk.zero) {
+  if (!ST.blk.low) {
     accumulate(ST.blk, first.m);
     handover = first.m;
   }
@@ -813,7 +823,7 @@ function switchBlock(now, meter) {
   // is where the level actually changed. Its reference comes from the last
   // one: the first sample is often still half inside the old level, or a spike
   // that happens to be what started the run.
-  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, zero: isZero(last.p) };
+  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, low: isLow(last.p) };
   ST.cand = [];
   accumulate(ST.blk, meter);
   log(2, 'new block at ' + first.t + ', reference ' + last.p + ' mW');
@@ -839,7 +849,7 @@ function bootstrap(now, power, meter) {
   let i;
   for (i = 0; i < ST.boot.length; i++) sum = sum + ST.boot[i].p;
   let ref = Math.round(sum / ST.boot.length);
-  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, zero: isZero(ref) };
+  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, low: isLow(ref) };
   ST.boot = [];
   accumulate(ST.blk, meter);
   fillGap(ST.blk.start);
@@ -855,7 +865,7 @@ function maybeCheckpoint(now) {
     kvsWrite(now, 'retry');
     return;
   }
-  if (ST.blk.zero) return;
+  if (ST.blk.low && ST.blk.energy === 0) return;
   if (now - ST.lastKvsWrite < CFG.checkpoint_s) return;
   kvsWrite(now, 'checkpoint');
 }
@@ -1021,14 +1031,14 @@ function onKvsRead(result, code) {
 function curParse(value) {
   if (typeof value !== 'object' || value === null) return null;
   if (!isNum(value.start_time) || value.start_time < CFG.min_valid_unix) return null;
-  if (!isNum(value.duration_sec)) return { start: value.start_time, zero: true };
+  if (!isNum(value.duration_sec)) return { start: value.start_time, low: true };
   if (!isNum(value.energy_mwh) || !isNum(value.meter_net_mwh) || !isNum(value.watt)) return null;
   // Everything signed turns together, or none of it does. The gross counter is
   // not signed and stays as it is.
   let sign = ST.flip ? -1 : 1;
   return {
     start: value.start_time,
-    zero: false,
+    low: false,
     dur: value.duration_sec,
     energy: sign * value.energy_mwh,
     meter: sign * value.meter_net_mwh,
@@ -1072,12 +1082,12 @@ function recover(now) {
     // the KVS. The archive already holds it; this entry is a leftover and
     // archiving it again would double it.
     log(1, 'the block in the KVS is already archived, dropping it');
-  } else if (cur.zero) {
+  } else if (cur.low) {
     // A null block survives a reboot unchanged. Nothing flowed while the plug
     // was away, which is precisely what a null block records, so the outage
     // belongs to it and its start stays where it was. Normal detection closes
     // it as soon as something happens.
-    ST.blk = { start: cur.start, ref: 0, energy: 0, meter: reading.net, zero: true };
+    ST.blk = { start: cur.start, ref: 0, energy: 0, meter: reading.net, low: true };
     log(2, 'continuing the null block that started at ' + cur.start);
   } else if (cur.start + cur.dur >= bootTs - 5) {
     // The checkpoint is younger than this boot, so the script restarted but
@@ -1086,8 +1096,8 @@ function recover(now) {
     // An entry written before the counter had moved carries no usable level.
     // Taking what is flowing right now beats resuming with a reference of
     // zero, which would disagree with the load immediately.
-    if (isZero(ref)) ref = power;
-    ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, zero: false };
+    if (isLow(ref)) ref = power;
+    ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, low: false };
     accumulate(ST.blk, reading.net);
     log(2, 'script restart, continuing the block that started at ' + cur.start);
     kvsWrite(now, 'recovery');
@@ -1131,9 +1141,9 @@ function recoverAfterReboot(now, bootTs, cur, reading) {
     log(1, 'energy counters were reset while away, closing the block at the checkpoint');
   }
 
-  ST.blk = { start: cur.start, ref: refMw, energy: energy, meter: reading.net, zero: false };
+  ST.blk = { start: cur.start, ref: refMw, energy: energy, meter: reading.net, low: false };
   closeBlock(endTs);
-  ST.blk = { start: endTs, ref: 0, energy: 0, meter: reading.net, zero: true };
+  ST.blk = { start: endTs, ref: 0, energy: 0, meter: reading.net, low: true };
   log(2, 'reboot recovery: block closed at ' + endTs + ', the outage is a null phase');
   kvsWrite(now, 'recovery');
 }
@@ -1149,26 +1159,35 @@ function startSampling() {
 // Script.storage cannot be reached over RPC at all, so this is the only way
 // for shelly.local -- or a browser -- to see the archive.
 //
-//   /script/<id>/journal                     index and running block
-//   /script/<id>/journal?page=c              one page, decoded
-//   /script/<id>/journal?page=c&raw=1        that page exactly as stored
-//   /script/<id>/journal?page=c&skip=200&max=100
+//   /script/<id>/journal                       index and running block
+//   /script/<id>/journal?tier=1&from=0         that tier from a moment onwards
+//   /script/<id>/journal?tier=1&from=0&max=50  ... in slices
 //
-// A tier 1 page can hold well over two hundred blocks and the response is
-// built in the same 25 KB the rest of the script lives in, so it comes in
-// slices rather than all at once.
+// A reader asks for a stretch of time and never for a storage slot. That is
+// the whole difference from the first version of this endpoint, and it is what
+// makes reading safe to interleave with writing.
+//
+// Slots recycle. A page is rewritten by copying it into a spare slot and
+// switching the metadata over (see tierWrite), so a slot the index named a
+// moment ago can be gone by the time the reader asks for it -- through no
+// fault of the reader, and reported to it as a broken archive. A time survives
+// every rewrite the archive performs on itself, and a reader that already has
+// yesterday asks only for today, which is a page or two rather than ten.
+//
+// A tier 1 page holds well over two hundred blocks and the response is built
+// in the same 25 KB the rest of the script lives in, so it comes in slices.
 function onRequest(request, response) {
   let query = typeof request.query === 'string' ? request.query : '';
-  let page = queryValue(query, 'page');
+  let tier = toInt(queryValue(query, 'tier'));
   response.headers = { 'Content-Type': 'application/json' };
   response.code = 200;
-  if (page === null) {
+  if (tier === null) {
     response.body = httpIndex();
   } else {
-    let skip = toInt(queryValue(query, 'skip'));
+    let from = toInt(queryValue(query, 'from'));
     let max = toInt(queryValue(query, 'max'));
-    response.body = httpPage(page, queryValue(query, 'raw') !== null,
-                             skip === null ? 0 : skip, max === null ? 250 : max);
+    response.body = httpTier(tier, from === null ? 0 : from,
+                             max === null ? 250 : max);
   }
   response.send();
 }
@@ -1186,7 +1205,10 @@ function queryValue(query, name) {
 // phone that is a minute out would otherwise mismeasure the running block
 // against it, and one in another country would draw the wrong day.
 function httpIndex() {
-  let out = '{"version":' + VERSION + ',"generation":' + ST.meta.g +
+  // api says which shape of read this endpoint offers, and it is not the
+  // archive version: a reader upgrading the script must not be told the stored
+  // blocks mean something new, because they do not.
+  let out = '{"api":2,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
@@ -1209,40 +1231,60 @@ function httpIndex() {
     ',"current":' + (ST.blk === null ? 'null' : JSON.stringify(kvsPayload(ST.lastUnix))) + '}';
 }
 
-// Blocks come back as [start_time, duration_sec, energy_mwh] triples in real
-// units, with the field names given once alongside. Repeating the names on
-// every block would treble the response.
-function httpPage(key, raw, skip, max) {
-  if (SLOTS.indexOf(key) < 0) return '{"error":"no such page"}';
-  let text = stGet(key);
-  if (text === null) return '{"error":"page is empty"}';
-  if (raw) return '{"page":"' + key + '","raw":"' + text + '"}';
-  let tier = text.charCodeAt(0) - 48;
-  if (tier < 0 || tier >= CFG.tiers.length) return '{"error":"page is damaged"}';
+// One tier, from a moment onwards, walked out of that tier's own pages in
+// order. Blocks come back as [start_time, duration_sec, energy_mwh] triples in
+// real units, with the field names given once alongside -- repeating the names
+// on every block would treble the response.
+//
+// A block that straddles from is included: it is partly inside the stretch
+// asked for, and a reader cutting it itself is better than one never seeing it.
+//
+// next says where to carry on, more whether there is anything left to carry on
+// to, and tier_start how far back this tier still reaches -- so a reader can
+// tell "there is nothing older" from "the older part has been thinned away".
+//
+// A slot that has gone empty under a rewrite is skipped rather than reported as
+// a failure. Its content is on the slot the metadata has already been switched
+// to, which the next turn of the loop reads, and the page before it and after
+// it are still exactly where they were.
+function httpTier(tier, from, max) {
+  if (tier < 0 || tier >= CFG.tiers.length) return '{"error":"no such tier"}';
   let grid = CFG.tiers[tier][0];
   let unit = CFG.tiers[tier][1];
-  DEC.i = 1;
-  DEC.ok = true;
-  let at = dec(text);
-  if (!DEC.ok) return '{"error":"page is damaged"}';
-  let out = '{"page":"' + key + '","tier":' + tier + ',"grid_sec":' + grid +
-    ',"start":' + at + ',"fields":["start_time","duration_sec","energy_mwh"],"blocks":[';
-  let n = 0;
+  let pages = ST.meta.tiers[tier].pages;
+  let out = '{"api":2,"tier":' + tier + ',"generation":' + ST.meta.g +
+    ',"grid_sec":' + grid +
+    ',"fields":["start_time","duration_sec","energy_mwh"],"blocks":[';
   let sent = 0;
-  let duration, energy;
-  while (DEC.i < text.length) {
-    duration = dec(text) * grid;
-    energy = decZ(text) * unit;
-    if (!DEC.ok) break;
-    if (n >= skip && n < skip + max) {
-      if (sent > 0) out = out + ',';
-      out = out + '[' + at + ',' + duration + ',' + energy + ']';
-      sent = sent + 1;
+  let more = false;
+  let first = -1;
+  let at = from;
+  let i, text, duration, energy;
+  for (i = 0; i < pages.length; i++) {
+    if (more) break;
+    text = stGet(pages[i]);
+    if (text === null) continue;
+    DEC.i = 1;
+    DEC.ok = true;
+    at = dec(text);
+    if (!DEC.ok) continue;
+    if (first < 0) first = at;
+    while (DEC.i < text.length) {
+      duration = dec(text) * grid;
+      energy = decZ(text) * unit;
+      if (!DEC.ok) break;
+      if (at + duration > from) {
+        if (sent >= max) { more = true; break; }
+        if (sent > 0) out = out + ',';
+        out = out + '[' + at + ',' + duration + ',' + energy + ']';
+        sent = sent + 1;
+      }
+      at = at + duration;
     }
-    at = at + duration;
-    n = n + 1;
   }
-  return out + '],"skip":' + skip + ',"returned":' + sent + ',"total":' + n + ',"end":' + at + '}';
+  return out + '],"returned":' + sent + ',"next":' + at +
+    ',"more":' + (more ? 'true' : 'false') +
+    ',"tier_start":' + (first < 0 ? 'null' : first) + '}';
 }
 
 // --------------------------------------------------------------------- main
@@ -1267,7 +1309,7 @@ function selftest() {
     'pageInfo': pageInfo, 'metaParse': metaParse, 'metaWrite': metaWrite, 'metaRebuild': metaRebuild,
     'tierWrite': tierWrite, 'feedTier': feedTier, 'emitBlock': emitBlock, 'bucketStart': bucketStart,
     'queueBlock': queueBlock, 'drainBlocks': drainBlocks,
-    'kvsPayload': kvsPayload, 'httpIndex': httpIndex, 'httpPage': httpPage
+    'kvsPayload': kvsPayload, 'httpIndex': httpIndex, 'httpTier': httpTier
   };
 }
 

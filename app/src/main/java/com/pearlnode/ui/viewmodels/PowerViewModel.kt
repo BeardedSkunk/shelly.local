@@ -21,6 +21,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
@@ -56,6 +57,20 @@ data class PowerPicker(
     val canPageForward: Boolean = true,
 )
 
+/**
+ * What the page was doing when it failed, so what it says can name it.
+ *
+ * A line of technical text on its own -- "the journal answered: page is empty",
+ * "Connection refused" -- leaves the reader working out which of the several
+ * things this page does has gone wrong, and the page cannot ask afterwards.
+ */
+enum class PowerTask { SYNC, TRACKING }
+
+data class PowerFailure(val task: PowerTask, val detail: String)
+
+private fun Throwable.failure(task: PowerTask) =
+    PowerFailure(task, message ?: toString())
+
 data class PowerUiState(
     val device: Device? = null,
     /** Whether the user has asked for tracking, which is what the switch shows. */
@@ -68,7 +83,7 @@ data class PowerUiState(
     val checkingDevice: Boolean = true,
     val deploying: Boolean = false,
     val syncing: Boolean = false,
-    val error: String? = null,
+    val error: PowerFailure? = null,
     val window: PowerWindow = PowerWindow.LAST_24H,
     val buckets: List<PowerBucket> = emptyList(),
     /** True while the window runs up to now, so there is no later one to step to. */
@@ -154,6 +169,17 @@ class PowerViewModel(
      * plug -- for a plug at home that is the same moment, and away from home it
      * is not, which is exactly the case this screen exists for.
      */
+    /**
+     * Ticks when the hour turns.
+     *
+     * The rolling window ends at the next whole hour, so once an hour it grows
+     * a bar and drops the oldest -- but only if somebody works that out again.
+     * Without this the chart quietly stops at the hour the screen was opened,
+     * which on a screen left open looks exactly like a plug that stopped
+     * recording.
+     */
+    private val hourTick = MutableStateFlow(0L)
+
     private val zoneFlow = MutableStateFlow(storedZone())
     private val zone: ZoneId get() = zoneFlow.value
 
@@ -167,6 +193,20 @@ class PowerViewModel(
         observeHistory()
         observePicker()
         observeSettings()
+        observeClock()
+    }
+
+    /** Wakes on the hour, so a window that runs up to now keeps up with now. */
+    private fun observeClock() {
+        viewModelScope.launch {
+            while (true) {
+                val nowMs = System.currentTimeMillis()
+                // A second past the turn, so the hour it wakes into is the new
+                // one however the clock rounds.
+                delay(((nowMs / HOUR_MS) + 1) * HOUR_MS - nowMs + 1_000L)
+                hourTick.value = System.currentTimeMillis() / 1000
+            }
+        }
     }
 
     /**
@@ -227,7 +267,7 @@ class PowerViewModel(
         viewModelScope.launch {
             // The zone is in here because it decides where the bars are cut,
             // and a first sync can change it under a window that has not moved.
-            combine(window, zoneFlow) { selected, _ -> selected }.flatMapLatest { selected ->
+            combine(window, zoneFlow, hourTick) { selected, _, _ -> selected }.flatMapLatest { selected ->
                 val edges = selected.edges(nowUtc(), zone)
                 if (edges.size < 2) flowOf(emptyList<PowerBlock>())
                 else journal.observeRange(deviceId, edges.first(), edges.last())
@@ -448,7 +488,7 @@ class PowerViewModel(
             val result = runCatching { journal.sync(device) }
             _uiState.update { it.copy(
                 syncing = false,
-                error = result.exceptionOrNull()?.let { it.message ?: it.toString() },
+                error = result.exceptionOrNull()?.failure(PowerTask.SYNC),
                 lastSyncUtc = journal.settings.lastSync(deviceId),
                 storedBlocks = journal.blockCount(deviceId),
                 earliestUtc = journal.earliestStart(deviceId),
@@ -480,13 +520,15 @@ class PowerViewModel(
             _uiState.update { it.copy(
                 deploying = false,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
-                error = result.exceptionOrNull()?.let { it.message ?: it.toString() },
+                error = result.exceptionOrNull()?.failure(PowerTask.TRACKING),
             ) }
             refresh()
         }
     }
 
     companion object {
+        private const val HOUR_MS = 3_600_000L
+
         /**
          * Stands for "the years the archive covers" -- the one picker page that
          * is not a calendar period, because years have nothing above them.

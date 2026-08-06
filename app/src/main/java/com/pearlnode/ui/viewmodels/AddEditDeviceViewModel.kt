@@ -391,7 +391,12 @@ class AddEditDeviceViewModel(
             }.onSuccess {
                 _uiState.update { it.copy(saving = false, saved = true) }
             }.onFailure { e ->
-                _uiState.update { it.copy(saving = false, error = e.message ?: "Failed to save") }
+                // Said where it went wrong: this field also carries the form's
+                // own complaints, and "Connection refused" on its own next to
+                // the save button reads like a different problem than it is.
+                _uiState.update {
+                    it.copy(saving = false, error = "Saving failed: ${e.message ?: "unknown error"}")
+                }
             }
         }
     }

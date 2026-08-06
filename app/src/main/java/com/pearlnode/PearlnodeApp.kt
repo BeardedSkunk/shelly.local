@@ -8,6 +8,7 @@ import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.FirmwareRepository
 import com.pearlnode.data.PowerJournalRepository
 import com.pearlnode.data.PowerSyncWorker
+import com.pearlnode.data.SensorRepository
 import com.pearlnode.data.db.AppDatabase
 import com.pearlnode.security.CredentialStore
 
@@ -18,6 +19,9 @@ class PearlnodeApp : Application() {
     }
     val firmwareRepository: FirmwareRepository by lazy { FirmwareRepository() }
     val appSettings: AppSettings by lazy { AppSettings(this) }
+    val sensorRepository: SensorRepository by lazy {
+        SensorRepository(this, AppDatabase.getInstance(this).sensorBlockDao(), appSettings)
+    }
     val powerJournalRepository: PowerJournalRepository by lazy {
         val db = AppDatabase.getInstance(this)
         val store = CredentialStore(this)

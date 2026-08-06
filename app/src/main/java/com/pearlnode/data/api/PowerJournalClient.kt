@@ -27,6 +27,13 @@ data class JournalTier(
 )
 
 data class JournalIndex(
+    /**
+     * Which shape of read the endpoint on the plug offers, and deliberately not
+     * [version]: upgrading the script must not tell this app that the blocks it
+     * already stored mean something new, because they do not. Zero is a plug
+     * still running a script from before reads were asked for by time.
+     */
+    val api: Int,
     val version: Int,
     /**
      * Counts every metadata write, and the metadata is written only when a page
@@ -50,8 +57,27 @@ data class JournalIndex(
     val current: Triple<Long, Long, Long>?,
 )
 
-/** [start_time, duration_sec, energy_mwh] triples, in real units. */
-data class JournalPage(val tier: Int, val total: Int, val blocks: List<LongArray>)
+/**
+ * One tier's blocks from a moment onwards, as [start_time, duration_sec,
+ * energy_mwh] triples in real units.
+ *
+ * Asked for by time and never by storage slot. The plug rewrites a page by
+ * copying it into a spare slot and switching its metadata over, so a slot named
+ * in an index a second ago can be empty now -- which used to reach this app as
+ * a broken archive through no fault of its own. A time survives every rewrite
+ * the plug performs on itself.
+ */
+data class JournalRead(
+    val tier: Int,
+    /** The generation at the moment of the read, so a write in between is visible. */
+    val generation: Int,
+    val blocks: List<LongArray>,
+    /** Where to carry on from, and whether there is anything to carry on to. */
+    val next: Long,
+    val more: Boolean,
+    /** The oldest block this tier can still offer, or null while it holds none. */
+    val tierStart: Long?,
+)
 
 /**
  * The power journal on one plug: installing it, switching it on and off, and
@@ -226,8 +252,8 @@ class PowerJournalClient(
 
     fun index(scriptId: Int): JournalIndex = parseJournalIndex(get("/script/$scriptId/$ENDPOINT"))
 
-    fun page(scriptId: Int, key: String, skip: Int, max: Int): JournalPage =
-        parseJournalPage(get("/script/$scriptId/$ENDPOINT?page=$key&skip=$skip&max=$max"))
+    fun read(scriptId: Int, tier: Int, from: Long, max: Int): JournalRead =
+        parseJournalRead(get("/script/$scriptId/$ENDPOINT?tier=$tier&from=$from&max=$max"))
 }
 
 // The parsing is separate from the fetching so it can be held against
@@ -247,6 +273,10 @@ fun parseJournalIndex(body: String): JournalIndex {
         )
     }
     return JournalIndex(
+        // Absent on a script from before reads were asked for by time. Zero is
+        // the honest answer there, and what tells this app to put the current
+        // script on the plug before trying to read it.
+        api = root["api"]?.jsonPrimitive?.intOrNull ?: 0,
         version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
         generation = root["generation"]?.jsonPrimitive?.intOrNull ?: 0,
         unixtime = root["unixtime"]?.jsonPrimitive?.longOrNull ?: 0L,
@@ -258,9 +288,9 @@ fun parseJournalIndex(body: String): JournalIndex {
     )
 }
 
-fun parseJournalPage(body: String): JournalPage {
+fun parseJournalRead(body: String): JournalRead {
     val root = Json.parseToJsonElement(body).jsonObject
-    root["error"]?.jsonPrimitive?.contentOrNull?.let { error(it) }
+    root["error"]?.jsonPrimitive?.contentOrNull?.let { error("the journal answered: $it") }
     val blocks = root["blocks"]?.jsonArray.orEmpty().mapNotNull { element ->
         val triple = element.jsonArray
         if (triple.size < 3) null
@@ -268,10 +298,13 @@ fun parseJournalPage(body: String): JournalPage {
             triple[0].jsonPrimitive.long, triple[1].jsonPrimitive.long, triple[2].jsonPrimitive.long
         )
     }
-    return JournalPage(
+    return JournalRead(
         tier = root["tier"]?.jsonPrimitive?.intOrNull ?: 0,
-        total = root["total"]?.jsonPrimitive?.intOrNull ?: blocks.size,
+        generation = root["generation"]?.jsonPrimitive?.intOrNull ?: 0,
         blocks = blocks,
+        next = root["next"]?.jsonPrimitive?.longOrNull ?: 0L,
+        more = root["more"]?.jsonPrimitive?.booleanOrNull ?: false,
+        tierStart = root["tier_start"]?.jsonPrimitive?.longOrNull,
     )
 }
 

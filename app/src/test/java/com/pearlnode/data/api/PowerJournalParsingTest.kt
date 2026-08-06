@@ -39,11 +39,15 @@ class PowerJournalParsingTest {
         "archive_end":null,"current":{"start_time":1785915797,"watt":0}}
     """.trimIndent().replace("\n", "")
 
-    private val quarterHourPage = """
-        {"page":"a","tier":1,"grid_sec":900,"start":1785913200,
+    // Captured from PLANT on 2026-08-06, from the read-by-time endpoint, cut to
+    // three blocks with max so that "more" and "next" are the live ones rather
+    // than the ends of a whole tier. The middle block is a merged run: eight
+    // hours the plug held as one entry because they were all the same level.
+    private val quarterHourRead = """
+        {"api":2,"tier":1,"generation":86,"grid_sec":900,
         "fields":["start_time","duration_sec","energy_mwh"],
-        "blocks":[[1785913200,900,14200],[1785914100,900,64600],[1785915000,900,71000]],
-        "skip":0,"returned":3,"total":7,"end":1785922200}
+        "blocks":[[1785957300,900,100],[1785958200,28800,4800],[1785987000,900,300]],
+        "returned":3,"next":1785987900,"more":true,"tier_start":1785957300}
     """.trimIndent().replace("\n", "")
 
     @Test
@@ -95,24 +99,48 @@ class PowerJournalParsingTest {
     }
 
     @Test
-    fun `a page decodes to real seconds and real milliwatt hours`() {
-        val page = parseJournalPage(quarterHourPage)
-        assertEquals(1, page.tier)
-        assertEquals(7, page.total)
-        assertEquals(3, page.blocks.size)
-        assertEquals(1785913200L, page.blocks[0][0])
+    fun `a tier read decodes to real seconds and real milliwatt hours`() {
+        val read = parseJournalRead(quarterHourRead)
+        assertEquals(1, read.tier)
+        assertEquals(3, read.blocks.size)
+        assertEquals(1785957300L, read.blocks[0][0])
         // Durations arrive in seconds, not in grid steps -- a quarter hour is
-        // 900 here even though the page stores it as the number 1.
-        assertTrue(page.blocks.all { it[1] == 900L })
-        assertEquals(14200L, page.blocks[0][2])
+        // 900 here even though the page stores it as the number 1, and the
+        // merged run is 28800 rather than 32.
+        assertEquals(900L, read.blocks[0][1])
+        assertEquals(28800L, read.blocks[1][1])
+        assertEquals(100L, read.blocks[0][2])
         // Blocks are gapless: each begins where the last one ended.
-        for (i in 1 until page.blocks.size) {
-            assertEquals(page.blocks[i - 1][0] + page.blocks[i - 1][1], page.blocks[i][0])
+        for (i in 1 until read.blocks.size) {
+            assertEquals(read.blocks[i - 1][0] + read.blocks[i - 1][1], read.blocks[i][0])
         }
     }
 
+    @Test
+    fun `a cut off read says where to carry on`() {
+        val read = parseJournalRead(quarterHourRead)
+        assertTrue(read.more)
+        // The end of the last block handed over, so the next request fetches
+        // nothing twice and skips nothing.
+        val last = read.blocks.last()
+        assertEquals(last[0] + last[1], read.next)
+        assertEquals(1785957300L, read.tierStart)
+        assertEquals(86, read.generation)
+    }
+
+    @Test
+    fun `a plug still serving reads by slot is recognised as such`() {
+        // Neither fixture above carries api, because neither script had it. The
+        // app upgrades such a plug rather than trying to read it: the endpoint
+        // it offers names storage slots, and the plug recycles those under its
+        // own writes.
+        assertEquals(0, parseJournalIndex(plant).api)
+        assertEquals(0, parseJournalIndex(charger).api)
+        assertEquals(2, parseJournalIndex(plant.replace(""""version":2""", """"api":2,"version":3""")).api)
+    }
+
     @Test(expected = IllegalStateException::class)
-    fun `a page the plug refuses is an error rather than an empty result`() {
-        parseJournalPage("""{"error":"no such page"}""")
+    fun `a read the plug refuses is an error rather than an empty result`() {
+        parseJournalRead("""{"error":"no such tier"}""")
     }
 }

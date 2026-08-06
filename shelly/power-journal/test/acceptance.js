@@ -149,7 +149,12 @@ test('3  a change of level splits a block, a sign flip always does', () => {
   ok(pj.levelChanged(-300000, 300000), 'and so they are the other way round');
   ok(!pj.levelChanged(-300000, -305000), 'two exporting levels one percent apart are not');
   ok(pj.levelChanged(-300000, -400000), 'a third more export is');
-  ok(pj.levelChanged(0, 300), 'and nothing to something always is, however small');
+  // Under low_mw the plug cannot tell one level from another, so everything
+  // down there is one level and nothing in it is a change. Leaving it is.
+  ok(!pj.levelChanged(0, 300), 'nothing to a third of a watt is not a change any more');
+  ok(!pj.levelChanged(1200, 0), 'nor is the flapping back the other way');
+  ok(pj.levelChanged(0, 2000), 'but climbing out of the low zone is');
+  ok(pj.levelChanged(1200, 40000), 'and so is a real load arriving');
 });
 
 test('4  exporting is recorded as negative energy', () => {
@@ -168,7 +173,7 @@ test('4  exporting is recorded as negative energy', () => {
   near(watt, -400, 15, 'and it reads back as about minus four hundred watts');
 });
 
-test('5  a null block costs almost nothing and never checkpoints', () => {
+test('5  a low block costs almost nothing and keeps what flowed', () => {
   const plug = running();
   plug.feed(0, 5);
   eq(plug.kvs['current_power'].watt, 0, 'the KVS says nothing is flowing');
@@ -181,12 +186,39 @@ test('5  a null block costs almost nothing and never checkpoints', () => {
   plug.feed(600, 4);
   plug.feedFor(600, 60);
   const blocks = plug.tierBlocks(0);
-  // The sample that ends a null block already carries the new load's first
-  // interval. A block that records that nothing flowed must not hold energy,
-  // so that interval is handed to the successor instead.
-  eq(blocks[0].energy, 0, 'the archived null block carries no energy at all');
+  eq(blocks[0].energy, 0, 'nothing flowed, so the archived block holds nothing');
   const page = plug.storage[parseMeta(plug.storage.m).tiers[0].pages[0]];
   ok(page.length <= 1 + 7 + 3 + 1, 'and the whole page is only ' + page.length + ' characters');
+});
+
+test('5b  a low block holds the energy that flowed below the resolution', () => {
+  // What a doorbell transformer looks like on a Plug M: apower flips between
+  // 0 and about 1.2 W every few seconds and means neither, while the meter
+  // quietly collects the real 0.85 W. The old detector cut a block at every
+  // flip -- 21 of 28 archived blocks were empty fragments. This is the whole
+  // point of the low zone: one block, and the energy still right.
+  const plug = running();
+  let flip = 0;
+  for (let i = 0; i < 180; i++) {
+    // The plug reports one or the other; the harness meters what is really
+    // flowing, which is neither and lies between them.
+    plug.watt = (flip = 1 - flip) ? 1.2 : 0;
+    plug.tick();
+  }
+  eq(plug.tierBlocks(0).length, 0, 'half an hour of flapping cut no block at all');
+
+  const running_block = plug.kvs['current_power'];
+  eq(running_block.start_time !== undefined, true, 'the block is still the first one');
+  ok(running_block.energy_mwh > 0,
+    'and it has been collecting energy throughout  (' + running_block.energy_mwh + ' mWh)');
+
+  // And it ends the moment something real happens.
+  plug.feed(600, 4);
+  plug.feedFor(600, 120);
+  const blocks = plug.tierBlocks(0);
+  eq(blocks.length, 1, 'a real load closes it, exactly once');
+  ok(blocks[0].energy > 0, 'the low stretch kept its energy  (' + blocks[0].energy + ' mWh)');
+  near(blocks[0].duration, 1800, 40, 'and covers the whole flapping stretch');
 });
 
 test('6  quarter hours land on real quarter hours and never get shorter', () => {
@@ -521,39 +553,90 @@ test('18  the KVS entry fits, and says what it is', () => {
   ok(plug.kvsWrites > before, 'and retried on a later sample rather than forgotten');
 });
 
-test('19  the HTTP endpoint hands out the index and one page at a time', () => {
+test('19  the HTTP endpoint hands out the index and a tier from a moment on', () => {
   const plug = running();
   for (const watt of [500, 1700, 350, 2100, 800]) plug.feedFor(watt, 2700);
   plug.feed(0, 4);
   plug.feedFor(0, 60);
 
   const index = JSON.parse(plug.request('').body);
-  eq(index.version, 3, 'the index says version 3');
+  eq(index.api, 2, 'the index says which shape of read it offers');
+  eq(index.version, 3, 'which is not the archive version, still 3');
   eq(index.tiers.length, 4, 'and lists four tiers');
   eq(index.tiers[1].grid_sec, 900, 'with the quarter hour grid named');
   eq(index.utc_offset, 7200, 'and the offset the day buckets use');
   ok(index.archive_end > 0, 'it says how far the archive reaches');
   ok(index.current !== null, 'and hands over the running block');
 
-  const key = index.tiers[1].pages[0];
-  const page = JSON.parse(plug.request('page=' + key).body);
-  eq(page.tier, 1, 'a page knows which tier it is');
-  eq(page.grid_sec, 900, 'and at what resolution');
-  ok(page.blocks.length > 0, 'it decoded ' + page.blocks.length + ' blocks');
-  ok(page.blocks.every((b) => b.length === 3), 'each one a triple');
-  ok(page.blocks.every((b) => b[1] % 900 === 0), 'with durations in real seconds, not grid steps');
-  eq(page.blocks[0][0], plug.tierBlocks(1)[0].start, 'and the first start matches the archive');
+  const stored = plug.tierBlocks(1);
+  const all = JSON.parse(plug.request('tier=1&from=0').body);
+  eq(all.tier, 1, 'a read knows which tier it is');
+  eq(all.grid_sec, 900, 'and at what resolution');
+  eq(all.blocks.length, stored.length, 'from zero it hands over the whole tier');
+  ok(all.blocks.every((b) => b.length === 3), 'each block a triple');
+  ok(all.blocks.every((b) => b[1] % 900 === 0), 'with durations in real seconds, not grid steps');
+  eq(all.blocks[0][0], stored[0].start, 'and the first start matches the archive');
+  eq(all.tier_start, stored[0].start, 'tier_start says how far back the tier still reaches');
+  eq(all.more, false, 'nothing is left over');
+  eq(all.next, stored[stored.length - 1].start + stored[stored.length - 1].duration,
+    'and next is where the tier ends');
+  eq(all.generation, index.generation, 'the generation rides along, so a reader can spot a write');
 
-  const sliced = JSON.parse(plug.request('page=' + key + '&skip=1&max=1').body);
-  ok(sliced.blocks.length <= 1, 'skip and max cut the response down');
-  eq(sliced.total, page.total, 'while it still reports the whole page');
-  eq(sliced.returned, sliced.blocks.length, 'and returned counts what came back');
-  eq(page.returned, page.blocks.length, 'as it does for a whole page');
+  // The whole point of asking by time: what a reader already has, it does not
+  // ask for again, and no slot name is ever involved.
+  const cut = stored[Math.floor(stored.length / 2)].start;
+  const since = JSON.parse(plug.request('tier=1&from=' + cut).body);
+  ok(since.blocks.length < all.blocks.length, 'a later start asks for less');
+  ok(since.blocks.every((b) => b[0] + b[1] > cut), 'and hands back nothing that ended before it');
+  eq(since.blocks[0][0], cut, 'the block starting there is included');
 
-  const raw = JSON.parse(plug.request('page=' + key + '&raw=1').body);
-  eq(raw.raw, plug.storage[key], 'raw hands back exactly what is stored, through JSON unharmed');
-  ok(JSON.parse(plug.request('page=zz').body).error !== undefined,
-    'an unknown page is an error, not a crash');
+  const sliced = JSON.parse(plug.request('tier=1&from=0&max=2').body);
+  eq(sliced.blocks.length, 2, 'max cuts the response down');
+  eq(sliced.more, true, 'and says there is more');
+  eq(sliced.next, all.blocks[2][0], 'next points at the first block left out');
+  const rest = JSON.parse(plug.request('tier=1&from=' + sliced.next).body);
+  eq(sliced.blocks.length + rest.blocks.length, all.blocks.length,
+    'so the slices join up into the whole tier with nothing lost or repeated');
+
+  const empty = JSON.parse(plug.request('tier=3&from=0').body);
+  eq(empty.tier_start, null, 'a tier with no pages says so rather than guessing');
+  ok(JSON.parse(plug.request('tier=9').body).error !== undefined,
+    'an unknown tier is an error, not a crash');
+});
+
+test('19a a page rewritten mid read costs the reader nothing', () => {
+  const plug = running();
+  for (const watt of [500, 1700, 350, 2100, 800]) plug.feedFor(watt, 2700);
+  plug.feedFor(0, 600);
+
+  const before = JSON.parse(plug.request('tier=1&from=0').body);
+  ok(before.blocks.length > 0, 'the tier has blocks to hand out');
+
+  // Exactly what tierWrite does to a page it appends to: the content is copied
+  // into a spare slot, the metadata is switched over, and the old slot is
+  // emptied. Under the old read-by-slot endpoint this was the race -- the
+  // reader had been handed a slot name and the name went stale underneath it.
+  const meta = plug.storage.m.split('|');
+  const rows = meta[4].split(';');
+  const row = rows[1].split(',');
+  const keys = row[0].split('.');
+  const taken = meta[4].split(';').map((r) => r.split(',')[0]).join('.').split('.');
+  const spare = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k']
+    .find((slot) => taken.indexOf(slot) < 0);
+  ok(plug.storage[keys[0]] !== undefined, 'the page is where the metadata says');
+  plug.storage[spare] = plug.storage[keys[0]];
+  delete plug.storage[keys[0]];
+  keys[0] = spare;
+  row[0] = keys.join('.');
+  rows[1] = row.join(',');
+  meta[4] = rows.join(';');
+  plug.storage.m = meta.join('|');
+  plug.restartScript();
+  plug.boot();
+
+  const after = JSON.parse(plug.request('tier=1&from=0').body);
+  eq(JSON.stringify(after.blocks), JSON.stringify(before.blocks),
+    'and the reader sees the same blocks, from a slot it never had to name');
 });
 
 test('20  test mode writes nothing at all', () => {

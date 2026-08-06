@@ -58,6 +58,19 @@ class Formats(
     fun minor(cents: Double): String =
         String.format(Locale.getDefault(), "%.1f %s", cents, prefs.currencyMinor).trim()
 
+    /**
+     * The unit a whole axis of money is read in.
+     *
+     * An axis names its unit once at the head, so unlike [money] it cannot pick
+     * per figure: the minor unit is the one that keeps small amounts readable,
+     * and where the user has cleared it the whole unit is all there is.
+     */
+    val moneyAxisUnit: String get() = prefs.currencyMinor.ifBlank { prefs.currencyMajor }
+
+    /** An amount in cents, in whatever [moneyAxisUnit] turned out to be. */
+    fun moneyOnAxis(cents: Double): Double =
+        if (prefs.currencyMinor.isNotBlank()) cents else cents / 100.0
+
     // ------------------------------------------------------------ the tariff
 
     /**
@@ -125,9 +138,16 @@ class Formats(
 
     fun dateTime(millis: Long): String = "${date(millis)}, ${time(millis)}"
 
-    /** Just the hour, for an axis where the minutes are always zero. */
+    /**
+     * Just the hour, for an axis where the minutes are always zero.
+     *
+     * Bare: no leading zero and no am or pm. An axis label has a bar's width to
+     * sit in and the bars either side say which part of the day it is, so the
+     * padding and the suffix are both length spent on what the reader can
+     * already see.
+     */
     fun hour(millis: Long): String =
-        SimpleDateFormat(if (clock24h) "HH" else "h a", Locale.getDefault()).format(Date(millis))
+        SimpleDateFormat(if (clock24h) "H" else "h", Locale.getDefault()).format(Date(millis))
 
     fun dateFormat(): SimpleDateFormat =
         runCatching { SimpleDateFormat(datePattern, Locale.getDefault()) }

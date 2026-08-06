@@ -90,7 +90,7 @@ fun KvsSection(
             error?.let { message ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        message,
+                        stringResource(R.string.error_kvs, message),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),

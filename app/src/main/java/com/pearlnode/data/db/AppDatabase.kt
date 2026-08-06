@@ -11,13 +11,20 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceType
 import com.pearlnode.model.PowerBlock
+import com.pearlnode.model.SensorBlock
+import com.pearlnode.model.SensorKind
 import com.pearlnode.model.ShellyGeneration
 
-@Database(entities = [Device::class, PowerBlock::class], version = 5, exportSchema = false)
+@Database(
+    entities = [Device::class, PowerBlock::class, SensorBlock::class],
+    version = 6,
+    exportSchema = false,
+)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
     abstract fun powerBlockDao(): PowerBlockDao
+    abstract fun sensorBlockDao(): SensorBlockDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -75,13 +82,34 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Temperature and humidity, kept the same way the power history is: a
+        // local copy that outlives whatever it was read from.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS sensor_blocks (
+                        deviceId TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        startUtc INTEGER NOT NULL,
+                        durationSec INTEGER NOT NULL,
+                        milliValue INTEGER NOT NULL,
+                        PRIMARY KEY (deviceId, kind, startUtc)
+                    )
+                """)
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_sensor_blocks_deviceId_kind_startUtc " +
+                        "ON sensor_blocks (deviceId, kind, startUtc)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "shelly.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build().also { INSTANCE = it }
             }
     }
@@ -93,4 +121,6 @@ class Converters {
         runCatching { DeviceType.valueOf(v) }.getOrDefault(DeviceType.UNKNOWN)
     @TypeConverter fun fromGen(v: ShellyGeneration): String = v.name
     @TypeConverter fun toGen(v: String): ShellyGeneration = ShellyGeneration.valueOf(v)
+    @TypeConverter fun fromSensorKind(v: SensorKind): String = v.name
+    @TypeConverter fun toSensorKind(v: String): SensorKind = SensorKind.valueOf(v)
 }

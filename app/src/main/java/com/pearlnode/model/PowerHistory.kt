@@ -97,9 +97,28 @@ private fun coveredEnergy(covered: List<Covered>, start: Long, end: Long): Doubl
 }
 
 /** Buckets segments onto the boundaries the chart draws, splitting where they straddle one. */
-fun bucketize(segments: List<PowerSegment>, edges: List<Long>): List<PowerBucket> {
+enum class BucketAggregate {
+    /** Add the segments up. Energy is additive: two half hours make an hour. */
+    SUM,
+
+    /**
+     * Divide by the time actually covered. A temperature is not additive -- two
+     * half hours at 20 degrees make an hour at 20, not at 40 -- so what a bucket
+     * of a level series holds is the mean, weighted by how long each reading
+     * stood. Both go through the same accumulation, because the quantity being
+     * added up is the integral either way; only the last step differs.
+     */
+    MEAN,
+}
+
+fun bucketize(
+    segments: List<PowerSegment>,
+    edges: List<Long>,
+    aggregate: BucketAggregate = BucketAggregate.SUM,
+): List<PowerBucket> {
     if (edges.size < 2) return emptyList()
     val energy = DoubleArray(edges.size - 1)
+    val covered = DoubleArray(edges.size - 1)
     val coarsest = arrayOfNulls<Int>(edges.size - 1)
 
     for (segment in segments) {
@@ -115,6 +134,7 @@ fun bucketize(segments: List<PowerSegment>, edges: List<Long>): List<PowerBucket
             val to = minOf(segment.endUtc, edges[index + 1])
             if (to > from) {
                 energy[index] += rate * (to - from)
+                covered[index] += (to - from).toDouble()
                 val seen = coarsest[index]
                 if (seen == null || segment.tier > seen) coarsest[index] = segment.tier
             }
@@ -122,7 +142,14 @@ fun bucketize(segments: List<PowerSegment>, edges: List<Long>): List<PowerBucket
         }
     }
     return (0 until energy.size).map {
-        PowerBucket(edges[it], edges[it + 1], energy[it], coarsest[it])
+        val value = when {
+            aggregate == BucketAggregate.SUM -> energy[it]
+            covered[it] > 0 -> energy[it] / covered[it]
+            // Nothing covered means nothing known, which coarsestTier already
+            // says; the figure beside it must not read as a measured zero.
+            else -> 0.0
+        }
+        PowerBucket(edges[it], edges[it + 1], value, coarsest[it])
     }
 }
 

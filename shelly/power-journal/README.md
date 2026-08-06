@@ -168,21 +168,35 @@ at all, it exists only inside the script. So the script serves it over HTTP:
 
 ```bash
 curl -s http://192.168.178.23/script/2/journal
-curl -s "http://192.168.178.23/script/2/journal?page=c"
-curl -s "http://192.168.178.23/script/2/journal?page=c&skip=200&max=100"
-curl -s "http://192.168.178.23/script/2/journal?page=c&raw=1"
+curl -s "http://192.168.178.23/script/2/journal?tier=1&from=0"
+curl -s "http://192.168.178.23/script/2/journal?tier=1&from=1785870000&max=100"
 ```
 
 The index gives every tier's pages, how far the archive reaches, and the live
 block. It also gives each tier's `pending` and `open_bucket`: a coarse tier's
 most recent stretch is not on a page yet, and a reader that ignored those would
-think the tier stops hours before it does.
+think the tier stops hours before it does. `api` says which shape of read the
+endpoint offers, and is deliberately not the archive version — upgrading the
+script must not tell a reader that the blocks it already stored mean something
+new, because they do not.
 
-A page expands into `[start_time, duration_sec, energy_mwh]` triples in real
+A tier expands into `[start_time, duration_sec, energy_mwh]` triples in real
 units, with the field names given once alongside — repeating them per block
 would treble the response, and there are about 25 KB of script memory to build
-it in. Hence `skip` and `max`: a quarter hour page can hold well over two
-hundred blocks. Average watt is `energy_mwh * 3600 / duration_sec`.
+it in. Hence `max`, plus `next` and `more` to carry on with: a quarter hour page
+can hold well over two hundred blocks. Average watt is
+`energy_mwh * 3600 / duration_sec`.
+
+**A read is by time, never by slot.** That is what makes it safe to run
+alongside a write. Appending to a page copies it into a spare slot and switches
+the metadata over (see *Copy on write* below), so a slot named in an index a
+second ago may be empty now — and under the first version of this endpoint,
+which took a slot letter, that surfaced to the reader as a broken archive
+through no fault of its own. Times survive every rewrite the archive performs on
+itself. `from` also means a reader that already has yesterday asks only for
+today, so a read is a page or two rather than all ten. `tier_start` says how far
+back the tier still reaches, which is how "there is nothing older" is told apart
+from "the older part has been thinned away".
 
 ## Two counters, and why energy is signed
 

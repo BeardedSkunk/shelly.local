@@ -164,7 +164,8 @@ private fun AddDeviceDiscoveryScaffold(
             }
 
             uiState.discoveryError?.let { err ->
-                Text(err, color = MaterialTheme.colorScheme.error,
+                Text(stringResource(R.string.error_discovery, err),
+                    color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }

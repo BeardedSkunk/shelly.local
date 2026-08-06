@@ -86,6 +86,29 @@ class PowerTrackingSettings(context: Context) {
         prefs.edit().putString("${deviceId}_tz", zone).apply()
     }
 
+    /**
+     * How far into one tier this app has already read, per tier.
+     *
+     * Per tier rather than one figure for the device, because the tiers do not
+     * reach equally far: the fine ones are written every few minutes and the day
+     * tier once a day, so a single watermark would be either too old for one or
+     * too new for the other. What is kept here is where that tier's pages ended
+     * at the last read, which is exactly where the next one has to pick up.
+     */
+    fun syncedThrough(deviceId: String, tier: Int): Long =
+        prefs.getLong("${deviceId}_through_$tier", 0L)
+
+    fun setSyncedThrough(deviceId: String, tier: Int, throughUtc: Long) {
+        prefs.edit().putLong("${deviceId}_through_$tier", throughUtc).apply()
+    }
+
+    /** Back to reading the whole archive: the stored copy is gone or unusable. */
+    fun clearSyncedThrough(deviceId: String) {
+        prefs.edit().apply {
+            prefs.all.keys.filter { it.startsWith("${deviceId}_through_") }.forEach { remove(it) }
+        }.apply()
+    }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 

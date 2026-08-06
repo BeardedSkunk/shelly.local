@@ -177,7 +177,7 @@ private fun FirmwareLine(
         }
 
         error != null -> Text(
-            error,
+            stringResource(R.string.error_firmware, error),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             maxLines = 1,
@@ -266,7 +266,9 @@ private fun FirmwareDetails(
                 }
 
                 error != null -> {
-                    Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.error_firmware, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
                     TextButton(onClick = onRetry) {
                         Text(stringResource(R.string.retry), style = MaterialTheme.typography.bodySmall)
                     }

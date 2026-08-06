@@ -38,7 +38,11 @@ class PowerJournalRepository(
 
     // A page can hold well over two hundred blocks and the script builds the
     // response in the same 25 KB it lives in, so it comes in slices.
-    private val pageSlice = 100
+    private val readSlice = 100
+
+    // A slice that made no progress would loop for ever. The archive is ten
+    // pages of a thousand bytes, so nothing honest gets near this.
+    private val maxSlices = 40
 
     private fun clientFor(device: Device): PowerJournalClient {
         val (user, pass) = credentials(device.id).let { it?.first to it?.second }
@@ -112,7 +116,18 @@ class PowerJournalRepository(
     suspend fun sync(device: Device): SyncResult = withContext(Dispatchers.IO) {
         val client = clientFor(device)
         val scriptId = client.installation().scriptId ?: error("no journal on this device")
-        val index = client.index(scriptId)
+        var index = client.index(scriptId)
+
+        // A plug still serving reads by storage slot gets the current script put
+        // on it before anything is read. The slot names were the flaw -- the
+        // plug recycles them on every append -- and there is no way to read that
+        // endpoint reliably, only more or less luckily. The archive is in the
+        // script's own storage and survives the code being replaced, and the
+        // script id is reused, so this costs the history nothing.
+        if (index.api < CLIENT_API) {
+            client.deploy(context.assets.open(ASSET).bufferedReader().use { it.readText() })
+            index = client.index(scriptId)
+        }
 
         // Which zone the plug keeps is asked for only when the offset it
         // reports stops matching the zone already on file. That is one extra
@@ -140,6 +155,7 @@ class PowerJournalRepository(
         val storedVersion = settings.archiveVersion(device.id)
         if (storedVersion < index.version && dao.count(device.id) > 0) {
             dao.deleteForDevice(device.id)
+            settings.clearSyncedThrough(device.id)
         }
         settings.setArchiveVersion(device.id, index.version)
 
@@ -150,12 +166,10 @@ class PowerJournalRepository(
         // no page has changed since the last fetch, and there is nothing on any
         // of them this app has not already got.
         //
-        // That is what makes a frequent background fetch affordable. Reading
-        // every page is ten requests; the index alone is one, and it already
-        // carries the two things that do change between page writes -- each
-        // tier's pending run and the block that is running now. So a quiet
-        // wake-up costs a single request, and only a wake-up that finds new
-        // pages pays for them.
+        // That is what makes a frequent background fetch affordable. The index
+        // alone is one request, and it already carries the two things that do
+        // change between page writes -- each tier's pending run and the block
+        // that is running now. So a quiet wake-up costs a single request.
         //
         // An empty table always counts as stale, whatever the generation says.
         // A database migration can clear the rows without the plug's archive
@@ -163,19 +177,40 @@ class PowerJournalRepository(
         // skip every page for good.
         val fresh = index.generation != settings.syncedGeneration(device.id) ||
             dao.count(device.id) == 0
+        val anythingStored = dao.count(device.id) > 0
+        val reached = HashMap<Int, Long>()
 
         index.tiers.forEachIndexed { tier, row ->
             if (fresh) {
-                for (key in row.pages) {
-                    var skip = 0
-                    while (true) {
-                        val page = client.page(scriptId, key, skip, pageSlice)
-                        for (triple in page.blocks) {
-                            blocks.add(PowerBlock(device.id, tier, triple[0], triple[1], triple[2]))
-                        }
-                        skip += page.blocks.size
-                        if (page.blocks.isEmpty() || skip >= page.total) break
+                // From where this tier was last read rather than from the
+                // beginning: what the app already has, it never asks for again,
+                // so the plug spends a moment answering rather than minutes
+                // being read out while it is trying to write.
+                //
+                // A little further back than that, because the last block of a
+                // tier is the one that can still change: a merged run keeps
+                // growing until the bucket after it disagrees, and the block
+                // that was the end last time is the block that was extended.
+                var from = if (!anythingStored) 0L
+                           else maxOf(0L, settings.syncedThrough(device.id, tier) - overlap(row.gridSec))
+                var slices = 0
+                while (slices++ < maxSlices) {
+                    val read = client.read(scriptId, tier, from, readSlice)
+                    for (triple in read.blocks) {
+                        blocks.add(PowerBlock(device.id, tier, triple[0], triple[1], triple[2]))
                     }
+                    // The watermark is where the tier's pages end, which is what
+                    // the plug just said rather than what the app worked out.
+                    // Not written yet: a watermark recorded before the rows are
+                    // in would let a crash in between skip that stretch for good.
+                    if (!read.more) {
+                        reached[tier] = read.next
+                        break
+                    }
+                    // A slice that did not move on cannot be continued, and
+                    // asking again would only ask the same question.
+                    if (read.next <= from) break
+                    from = read.next
                 }
             }
             // The merged run a tier is still extending has not reached a page
@@ -209,12 +244,23 @@ class PowerJournalRepository(
         }
 
         dao.upsertAll(blocks)
-        // Only once the rows are in. A generation recorded before the write
-        // would let a crash in between skip pages for good.
+        // Only once the rows are in. A generation or a watermark recorded
+        // before the write would let a crash in between skip that stretch of
+        // the archive for good.
+        reached.forEach { (tier, through) -> settings.setSyncedThrough(device.id, tier, through) }
         settings.setSyncedGeneration(device.id, index.generation)
         settings.setLastSync(device.id, System.currentTimeMillis() / 1000)
         SyncResult(blocks.size, index.atticBytes, index.archiveEnd)
     }
+
+    /**
+     * How far behind its own watermark a tier is read again.
+     *
+     * Two grid steps, so the bucket that was open and the one before it are
+     * both asked for afresh, with a floor for the native tier -- its grid is a
+     * single second and two of those would be no overlap at all.
+     */
+    private fun overlap(gridSec: Long): Long = maxOf(300L, gridSec * 2)
 
     companion object {
         /**
@@ -223,5 +269,12 @@ class PowerJournalRepository(
          * Node to run the minifier with.
          */
         const val ASSET = "power-journal.min.js"
+
+        /**
+         * The read endpoint this app knows how to talk to. A plug answering
+         * less than this is upgraded before it is read, because the endpoint it
+         * is offering cannot be read reliably at all.
+         */
+        const val CLIENT_API = 2
     }
 }
