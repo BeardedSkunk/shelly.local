@@ -239,7 +239,7 @@ private fun SensorSettingsCard(state: SensorUiState, email: String?, vm: SensorV
                         )
                     }
                 }
-                if (state.boxes.isEmpty()) {
+                if (state.boxes.isEmpty() && !state.loadingBoxes) {
                     Text(
                         stringResource(R.string.sensor_open_list_first),
                         style = MaterialTheme.typography.bodySmall,

@@ -149,6 +149,8 @@ fun SeriesChart(
         Row(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
             UnitLabel(energy.unit, TextAlign.End)
             Spacer(Modifier.weight(1f))
+            // Only where there is a second axis. Holding the gutter open for one
+            // that does not exist pushed the whole chart off centre.
             if (money != null) UnitLabel(money.unit, TextAlign.Start)
         }
         Row(Modifier.fillMaxWidth()) {
@@ -210,7 +212,10 @@ fun SeriesChart(
                     }
                 }
 
-                if (labels.isNotEmpty()) BarLabels(labels)
+                // With no gutter on the right, the last label has room to
+                // stand over the last bar instead of being squeezed by figures
+                // that are no longer there.
+                if (labels.isNotEmpty()) BarLabels(labels, padEnd = money != null)
             }
             if (money != null) AxisLabels(values = money.ticks, align = TextAlign.Start)
         }
@@ -436,7 +441,7 @@ private fun AxisLabels(values: List<String>, align: TextAlign) {
  * belongs to, and only every few slots carries a label anyway.
  */
 @Composable
-private fun BarLabels(labels: List<PowerAxisLabel>) {
+private fun BarLabels(labels: List<PowerAxisLabel>, padEnd: Boolean = true) {
     Layout(
         content = {
             labels.forEach { label ->
@@ -457,7 +462,12 @@ private fun BarLabels(labels: List<PowerAxisLabel>) {
         layout(width, placeables.maxOfOrNull { it.height } ?: 0) {
             placeables.forEachIndexed { index, placeable ->
                 val centre = (labels[index].at * width).toInt()
-                placeable.place(centre - placeable.width / 2, 0)
+                var x = centre - placeable.width / 2
+                // Where nothing sits to the right, a label at the very end
+                // would hang off the screen; nudge it back in rather than drop
+                // it, since it is the one naming the newest bar.
+                if (!padEnd) x = x.coerceAtMost(width - placeable.width)
+                placeable.place(x.coerceAtLeast(0), 0)
             }
         }
     }

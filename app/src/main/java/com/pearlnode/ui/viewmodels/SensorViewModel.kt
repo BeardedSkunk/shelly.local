@@ -162,6 +162,10 @@ class SensorViewModel(
             ) }
             if (_uiState.value.configured) sync()
             inspectScript()
+            // Fetched without being asked for. The station is shown by name and
+            // the token comes from the same answer, so leaving it until someone
+            // opens the dropdown meant a nameless station and a dead button.
+            if (!settings.current.osmEmail.isNullOrBlank()) loadBoxes()
         }
     }
 
