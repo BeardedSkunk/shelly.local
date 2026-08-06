@@ -624,13 +624,12 @@ fun barLabels(
     }
     val marked = when (window.level) {
         PowerLevel.DAY -> everyThird(buckets, formats)
-        // The 30th only where it is not the last bar, which is to say only in a
-        // month of 31 days. In a shorter month it is the end of the chart and a
-        // label there hangs half off it; in a longer one it is an ordinary mark
-        // and the gap from the 25th to the end is wide enough to want one.
+        // The 30th as well, now that a label at the end has a gutter to hang
+        // into: the gap from the 25th to the end of a month is wide enough to
+        // want a mark in it.
         PowerLevel.MONTH -> buckets.indices.filter { index ->
             val day = dayOfMonth(index)
-            day in MONTH_MARKS || (day == 30 && index < buckets.size - 1)
+            day in MONTH_MARKS || day == 30
         }
         else -> buckets.indices.toList()
     }
@@ -667,7 +666,11 @@ private val MONTH_MARKS = listOf(5, 10, 15, 20, 25)
  * which hour moves through the day, and neither start can be picked in advance.
  */
 private fun everyThird(buckets: List<PowerBucket>, formats: Formats): List<Int> {
-    val last = buckets.size - 2
+    // Up to and including the last bar. It used to stop one short, so that a
+    // label at the end could not hang off the chart -- but the chart now keeps
+    // an empty gutter on that side, and the newest bar is the one anybody looks
+    // at first, so it was the worst one to leave unnamed.
+    val last = buckets.size - 1
     val options = listOf(1, 2).map { start -> (start..last step 3).toList() }
     val midnight = { marks: List<Int> ->
         marks.any { formats.hour(buckets[it].startUtc * 1000) == "0" }
