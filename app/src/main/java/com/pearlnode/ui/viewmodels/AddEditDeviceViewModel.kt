@@ -70,6 +70,10 @@ data class AddEditUiState(
      */
     val discoveredBlu: List<DiscoveredBlu> = emptyList(),
     val scanningBlu: Boolean = false,
+    /** True while editing a sensor that lives behind another device. */
+    val isBluSensor: Boolean = false,
+    /** The Shelly it is reached through, to be shown rather than asked for. */
+    val hostName: String? = null,
     // IP probe for manual add
     val detecting: Boolean = false,
     val detectError: String? = null,
@@ -105,10 +109,15 @@ class AddEditDeviceViewModel(
                     .first()
                 existingDevice = device
                 val credentials = repo.getCredentials(device.id)
+                val host = device.hostDeviceId?.let { id ->
+                    repo.getAllDevices().find { it.id == id }
+                }
                 _uiState.update { s ->
                     s.copy(
                         name = device.name, ip = device.ipAddress, type = device.type,
                         username = credentials?.first ?: "", password = credentials?.second ?: "",
+                        isBluSensor = device.isBluSensor,
+                        hostName = host?.name,
                     )
                 }
             }
@@ -372,7 +381,13 @@ class AddEditDeviceViewModel(
     fun save() {
         val state = _uiState.value
         if (state.name.isBlank()) { _uiState.update { it.copy(error = "Name is required") }; return }
-        if (!isValidIp(state.ip)) { _uiState.update { it.copy(ipError = "Enter a valid IP address") }; return }
+        // A BLU sensor has no address of its own and never will: it is reached
+        // through the Shelly it is paired with, and demanding one here left it
+        // with a form that could not be saved at all.
+        if (!state.isBluSensor && !isValidIp(state.ip)) {
+            _uiState.update { it.copy(ipError = "Enter a valid IP address") }
+            return
+        }
         _uiState.update { it.copy(saving = true, error = null) }
         viewModelScope.launch {
             runCatching {
@@ -383,6 +398,13 @@ class AddEditDeviceViewModel(
                     type       = state.type,
                     generation = existingDevice?.generation ?: ShellyGeneration.UNKNOWN,
                     hasAuth    = state.username.isNotBlank(),
+                    // Carried over rather than re-entered. These are what make
+                    // it a sensor rather than a device with a blank address,
+                    // and nothing on this form can set them.
+                    hostDeviceId = existingDevice?.hostDeviceId,
+                    bleAddress = existingDevice?.bleAddress,
+                    reportedGeneration = existingDevice?.reportedGeneration,
+                    sortOrder = existingDevice?.sortOrder ?: 0,
                 )
                 val user = state.username.takeIf { it.isNotBlank() }
                 val pass = state.password.takeIf { it.isNotBlank() }

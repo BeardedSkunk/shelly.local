@@ -314,6 +314,45 @@ private fun DeviceForm(
     ) {
         Spacer(Modifier.height(4.dp))
 
+        // A BLU sensor has no address and no credentials of its own -- both
+        // belong to the Shelly it is heard through. All that can be edited here
+        // is what it is called, so the rest of the form is not shown rather
+        // than shown and refused.
+        if (uiState.isBluSensor) {
+            uiState.hostName?.let { host ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Bluetooth, contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.blu_via, host),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = uiState.name, onValueChange = onNameChange,
+                label = { Text(stringResource(R.string.device_name)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            uiState.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            Button(
+                onClick = onSave,
+                enabled = !uiState.saving && uiState.name.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(saveLabel) }
+            Spacer(Modifier.height(24.dp))
+            return@Column
+        }
+
         OutlinedTextField(
             value = uiState.ip, onValueChange = onIpChange,
             label = { Text(stringResource(R.string.ip_address)) },

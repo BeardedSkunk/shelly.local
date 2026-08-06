@@ -225,6 +225,18 @@ class AppSettings(context: Context) {
         }.apply()
     }
 
+    /**
+     * Whether this station is indoors, which decides what its humidity means.
+     *
+     * Learned from openSenseMap, where it was answered when the box was
+     * created, and overridable here because the app cannot see the room.
+     */
+    fun isIndoor(deviceId: String): Boolean = prefs.getBoolean("${deviceId}_osm_indoor", false)
+
+    fun setIndoor(deviceId: String, indoor: Boolean) {
+        prefs.edit().putBoolean("${deviceId}_osm_indoor", indoor).apply()
+    }
+
     /** Every device that has an openSenseMap station chosen. */
     fun devicesWithBox(): List<String> =
         prefs.all.keys.filter { it.endsWith("_osm_box") }.map { it.removeSuffix("_osm_box") }

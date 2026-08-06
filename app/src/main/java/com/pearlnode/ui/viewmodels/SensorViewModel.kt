@@ -88,6 +88,12 @@ data class SensorUiState(
     val boxes: List<OsmBox> = emptyList(),
     val boxId: String? = null,
     val loadingBoxes: Boolean = false,
+    /**
+     * Whether the station stands in a room, which decides what its humidity
+     * means: indoors 40 to 60 per cent is a target, outdoors the same figure
+     * says nothing without the temperature beside it.
+     */
+    val indoor: Boolean = false,
     val syncing: Boolean = false,
     val deploying: Boolean = false,
     val scriptDeployed: Boolean = false,
@@ -127,6 +133,7 @@ class SensorViewModel(
         SensorUiState(
             zone = ZoneId.systemDefault(),
             boxId = settings.boxId(deviceId),
+            indoor = settings.isIndoor(deviceId),
             lastSyncUtc = settings.lastSensorSync(deviceId),
         )
     )
@@ -192,6 +199,8 @@ class SensorViewModel(
                     // The station the device is already using wins over an empty
                     // setting, and never overwrites one the user has chosen.
                     boxId = state.boxId ?: found?.boxId,
+                    indoor = state.boxes.firstOrNull { b -> b.id == found?.boxId }
+                        ?.isIndoor ?: state.indoor,
                 )
             }
             val box = found?.boxId
@@ -480,11 +489,21 @@ class SensorViewModel(
      * Ties this sensor to a box, and works out which of its sensors is the
      * temperature and which the humidity from what the box says they measure.
      */
+    /** Which way round the station stands, when openSenseMap has it wrong. */
+    fun setIndoor(indoor: Boolean) {
+        settings.setIndoor(deviceId, indoor)
+        _uiState.update { it.copy(indoor = indoor) }
+    }
+
     fun chooseBox(box: OsmBox) {
         sensors.useBox(deviceId, box.id)
+        // openSenseMap asked where the box stands when it was created, so take
+        // that answer rather than asking again. It stays overridable, because
+        // the app cannot see the room.
+        settings.setIndoor(deviceId, box.isIndoor)
         settings.setSensorId(deviceId, SensorKind.TEMPERATURE.name, box.sensors.match("emperat")?.id)
         settings.setSensorId(deviceId, SensorKind.HUMIDITY.name, box.sensors.match("umid", "euchte")?.id)
-        _uiState.update { it.copy(boxId = box.id) }
+        _uiState.update { it.copy(boxId = box.id, indoor = box.isIndoor) }
         sync()
     }
 

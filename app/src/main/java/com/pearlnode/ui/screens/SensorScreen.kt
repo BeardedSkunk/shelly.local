@@ -324,10 +324,25 @@ private fun SeriesCard(
                 fixedScale = if (temperature) null else Scale(step = 25_000.0, steps = 4),
                 // Degrees go below the line for real; humidity never does.
                 signed = temperature,
-                barColor = { milli ->
-                    if (temperature) TemperatureColors.of(milli / 1000.0) else HumidityColor
+                barColor = { index, milli ->
+                    when {
+                        temperature -> TemperatureColors.of(milli / 1000.0)
+                        state.indoor -> HumidityColors.of(milli / 1000.0)
+                        // Outdoors the pair decides: this hour's humidity with
+                        // this hour's temperature, which is the bar beside it
+                        // in the other chart.
+                        else -> outdoorColour(state, index, milli)
+                    }
                 },
-                bands = if (temperature) TemperatureColors.ladder else null,
+                bands = when {
+                    temperature -> { _ -> TemperatureColors.ladder }
+                    state.indoor -> { _ -> HumidityColors.ladder }
+                    // Outdoors the cuts move with the hour's temperature: the
+                    // same fifty per cent is crisp in the morning and sticky in
+                    // the afternoon, and where the colour changes is where that
+                    // happened.
+                    else -> { index -> outdoorLadder(state, index) }
+                },
                 highlight = series.scrubbed,
                 onBarTap = if (state.canDrill) vm::drillInto else null,
                 onSwipe = vm::step,
@@ -350,6 +365,36 @@ private fun SeriesCard(
  * Left and right are the extremes of the period, which for a reading is what a
  * total is for a quantity -- adding temperatures up would mean nothing.
  */
+/**
+ * Where the comfort bands fall on this hour's humidity axis.
+ *
+ * Needs the temperature of the same hour, which is the bar at the same index in
+ * the chart above. Without one there is nothing to work it out from, so the
+ * plain indoor ladder stands in.
+ */
+private fun outdoorLadder(state: SensorUiState, index: Int): List<Pair<Double, Color>> {
+    val temperature = state.temperature.buckets.getOrNull(index)
+        ?.takeIf { it.coarsestTier != null }?.energyMwh
+        ?: return HumidityColors.ladder
+    return DewPointColors.ladderFor(temperature / 1000.0)
+}
+
+/**
+ * How muggy that hour was, from its dew point.
+ *
+ * Falls back to the plain indoor scale when the temperature of that hour is not
+ * known -- which happens at the very edges of a window, where one series has a
+ * reading and the other has not caught up.
+ */
+private fun outdoorColour(state: SensorUiState, index: Int, humidityMilli: Double): Color {
+    val temperature = state.temperature.buckets.getOrNull(index)
+        ?.takeIf { it.coarsestTier != null }?.energyMwh
+        ?: return HumidityColors.of(humidityMilli / 1000.0)
+    val dew = DewPointColors.dewPoint(temperature / 1000.0, humidityMilli / 1000.0)
+        ?: return HumidityColors.of(humidityMilli / 1000.0)
+    return DewPointColors.of(dew)
+}
+
 @Composable
 private fun SeriesTotals(series: SensorSeries, temperature: Boolean, formats: Formats) {
     val low = series.lowMilli?.toDouble()

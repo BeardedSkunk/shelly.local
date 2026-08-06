@@ -29,8 +29,16 @@ data class OsmBox(
      * without copying them by hand.
      */
     val accessToken: String?,
+    /**
+     * Where the station stands: "indoor", "outdoor", "mobile". openSenseMap
+     * asks for it when a box is created, which is better than asking again --
+     * and it decides what a humidity reading means, so it is not decoration.
+     */
+    val exposure: String?,
     val sensors: List<OsmSensor>,
-)
+) {
+    val isIndoor: Boolean get() = exposure.equals("indoor", ignoreCase = true)
+}
 
 data class OsmSensor(
     val id: String,
@@ -170,6 +178,7 @@ fun parseBox(box: JsonObject): OsmBox = OsmBox(
     id = box["_id"]?.jsonPrimitive?.contentOrNull.orEmpty(),
     name = box["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
     accessToken = box["access_token"]?.jsonPrimitive?.contentOrNull,
+    exposure = box["exposure"]?.jsonPrimitive?.contentOrNull,
     sensors = box["sensors"]?.jsonArray.orEmpty().mapNotNull { element ->
         val sensor = element as? JsonObject ?: return@mapNotNull null
         val id = sensor["_id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null

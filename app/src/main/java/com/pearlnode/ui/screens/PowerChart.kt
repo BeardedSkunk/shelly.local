@@ -102,7 +102,15 @@ fun SeriesChart(
      * things by it: energy uses it for direction, and temperature for how warm
      * it was, which is a scale rather than a pair.
      */
-    barColor: ((Double) -> Color)? = null,
+    /**
+     * The colour of one bar, from its position as well as its value.
+     *
+     * The index is there for a series whose meaning depends on another one.
+     * Outdoor humidity is the case: how muggy it felt follows the dew point,
+     * which needs the temperature of the same hour, and that is found at the
+     * same index in the other chart.
+     */
+    barColor: ((Int, Double) -> Color)? = null,
     /**
      * Colour a bar by the ground it covers rather than by where it ends.
      *
@@ -111,7 +119,7 @@ fun SeriesChart(
      * middle and red at the top, and where it changes is where that temperature
      * was passed. Null draws each bar in one colour.
      */
-    bands: List<Pair<Double, Color>>? = null,
+    bands: ((Int) -> List<Pair<Double, Color>>)? = null,
     /**
      * A scale to use instead of one worked out from the data.
      *
@@ -147,7 +155,7 @@ fun SeriesChart(
     // Energy's own reading of the colour, which is direction rather than scale.
     val drawnDefault = PowerDrawnColor
     val earnedDefault = PowerEarnedColor
-    val colourOf = barColor ?: { value -> if (value >= 0) drawnDefault else earnedDefault }
+    val colourOf = barColor ?: { _, value -> if (value >= 0) drawnDefault else earnedDefault }
     val known = buckets.filter { it.coarsestTier != null }
     // What each bar will read as, the last one included: the axis has to hold
     // the projection or the bar it belongs to would run off the top.
@@ -212,7 +220,7 @@ fun SeriesChart(
                         if (length <= 0f) return@forEachIndexed
                         val left = index * slot + (slot - barWidth) / 2f
                         val down = signed && value < 0
-                        val colour = colourOf(value)
+                        val colour = colourOf(index, value)
                         val solid = if (index == highlight) colour else colour.copy(alpha = 0.75f)
                         // The whole bar first, faintly, then the measured part
                         // over it. Where nothing is being projected the two are
@@ -225,7 +233,8 @@ fun SeriesChart(
                                 cornerRadius = CornerRadius(barWidth / 4f),
                             )
                         }
-                        if (bands == null) {
+                        val ladder = bands?.invoke(index)
+                        if (ladder == null) {
                             drawRoundRect(
                                 color = solid,
                                 topLeft = Offset(left, if (down) baseline else baseline - measured),
@@ -241,7 +250,7 @@ fun SeriesChart(
                             // because they are the middle of one shape.
                             val top = if (down) baseline else baseline - measured
                             val fade = if (index == highlight) 1f else 0.75f
-                            for ((from, to, colour) in slices(value, bands)) {
+                            for ((from, to, colour) in slices(value, ladder)) {
                                 val yFrom = baseline - (from / scale.span).toFloat() * size.height
                                 val yTo = baseline - (to / scale.span).toFloat() * size.height
                                 clipRect(
