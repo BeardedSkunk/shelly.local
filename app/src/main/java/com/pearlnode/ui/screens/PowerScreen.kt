@@ -331,7 +331,7 @@ private fun ChartCard(
             }
 
             Spacer(Modifier.padding(4.dp))
-            PeriodPicker(state, onOpenPicker = onOpenPicker, onStep = onStep)
+            PeriodPicker(state.window, state.atLatest, onOpenPicker = onOpenPicker, onStep = onStep)
 
             Spacer(Modifier.padding(8.dp))
             val cents = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
@@ -371,7 +371,12 @@ private fun ChartCard(
  * nothing after now to show.
  */
 @Composable
-private fun PeriodPicker(state: PowerUiState, onOpenPicker: () -> Unit, onStep: (Long) -> Unit) {
+fun PeriodPicker(
+    window: PowerWindow,
+    atLatest: Boolean,
+    onOpenPicker: () -> Unit,
+    onStep: (Long) -> Unit,
+) {
     val rollingLabel = stringResource(R.string.power_last_24h)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { onStep(-1) }) {
@@ -382,10 +387,10 @@ private fun PeriodPicker(state: PowerUiState, onOpenPicker: () -> Unit, onStep: 
                 Icon(Icons.Default.CalendarMonth, contentDescription = null,
                     modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(if (state.window.rolling) rollingLabel else state.window.label())
+                Text(if (window.rolling) rollingLabel else window.label())
             }
         }
-        IconButton(onClick = { onStep(1) }, enabled = !state.atLatest) {
+        IconButton(onClick = { onStep(1) }, enabled = !atLatest) {
             Icon(Icons.Default.ChevronRight, contentDescription = stringResource(R.string.power_later))
         }
     }
@@ -408,7 +413,7 @@ private fun PeriodPicker(state: PowerUiState, onOpenPicker: () -> Unit, onStep: 
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PeriodPickerDialog(
+fun PeriodPickerDialog(
     picker: PowerPicker,
     onPick: (PowerWindow) -> Unit,
     onPage: (Long) -> Unit,
@@ -515,7 +520,6 @@ private fun PeriodPickerDialog(
 private fun Totals(state: PowerUiState, formats: Formats) {
     val kwh = state.totalKwh
     val euro = state.totalEuro
-    val mixed = state.hasExport && state.drawnKwh > 0
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Column {
             Text(stringResource(R.string.power_total_energy),
@@ -523,19 +527,8 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(String.format(Locale.getDefault(), "%.2f kWh", abs(kwh)),
                 style = MaterialTheme.typography.titleMedium)
-            // With both directions in the same span, the net figure alone hides
-            // most of what happened.
-            if (mixed) {
-                Text(
-                    stringResource(
-                        R.string.power_split,
-                        String.format(Locale.getDefault(), "%.2f", state.drawnKwh),
-                        String.format(Locale.getDefault(), "%.2f", abs(state.exportedKwh)),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            // No split line here. It ran wider than the column and pushed the
+            // middle one off centre, and the middle is where the eye goes.
         }
         // The middle column is the one that changes under the finger. Left and
         // right describe the whole period and do not move; this one answers
@@ -580,7 +573,7 @@ private fun Totals(state: PowerUiState, formats: Formats) {
     }
 }
 
-private fun levelLabel(level: PowerLevel): Int = when (level) {
+fun levelLabel(level: PowerLevel): Int = when (level) {
     PowerLevel.HOUR -> R.string.power_range_hour
     PowerLevel.DAY -> R.string.power_range_day
     PowerLevel.WEEK -> R.string.power_range_week
@@ -606,7 +599,7 @@ private fun levelLabel(level: PowerLevel): Int = when (level) {
  *    date is looked up by, and the 1st and the last are the ends again.
  *  - a week and a year every bar, because seven and twelve both fit.
  */
-private fun barLabels(
+fun barLabels(
     window: PowerWindow,
     buckets: List<PowerBucket>,
     zone: ZoneId,

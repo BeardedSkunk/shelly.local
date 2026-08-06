@@ -53,6 +53,21 @@
     <string name="settings_preview">Jetzt: %1$s</string>
 
     <!-- Shelly BLU Sensoren -->
+    <string name="settings_osm">openSenseMap</string>
+    <string name="settings_osm_email">E-Mail</string>
+    <string name="settings_osm_password">Passwort</string>
+    <string name="settings_osm_sign_in">Anmelden</string>
+    <string name="settings_osm_sign_out">Abmelden</string>
+    <string name="settings_osm_signed_in">Angemeldet. Stationen lassen sich jetzt per Name wählen.</string>
+    <string name="settings_osm_hint">Nur nötig, um die Stationen aufzulisten und das Push-Skript einzurichten. Zum Lesen der Historie braucht es kein Konto.</string>
+    <string name="sensor_title">Messwerte</string>
+    <string name="sensor_box">openSenseMap-Station</string>
+    <string name="sensor_pick_box">Station wählen…</string>
+    <string name="sensor_no_boxes">Keine Stationen in diesem Konto</string>
+    <string name="sensor_no_account">Erst in den Einstellungen bei openSenseMap anmelden — daher kommen die Stationen.</string>
+    <string name="sensor_unconfigured">Station wählen, auf die diese Werte gepusht werden, dann kommt die Historie von allein.</string>
+    <string name="sensor_low">Tiefstwert</string>
+    <string name="sensor_high">Höchstwert</string>
     <string name="blu_title">BLU-Sensor</string>
     <string name="blu_via">über %1$s</string>
     <string name="blu_temperature">Temperatur</string>
@@ -153,7 +168,7 @@
     <string name="power_range_month">Monat</string>
     <string name="power_range_year">Jahr</string>
     <string name="power_now">Jetzt</string>
-    <string name="power_at_bar">An dieser Stelle</string>
+    <string name="power_at_bar">Ausgewählt</string>
     <string name="power_total_energy">Energie</string>
     <string name="power_cost">Kosten</string>
     <string name="power_earned">Ertrag</string>

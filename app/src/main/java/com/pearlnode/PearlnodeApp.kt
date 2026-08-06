@@ -9,6 +9,7 @@ import com.pearlnode.data.FirmwareRepository
 import com.pearlnode.data.PowerJournalRepository
 import com.pearlnode.data.PowerSyncWorker
 import com.pearlnode.data.SensorRepository
+import com.pearlnode.data.SensorSyncWorker
 import com.pearlnode.data.db.AppDatabase
 import com.pearlnode.security.CredentialStore
 
@@ -40,5 +41,9 @@ class PearlnodeApp : Application() {
         for (deviceId in powerJournalRepository.settings.enabledDeviceIds()) {
             PowerSyncWorker.enqueue(this, deviceId)
         }
+        // The same for every sensor that has a station chosen: scheduling is
+        // idempotent, and an install that predates this worker would otherwise
+        // have sensors configured and nothing fetching for them.
+        for (device in appSettings.devicesWithBox()) SensorSyncWorker.enqueue(this, device)
     }
 }

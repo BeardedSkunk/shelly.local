@@ -114,6 +114,10 @@ class Formats(
 
     // ----------------------------------------------------------- temperature
 
+    /** What a temperature axis is measured in, once, at its head. */
+    val degreeUnit: String
+        get() = if (temperature == TemperatureUnit.FAHRENHEIT) "°F" else "°C"
+
     /** A reading in degrees Celsius, on whichever scale the user reads. */
     fun temperature(celsius: Double): String = when (temperature) {
         TemperatureUnit.FAHRENHEIT ->

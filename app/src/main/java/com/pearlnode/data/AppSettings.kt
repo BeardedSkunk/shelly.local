@@ -225,6 +225,10 @@ class AppSettings(context: Context) {
         }.apply()
     }
 
+    /** Every device that has an openSenseMap station chosen. */
+    fun devicesWithBox(): List<String> =
+        prefs.all.keys.filter { it.endsWith("_osm_box") }.map { it.removeSuffix("_osm_box") }
+
     /** Unix second the readings of this device were last fetched. */
     fun lastSensorSync(deviceId: String): Long = prefs.getLong("${deviceId}_osm_synced", 0L)
 

@@ -119,10 +119,19 @@ data class PowerUiState(
         else bucket.energyMwh * 3600.0 / span / 1000.0
     }
 
-    /** What that bar cost or earned, priced the same way the total is. */
+    /**
+     * What that bar cost or earned, from the reader's side of the meter.
+     *
+     * Negated against the energy it comes from, and only here. Energy is signed
+     * by direction -- positive is drawn from the grid -- but money is signed by
+     * whether you are up or down on it, and those are opposites: a kilowatt
+     * hour drawn is a positive amount of energy and a negative amount of money.
+     * The watts beside it keep the energy convention, because a watt is a
+     * direction and not a balance.
+     */
     val scrubbedCents: Double? get() = scrubbedBucket?.takeIf { it.coarsestTier != null }?.let { bucket ->
         val kwh = bucket.energyMwh / 1_000_000.0
-        kwh * (if (kwh < 0) feedInCentsPerKwh ?: priceCentsPerKwh else priceCentsPerKwh)
+        -kwh * (if (kwh < 0) feedInCentsPerKwh ?: priceCentsPerKwh else priceCentsPerKwh)
     }
 
     /**

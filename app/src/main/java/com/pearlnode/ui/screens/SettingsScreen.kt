@@ -15,10 +15,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pearlnode.PearlnodeApp
+import kotlinx.coroutines.launch
 import com.pearlnode.R
 import com.pearlnode.data.AppPrefs
 import com.pearlnode.data.AppSettings
@@ -63,6 +65,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             LanguageCard()
             RegionalCard(prefs, formats, settings)
             EnergyCard(prefs, formats, settings)
+            OpenSenseMapCard(prefs)
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -155,6 +158,88 @@ private fun PriceField(value: Double, label: String, formats: Formats, onValue: 
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+// --------------------------------------------------------------- opensensemap
+
+/**
+ * The account the sensor histories are read under.
+ *
+ * One account covers every station, which is why it is here rather than beside
+ * one of them. Reading measurements needs none of this -- that route is public
+ * -- so the charts keep working when the sign-in lapses; what the account buys
+ * is the list of stations by name, and the token a push script has to be given.
+ */
+@Composable
+private fun OpenSenseMapCard(prefs: AppPrefs) {
+    val app = LocalContext.current.applicationContext as PearlnodeApp
+    val scope = rememberCoroutineScope()
+    var email by remember(prefs.osmEmail) { mutableStateOf(prefs.osmEmail.orEmpty()) }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    SettingsCard(stringResource(R.string.settings_osm)) {
+        if (!prefs.osmEmail.isNullOrBlank()) {
+            Text(prefs.osmEmail, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                stringResource(R.string.settings_osm_signed_in),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = {
+                scope.launch { runCatching { app.sensorRepository.signOut() } }
+            }) { Text(stringResource(R.string.settings_osm_sign_out)) }
+            return@SettingsCard
+        }
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text(stringResource(R.string.settings_osm_email)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text(stringResource(R.string.settings_osm_password)) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = {
+                    busy = true
+                    message = null
+                    scope.launch {
+                        val result = runCatching { app.sensorRepository.signIn(email.trim(), password) }
+                        busy = false
+                        password = ""
+                        message = result.exceptionOrNull()?.let { it.message ?: it.toString() }
+                    }
+                },
+                enabled = !busy && email.isNotBlank() && password.isNotBlank(),
+            ) { Text(stringResource(R.string.settings_osm_sign_in)) }
+            if (busy) {
+                Spacer(Modifier.width(12.dp))
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+        }
+        message?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Text(
+            stringResource(R.string.settings_osm_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 // ----------------------------------------------------------------- language

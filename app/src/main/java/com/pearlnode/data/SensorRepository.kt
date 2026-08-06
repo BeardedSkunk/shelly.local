@@ -28,12 +28,18 @@ data class SensorSyncResult(val blocksStored: Int, val throughUtc: Long?)
  * its token.
  */
 class SensorRepository(
-    context: Context,
+    private val context: Context,
     private val dao: SensorBlockDao,
     private val settings: AppSettings,
     private val client: OpenSenseMapClient = OpenSenseMapClient(),
 ) {
     private val credentials = CredentialStore(context.applicationContext)
+
+    /** Ties a device to a station and arms the background fetch for it. */
+    fun useBox(deviceId: String, boxId: String) {
+        settings.setBoxId(deviceId, boxId)
+        SensorSyncWorker.enqueue(context, deviceId)
+    }
 
     fun observeRange(deviceId: String, kind: SensorKind, fromUtc: Long, toUtc: Long): Flow<List<SensorBlock>> =
         dao.observeRange(deviceId, kind, fromUtc, toUtc)

@@ -48,6 +48,7 @@ fun BluScreen(
     deviceId: String,
     onBack: () -> Unit,
     onHost: (String) -> Unit,
+    onReadings: () -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as PearlnodeApp
     val settings = app.appSettings
@@ -80,7 +81,7 @@ fun BluScreen(
             if (state.error != null && state.sensor == null) {
                 UnreachableCard(state.error!!)
             }
-            HeadlineCard(state, formats)
+            HeadlineCard(state, formats, onReadings)
             ReadingsCard(state, formats)
             HealthCard(state, formats)
             HostCard(state, onHost)
@@ -91,10 +92,19 @@ fun BluScreen(
 
 /** The reading the sensor is really about, as big as it can honestly be. */
 @Composable
-private fun HeadlineCard(state: BluViewModel.UiState, formats: Formats) {
+private fun HeadlineCard(
+    state: BluViewModel.UiState,
+    formats: Formats,
+    onReadings: () -> Unit,
+) {
     val sensor = state.sensor
     val headline = sensor?.headline
-    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    // The big number is also the way in to its history, the way the power card
+    // is on a plug: the thing you are looking at is the thing you want more of.
+    Card(
+        onClick = onReadings,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

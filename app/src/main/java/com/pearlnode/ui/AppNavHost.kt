@@ -12,6 +12,7 @@ import com.pearlnode.ui.screens.BluScreen
 import com.pearlnode.ui.screens.DeviceControlScreen
 import com.pearlnode.ui.screens.DeviceListScreen
 import com.pearlnode.ui.screens.PowerScreen
+import com.pearlnode.ui.screens.SensorScreen
 import com.pearlnode.ui.screens.SettingsScreen
 
 @Composable
@@ -40,7 +41,15 @@ fun AppNavHost(repo: DeviceRepository, initialDeviceId: String? = null) {
                 deviceId = deviceId,
                 onBack = { nav.popBackStack() },
                 onHost = { id -> nav.navigate("control/$id") },
+                onReadings = { nav.navigate("readings/$deviceId") },
             )
+        }
+        composable(
+            "readings/{deviceId}",
+            arguments = listOf(navArgument("deviceId") { type = NavType.StringType })
+        ) { back ->
+            val deviceId = back.arguments?.getString("deviceId") ?: return@composable
+            SensorScreen(repo = repo, deviceId = deviceId, onBack = { nav.popBackStack() })
         }
         composable("settings") {
             SettingsScreen(onBack = { nav.popBackStack() })
