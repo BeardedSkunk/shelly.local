@@ -2,7 +2,9 @@ package com.pearlnode.data
 
 import android.content.Context
 import com.pearlnode.data.api.OpenSenseMapClient
+import com.pearlnode.data.api.InstalledOsmScript
 import com.pearlnode.data.api.OsmBox
+import com.pearlnode.data.api.OsmScript
 import com.pearlnode.data.api.ScriptDeployer
 import com.pearlnode.data.api.ShellyClientFactory
 import com.pearlnode.model.Device
@@ -52,6 +54,11 @@ class SensorRepository(
     }
 
     suspend fun blockCount(deviceId: String): Int = withContext(Dispatchers.IO) { dao.count(deviceId) }
+
+    /** The newest reading on file, for when the sensor itself cannot be reached. */
+    suspend fun latestValue(deviceId: String, kind: SensorKind): Long? = withContext(Dispatchers.IO) {
+        dao.latestValue(deviceId, kind)
+    }
 
     // ------------------------------------------------------------ the account
 
@@ -107,6 +114,45 @@ class SensorRepository(
      * it is filled in here, from the box the user picked out of their own
      * account, and never leaves the device it is written to.
      */
+    /**
+     * The publishing script already on this Shelly, whatever version it is.
+     *
+     * Found by looking for one that talks to openSenseMap rather than by name,
+     * because the first one was written by hand and called something else. What
+     * it is configured for is read out of it, so the screen can say which
+     * station this Shelly is already publishing to without being told.
+     */
+    suspend fun installedScript(host: Device): InstalledOsmScript? = withContext(Dispatchers.IO) {
+        val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }
+        val deployer = ScriptDeployer(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
+        deployer.scripts()
+            .asSequence()
+            .map { (id, name) -> OsmScript.read(id, name, deployer.code(id)) }
+            .firstOrNull { it.boxId != null || it.name == SCRIPT_NAME }
+    }
+
+    /**
+     * Whether what is on the device differs from what this app would put there.
+     *
+     * Compared against the template filled in with the device's own settings,
+     * so a difference means the script itself changed and not merely that it
+     * points at a different station.
+     */
+    fun scriptIsCurrent(installed: InstalledOsmScript): Boolean {
+        val boxId = installed.boxId ?: return false
+        val token = installed.token ?: return false
+        val temperature = installed.temperatureSensorId ?: return false
+        val humidity = installed.humiditySensorId ?: return false
+        return installed.code == fill(boxId, token, temperature, humidity)
+    }
+
+    private fun fill(boxId: String, token: String, temperature: String, humidity: String): String =
+        context.assets.open(ASSET).bufferedReader().use { it.readText() }
+            .replace("{{OSM_URL}}", "https://api.opensensemap.org/boxes/$boxId/data")
+            .replace("{{OSM_TOKEN}}", token)
+            .replace("{{OSM_TEMPERATURE}}", temperature)
+            .replace("{{OSM_HUMIDITY}}", humidity)
+
     suspend fun deployScript(host: Device, box: OsmBox) = withContext(Dispatchers.IO) {
         val token = box.accessToken
             ?: error("this station has no access token -- sign in again")
@@ -116,11 +162,7 @@ class SensorRepository(
             it.title.contains("umid", true) || it.title.contains("euchte", true)
         } ?: error("the station has no humidity sensor")
 
-        val code = context.assets.open(ASSET).bufferedReader().use { it.readText() }
-            .replace("{{OSM_URL}}", "https://api.opensensemap.org/boxes/${box.id}/data")
-            .replace("{{OSM_TOKEN}}", token)
-            .replace("{{OSM_TEMPERATURE}}", temperature.id)
-            .replace("{{OSM_HUMIDITY}}", humidity.id)
+        val code = fill(box.id, token, temperature.id, humidity.id)
         check(!code.contains("{{")) { "the script template still has an unfilled placeholder" }
 
         val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }

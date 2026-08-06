@@ -36,6 +36,20 @@ interface SensorBlockDao {
     @Query("SELECT MAX(startUtc) FROM sensor_blocks WHERE deviceId = :deviceId AND kind = :kind")
     suspend fun latestStart(deviceId: String, kind: SensorKind): Long?
 
+    /**
+     * The newest reading on file, whatever window is on screen.
+     *
+     * Stands in for "now" when the sensor cannot be reached: the copy from
+     * openSenseMap is up to half an hour behind, which is a great deal better
+     * than a dash.
+     */
+    @Query("""
+        SELECT milliValue FROM sensor_blocks
+        WHERE deviceId = :deviceId AND kind = :kind
+        ORDER BY startUtc DESC LIMIT 1
+    """)
+    suspend fun latestValue(deviceId: String, kind: SensorKind): Long?
+
     @Query("SELECT COUNT(*) FROM sensor_blocks WHERE deviceId = :deviceId")
     suspend fun count(deviceId: String): Int
 

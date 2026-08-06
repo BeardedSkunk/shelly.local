@@ -253,21 +253,14 @@ class PowerViewModel(
      */
     private fun observeLivePower() {
         viewModelScope.launch {
-            while (true) {
+            pollLive(intervalMs = 10_000L) {
                 val device = _uiState.value.device
                 val watt = device?.let {
                     runCatching { devices.getStatus(it) }.getOrNull()
                         ?.channels?.firstOrNull()?.power
                 }
                 if (watt != null) _uiState.update { it.copy(livePowerW = watt) }
-                // Until there is a first reading, try again in a moment rather
-                // than after a full interval. The device is read from the
-                // database just after the screen appears, so the first attempt
-                // always finds nothing -- and waiting ten seconds on that left
-                // the figure showing a dash for ten seconds every time the
-                // screen was opened, which reads as "not supported" rather than
-                // as "not yet".
-                delay(if (_uiState.value.livePowerW == null) 1_000L else 10_000L)
+                watt != null
             }
         }
     }

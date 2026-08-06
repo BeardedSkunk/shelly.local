@@ -7,6 +7,7 @@ import com.pearlnode.data.AppSettings
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.Formats
 import com.pearlnode.data.SensorRepository
+import com.pearlnode.data.api.InstalledOsmScript
 import com.pearlnode.data.api.OsmBox
 import com.pearlnode.model.BluQuantity
 import com.pearlnode.model.BucketAggregate
@@ -41,12 +42,35 @@ data class SensorSeries(
     val scrubbed: Int? = null,
     /** What the sensor is reporting right now, from the host over Bluetooth. */
     val liveMilli: Long? = null,
+    /**
+     * The newest reading in the local copy, which stands in for now when the
+     * sensor cannot be reached.
+     */
+    val storedMilli: Long? = null,
+    /**
+     * The lowest and highest the sensor actually read over the window.
+     *
+     * From the stored readings, not from the bars. A bar is an average, so the
+     * highest bar is the warmest hour rather than the warmest moment -- an hour
+     * holding 26 and 25 draws as 25.6, and a figure labelled "highest" that is
+     * lower than one labelled "now" is simply wrong to anyone reading it.
+     */
+    val lowMilli: Long? = null,
+    val highMilli: Long? = null,
 ) {
     val scrubbedBucket: PowerBucket?
         get() = scrubbed?.let { buckets.getOrNull(it) }?.takeIf { it.coarsestTier != null }
 
-    /** Whichever value the middle column is showing: the scrubbed bar, or now. */
-    val shown: Double? get() = scrubbedBucket?.energyMwh ?: liveMilli?.toDouble()
+    /**
+     * Whichever value the middle column shows.
+     *
+     * The scrubbed bar if a finger is on one; otherwise what the sensor says
+     * over Bluetooth; otherwise the newest reading on file. Away from the home
+     * network the first two are unavailable and the third is half an hour old
+     * at worst, which is a great deal closer to now than a dash.
+     */
+    val shown: Double? get() =
+        scrubbedBucket?.energyMwh ?: liveMilli?.toDouble() ?: storedMilli?.toDouble()
 
     val hasData: Boolean get() = buckets.any { it.coarsestTier != null }
 }
@@ -67,6 +91,11 @@ data class SensorUiState(
     val syncing: Boolean = false,
     val deploying: Boolean = false,
     val scriptDeployed: Boolean = false,
+    /** The publishing script already on the host, if there is one. */
+    val installedScript: InstalledOsmScript? = null,
+    /** False when the app carries a newer one than the device is running. */
+    val scriptIsCurrent: Boolean = true,
+    val checkingScript: Boolean = false,
     val lastSyncUtc: Long = 0L,
     val storedBlocks: Int = 0,
     val earliestUtc: Long? = null,
@@ -132,6 +161,47 @@ class SensorViewModel(
                 earliestUtc = runCatching { sensors.earliestStart(deviceId) }.getOrNull(),
             ) }
             if (_uiState.value.configured) sync()
+            inspectScript()
+        }
+    }
+
+    /**
+     * Asks the host what it is already publishing, and takes the answer as the
+     * setting.
+     *
+     * A Shelly that is already pushing knows which station it pushes to, and
+     * that is better information than anything the user could be asked to type.
+     * It is read out of whatever script is there, of whatever version -- so a
+     * device set up before this app existed is recognised rather than treated
+     * as blank.
+     */
+    fun inspectScript() {
+        val host = _uiState.value.host ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(checkingScript = true) }
+            val found = runCatching { sensors.installedScript(host) }.getOrNull()
+            _uiState.update { state ->
+                state.copy(
+                    checkingScript = false,
+                    installedScript = found,
+                    scriptIsCurrent = found?.let { sensors.scriptIsCurrent(it) } ?: true,
+                    // The station the device is already using wins over an empty
+                    // setting, and never overwrites one the user has chosen.
+                    boxId = state.boxId ?: found?.boxId,
+                )
+            }
+            val box = found?.boxId
+            if (box != null && settings.boxId(deviceId) == null) {
+                sensors.useBox(deviceId, box)
+                found.temperatureSensorId?.let {
+                    settings.setSensorId(deviceId, SensorKind.TEMPERATURE.name, it)
+                }
+                found.humiditySensorId?.let {
+                    settings.setSensorId(deviceId, SensorKind.HUMIDITY.name, it)
+                }
+                loadBoxes()
+                sync()
+            }
         }
     }
 
@@ -154,8 +224,17 @@ class SensorViewModel(
                 // MEAN, not SUM: a bucket of a level series is what it stood at,
                 // weighted by how long it stood there.
                 val buckets = bucketize(segments, edges, BucketAggregate.MEAN)
+                // The extremes come from the blocks themselves, which is what
+                // the sensor really said, rather than from the averaged bars.
+                val inWindow = blocks.filter {
+                    it.endUtc > edges.first() && it.startUtc < edges.last()
+                }
                 _uiState.update { state ->
-                    val series = state.series(kind).copy(buckets = buckets)
+                    val series = state.series(kind).copy(
+                        buckets = buckets,
+                        lowMilli = inWindow.minOfOrNull { it.milliValue },
+                        highMilli = inWindow.maxOfOrNull { it.milliValue },
+                    )
                     state.withSeries(series).copy(
                         window = selected,
                         atLatest = selected.isCurrent(nowUtc(), zone()),
@@ -187,23 +266,40 @@ class SensorViewModel(
      */
     private fun observeLive() {
         viewModelScope.launch {
-            while (true) {
-                _uiState.value.device?.let { device ->
-                    runCatching { devices.bluState(device) }.getOrNull()?.let { blu ->
-                        val temp = blu.reading(BluQuantity.TEMPERATURE)?.number
-                        val hum = blu.reading(BluQuantity.HUMIDITY)?.number
-                        _uiState.update { state ->
-                            state
-                                .withSeries(state.temperature.copy(
-                                    liveMilli = temp?.let { Math.round(it * 1000) }
-                                        ?: state.temperature.liveMilli))
-                                .withSeries(state.humidity.copy(
-                                    liveMilli = hum?.let { Math.round(it * 1000) }
-                                        ?: state.humidity.liveMilli))
-                        }
-                    }
+            pollLive(intervalMs = 30_000L) {
+                val device = _uiState.value.device ?: return@pollLive false
+                val blu = runCatching { devices.bluState(device) }.getOrNull()
+                    ?: return@pollLive false
+                val temp = blu.reading(BluQuantity.TEMPERATURE)?.number
+                val hum = blu.reading(BluQuantity.HUMIDITY)?.number
+                _uiState.update { state ->
+                    state
+                        .withSeries(state.temperature.copy(
+                            liveMilli = temp?.let { Math.round(it * 1000) }
+                                ?: state.temperature.liveMilli))
+                        .withSeries(state.humidity.copy(
+                            liveMilli = hum?.let { Math.round(it * 1000) }
+                                ?: state.humidity.liveMilli))
                 }
-                delay(30_000)
+                temp != null || hum != null
+            }
+        }
+        // And the fallback beside it: whatever the local copy holds, for a
+        // visit where the sensor is out of reach the whole time.
+        viewModelScope.launch {
+            pollLive(intervalMs = 60_000L) {
+                val temp = runCatching { sensors.latestValue(deviceId, SensorKind.TEMPERATURE) }
+                    .getOrNull()
+                val hum = runCatching { sensors.latestValue(deviceId, SensorKind.HUMIDITY) }
+                    .getOrNull()
+                _uiState.update { state ->
+                    state
+                        .withSeries(state.temperature.copy(
+                            storedMilli = temp ?: state.temperature.storedMilli))
+                        .withSeries(state.humidity.copy(
+                            storedMilli = hum ?: state.humidity.storedMilli))
+                }
+                temp != null || hum != null
             }
         }
     }
@@ -404,6 +500,7 @@ class SensorViewModel(
             _uiState.update { it.copy(
                 deploying = false,
                 scriptDeployed = result.isSuccess,
+                scriptIsCurrent = result.isSuccess || it.scriptIsCurrent,
                 error = result.exceptionOrNull()?.let { e -> e.message ?: e.toString() },
             ) }
         }

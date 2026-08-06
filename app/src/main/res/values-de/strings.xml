@@ -69,6 +69,11 @@
     <string name="sensor_deploy">Push-Skript einspielen</string>
     <string name="sensor_script_hint">Spielt das Skript, das diese Werte veröffentlicht, auf %1$s — mit dem Token dieser Station.</string>
     <string name="sensor_open_list_first">Einmal die Stationsliste öffnen, damit der Token gelesen werden kann.</string>
+    <string name="sensor_update">Skript aktualisieren</string>
+    <string name="sensor_script_checking">Frage den Shelly, was er ausführt…</string>
+    <string name="sensor_script_none">Von %1$s wird noch nichts veröffentlicht.</string>
+    <string name="sensor_script_current">%1$s veröffentlicht und ist aktuell.</string>
+    <string name="sensor_script_outdated">%1$s veröffentlicht, die App hat aber eine neuere Fassung.</string>
     <string name="sensor_low">Tiefstwert</string>
     <string name="sensor_high">Höchstwert</string>
     <string name="blu_title">BLU-Sensor</string>

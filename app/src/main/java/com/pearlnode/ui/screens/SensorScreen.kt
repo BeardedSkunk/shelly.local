@@ -189,17 +189,43 @@ private fun SensorSettingsCard(state: SensorUiState, email: String?, vm: SensorV
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.sensor_script_hint, state.host.name),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                // What the device is already doing, read off the device. It
+                // knows better than anything that could be typed here.
+                val installed = state.installedScript
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (installed != null) Icons.Default.CheckCircle else Icons.Default.Info,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (installed != null && state.scriptIsCurrent)
+                            MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when {
+                            state.checkingScript -> stringResource(R.string.sensor_script_checking)
+                            installed == null ->
+                                stringResource(R.string.sensor_script_none, state.host.name)
+                            !state.scriptIsCurrent ->
+                                stringResource(R.string.sensor_script_outdated, installed.name)
+                            else -> stringResource(R.string.sensor_script_current, installed.name)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = vm::deployScript,
                         enabled = !state.deploying && state.boxes.isNotEmpty(),
-                    ) { Text(stringResource(R.string.sensor_deploy)) }
+                    ) {
+                        Text(stringResource(
+                            if (installed == null) R.string.sensor_deploy
+                            else R.string.sensor_update
+                        ))
+                    }
                     if (state.deploying) {
                         Spacer(Modifier.width(12.dp))
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -322,9 +348,8 @@ private fun SeriesCard(
  */
 @Composable
 private fun SeriesTotals(series: SensorSeries, temperature: Boolean, formats: Formats) {
-    val known = series.buckets.filter { it.coarsestTier != null }
-    val low = known.minOfOrNull { it.energyMwh }
-    val high = known.maxOfOrNull { it.energyMwh }
+    val low = series.lowMilli?.toDouble()
+    val high = series.highMilli?.toDouble()
     val show: (Double?) -> String = { milli ->
         when {
             milli == null -> "—"

@@ -60,6 +60,18 @@ class ScriptDeployer(
         return id
     }
 
+    /** Every script on the device, by id and name. */
+    fun scripts(): List<Pair<Int, String>> =
+        (rpc("Script.List")["scripts"] as? JsonArray).orEmpty().mapNotNull { entry ->
+            val obj = entry.jsonObject
+            val id = obj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            id to (obj["name"]?.jsonPrimitive?.contentOrNull ?: "")
+        }
+
+    fun code(id: Int): String =
+        rpc("Script.GetCode", buildJsonObject { put("id", id) })["data"]
+            ?.jsonPrimitive?.contentOrNull ?: ""
+
     /** Whether a script of this name is already there, and what it runs as. */
     fun find(name: String): Int? =
         (rpc("Script.List")["scripts"] as? JsonArray)?.firstOrNull { entry ->
@@ -101,6 +113,8 @@ class ScriptDeployer(
             return root["result"] as? JsonObject ?: buildJsonObject {}
         }
     }
+
+    private fun JsonArray?.orEmpty(): List<kotlinx.serialization.json.JsonElement> = this ?: emptyList()
 
     private companion object {
         /** What one RPC body carries comfortably. */

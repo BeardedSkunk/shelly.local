@@ -71,6 +71,11 @@
     <string name="sensor_deploy">Install publishing script</string>
     <string name="sensor_script_hint">Puts the script that publishes these readings onto %1$s, with the token of this station filled in.</string>
     <string name="sensor_open_list_first">Open the station list once so the token can be read.</string>
+    <string name="sensor_update">Update script</string>
+    <string name="sensor_script_checking">Asking the Shelly what it is running…</string>
+    <string name="sensor_script_none">Nothing is publishing from %1$s yet.</string>
+    <string name="sensor_script_current">%1$s is publishing, and is up to date.</string>
+    <string name="sensor_script_outdated">%1$s is publishing, but the app has a newer version.</string>
     <string name="sensor_low">Lowest</string>
     <string name="sensor_high">Highest</string>
     <string name="blu_title">BLU sensor</string>
