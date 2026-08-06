@@ -623,7 +623,7 @@ fun barLabels(
         ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone).dayOfMonth
     }
     val marked = when (window.level) {
-        PowerLevel.DAY -> everyThird(buckets, formats)
+        PowerLevel.DAY -> everyThird(buckets)
         // The 30th as well, now that a label at the end has a gutter to hang
         // into: the gap from the 25th to the end of a month is wide enough to
         // want a mark in it.
@@ -665,18 +665,18 @@ private val MONTH_MARKS = listOf(5, 10, 15, 20, 25)
  * calendar day: the rolling one ends at the next full hour, so which bars are
  * which hour moves through the day, and neither start can be picked in advance.
  */
-private fun everyThird(buckets: List<PowerBucket>, formats: Formats): List<Int> {
-    // Up to and including the last bar. It used to stop one short, so that a
-    // label at the end could not hang off the chart -- but the chart now keeps
-    // an empty gutter on that side, and the newest bar is the one anybody looks
-    // at first, so it was the worst one to leave unnamed.
-    val last = buckets.size - 1
-    val options = listOf(1, 2).map { start -> (start..last step 3).toList() }
-    val midnight = { marks: List<Int> ->
-        marks.any { formats.hour(buckets[it].startUtc * 1000) == "0" }
-    }
-    return options.firstOrNull { !midnight(it) } ?: options.first()
-}
+/**
+ * Every third bar, from the second to the second last.
+ *
+ * Fixed, not chosen. An earlier version shifted the whole run by one to avoid
+ * landing a label on midnight, which put the marks in different places on
+ * charts that were otherwise identical -- and the reason for it went away with
+ * the second axis anyway. The ends are left alone because a label there has
+ * only half a gutter to hang into, and the rest follows: start at the second,
+ * step three, stop at the second last.
+ */
+private fun everyThird(buckets: List<PowerBucket>): List<Int> =
+    if (buckets.size < 3) emptyList() else (1..buckets.size - 2 step 3).toList()
 
 @Composable
 private fun trackingSubtitle(state: PowerUiState): String = when {
