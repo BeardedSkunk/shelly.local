@@ -91,8 +91,14 @@ fun SeriesChart(
      * something else, and a winter week drawn upside up would be a lie.
      */
     signed: Boolean = false,
-    barColor: Color = PowerDrawnColor,
-    negativeColor: Color = PowerEarnedColor,
+    /**
+     * What colour a bar is, from the value it stands for.
+     *
+     * A function rather than a colour because the two charts mean different
+     * things by it: energy uses it for direction, and temperature for how warm
+     * it was, which is a scale rather than a pair.
+     */
+    barColor: ((Double) -> Color)? = null,
     /** The bar under the finger while scrubbing, drawn brighter than the rest. */
     highlight: Int? = null,
     onBarTap: ((Int) -> Unit)? = null,
@@ -101,6 +107,10 @@ fun SeriesChart(
     onScrub: ((Int?) -> Unit)? = null,
     axisColor: Color = MaterialTheme.colorScheme.outlineVariant,
 ) {
+    // Energy's own reading of the colour, which is direction rather than scale.
+    val drawnDefault = PowerDrawnColor
+    val earnedDefault = PowerEarnedColor
+    val colourOf = barColor ?: { value -> if (value >= 0) drawnDefault else earnedDefault }
     val known = buckets.filter { it.coarsestTier != null }
     val scale =
         if (signed) Scale.forRange(
@@ -157,11 +167,7 @@ fun SeriesChart(
                         if (length <= 0f) return@forEachIndexed
                         val left = index * slot + (slot - barWidth) / 2f
                         val down = signed && bucket.energyMwh < 0
-                        val colour = when {
-                            signed -> barColor
-                            bucket.energyMwh >= 0 -> barColor
-                            else -> negativeColor
-                        }
+                        val colour = colourOf(bucket.energyMwh)
                         drawRoundRect(
                             color = if (index == highlight) colour else colour.copy(alpha = 0.75f),
                             topLeft = Offset(left, if (down) baseline else baseline - length),
