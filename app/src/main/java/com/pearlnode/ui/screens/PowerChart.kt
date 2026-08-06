@@ -18,6 +18,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.style.TextAlign
@@ -102,6 +103,15 @@ fun SeriesChart(
      * it was, which is a scale rather than a pair.
      */
     barColor: ((Double) -> Color)? = null,
+    /**
+     * Colour a bar by the ground it covers rather than by where it ends.
+     *
+     * A ladder of upper bounds and the colour up to each. A bar then carries
+     * its own legend: a hot afternoon is blue at the bottom, green through the
+     * middle and red at the top, and where it changes is where that temperature
+     * was passed. Null draws each bar in one colour.
+     */
+    bands: List<Pair<Double, Color>>? = null,
     /**
      * A scale to use instead of one worked out from the data.
      *
@@ -215,12 +225,40 @@ fun SeriesChart(
                                 cornerRadius = CornerRadius(barWidth / 4f),
                             )
                         }
-                        drawRoundRect(
-                            color = solid,
-                            topLeft = Offset(left, if (down) baseline else baseline - measured),
-                            size = Size(barWidth, measured),
-                            cornerRadius = CornerRadius(barWidth / 4f),
-                        )
+                        if (bands == null) {
+                            drawRoundRect(
+                                color = solid,
+                                topLeft = Offset(left, if (down) baseline else baseline - measured),
+                                size = Size(barWidth, measured),
+                                cornerRadius = CornerRadius(barWidth / 4f),
+                            )
+                        } else {
+                            // One rounded bar per band, each clipped to the
+                            // slice it owns. Clipping rather than stacking
+                            // rectangles is what keeps the rounded ends: the
+                            // top band gets the top corners, the bottom band
+                            // the bottom ones, and the joins between are square
+                            // because they are the middle of one shape.
+                            val top = if (down) baseline else baseline - measured
+                            val fade = if (index == highlight) 1f else 0.75f
+                            for ((from, to, colour) in slices(value, bands)) {
+                                val yFrom = baseline - (from / scale.span).toFloat() * size.height
+                                val yTo = baseline - (to / scale.span).toFloat() * size.height
+                                clipRect(
+                                    left = left,
+                                    right = left + barWidth,
+                                    top = minOf(yFrom, yTo),
+                                    bottom = maxOf(yFrom, yTo),
+                                ) {
+                                    drawRoundRect(
+                                        color = colour.copy(alpha = colour.alpha * fade),
+                                        topLeft = Offset(left, top),
+                                        size = Size(barWidth, measured),
+                                        cornerRadius = CornerRadius(barWidth / 4f),
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -238,6 +276,29 @@ fun SeriesChart(
             else Spacer(Modifier.width(GUTTER))
         }
     }
+}
+
+/**
+ * A bar cut into the bands it passes through, walking out from zero.
+ *
+ * Below zero there is nothing to cut: every band down there is the same one, so
+ * the whole of a negative bar takes the coldest colour.
+ */
+private fun slices(
+    value: Double,
+    bands: List<Pair<Double, Color>>,
+): List<Triple<Double, Double, Color>> {
+    if (value < 0) return listOf(Triple(value, 0.0, bands.first().second))
+    val out = ArrayList<Triple<Double, Double, Color>>()
+    var from = 0.0
+    for ((bound, colour) in bands) {
+        if (bound <= 0.0) continue
+        val to = minOf(value, bound)
+        if (to > from) out.add(Triple(from, to, colour))
+        from = to
+        if (from >= value) break
+    }
+    return out
 }
 
 /**

@@ -34,6 +34,21 @@ object TemperatureColors {
     /** Above 40. */
     val Extreme = Color(0xFFC62828)
 
+    /**
+     * The bands as a ladder: an upper bound and the colour up to it, coldest
+     * first. Everything below the first bound belongs to the first colour.
+     *
+     * In thousandths, which is what the charts carry values in.
+     */
+    val ladder: List<Pair<Double, Color>> = listOf(
+        0.0 to Freezing,
+        15_000.0 to Cold,
+        25_000.0 to Mild,
+        30_000.0 to Warm,
+        40_000.0 to Hot,
+        Double.MAX_VALUE to Extreme,
+    )
+
     fun of(celsius: Double): Color = when {
         celsius < 0.0 -> Freezing
         celsius <= 15.0 -> Cold

@@ -327,6 +327,7 @@ private fun SeriesCard(
                 barColor = { milli ->
                     if (temperature) TemperatureColors.of(milli / 1000.0) else HumidityColor
                 },
+                bands = if (temperature) TemperatureColors.ladder else null,
                 highlight = series.scrubbed,
                 onBarTap = if (state.canDrill) vm::drillInto else null,
                 onSwipe = vm::step,
