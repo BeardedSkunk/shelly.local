@@ -319,6 +319,9 @@ private fun SeriesCard(
                 buckets = series.buckets,
                 labels = barLabels(state.window, series.buckets, state.zone, formats),
                 left = { scale -> plainAxis(scale, if (temperature) formats.degreeUnit else "%") },
+                // Per cent is nought to a hundred, always. Quarters of it, so
+                // the gridlines read 0, 25, 50, 75, 100.
+                fixedScale = if (temperature) null else Scale(step = 25_000.0, steps = 4),
                 // Degrees go below the line for real; humidity never does.
                 signed = temperature,
                 barColor = { milli ->

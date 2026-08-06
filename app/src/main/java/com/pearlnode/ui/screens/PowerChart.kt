@@ -40,7 +40,10 @@ val PowerDrawnColor: Color @Composable get() = MaterialTheme.colorScheme.primary
 val PowerEarnedColor = Color(0xFF4CAF50)
 
 private val CHART_HEIGHT = 160.dp
-private val GUTTER = 48.dp
+// Wide enough for four figures at this text size and no wider. It was set for
+// the longest thing an energy axis can say and left there, which spent a
+// noticeable slice of a phone screen on air.
+private val GUTTER = 34.dp
 
 /** How far a figure is allowed to be chased below the point before it is given up on. */
 private const val MAX_DECIMALS = 4
@@ -99,6 +102,15 @@ fun SeriesChart(
      * it was, which is a scale rather than a pair.
      */
     barColor: ((Double) -> Color)? = null,
+    /**
+     * A scale to use instead of one worked out from the data.
+     *
+     * For a quantity whose range is a fact rather than an observation. Humidity
+     * is nought to a hundred per cent whatever this week happened to hold, and
+     * an axis running to 150 because the round step landed there was inventing
+     * headroom that cannot exist.
+     */
+    fixedScale: Scale? = null,
     /** The bar under the finger while scrubbing, drawn brighter than the rest. */
     highlight: Int? = null,
     /**
@@ -131,8 +143,8 @@ fun SeriesChart(
     // the projection or the bar it belongs to would run off the top.
     val shown = buckets.map { projected(it, projectFrom) }
     val knownShown = buckets.indices.filter { buckets[it].coarsestTier != null }.map { shown[it] }
-    val scale =
-        if (signed) Scale.forRange(
+    val scale = fixedScale
+        ?: if (signed) Scale.forRange(
             knownShown.minOrNull() ?: 0.0,
             knownShown.maxOrNull() ?: 0.0,
         )
@@ -215,9 +227,15 @@ fun SeriesChart(
                 // With no gutter on the right, the last label has room to
                 // stand over the last bar instead of being squeezed by figures
                 // that are no longer there.
-                if (labels.isNotEmpty()) BarLabels(labels, padEnd = money != null)
+                if (labels.isNotEmpty()) BarLabels(labels)
             }
+            // The gutter stays either way. Its figures go when there is no
+            // second axis, but its width does not: taking it away pushed the
+            // bars hard against the right edge, and a plot area off centre
+            // looks broken however correct its numbers are. Empty, it also
+            // gives the last label somewhere to spill into.
             if (money != null) AxisLabels(values = money.ticks, align = TextAlign.Start)
+            else Spacer(Modifier.width(GUTTER))
         }
     }
 }
@@ -441,7 +459,7 @@ private fun AxisLabels(values: List<String>, align: TextAlign) {
  * belongs to, and only every few slots carries a label anyway.
  */
 @Composable
-private fun BarLabels(labels: List<PowerAxisLabel>, padEnd: Boolean = true) {
+private fun BarLabels(labels: List<PowerAxisLabel>) {
     Layout(
         content = {
             labels.forEach { label ->
@@ -462,12 +480,9 @@ private fun BarLabels(labels: List<PowerAxisLabel>, padEnd: Boolean = true) {
         layout(width, placeables.maxOfOrNull { it.height } ?: 0) {
             placeables.forEachIndexed { index, placeable ->
                 val centre = (labels[index].at * width).toInt()
-                var x = centre - placeable.width / 2
-                // Where nothing sits to the right, a label at the very end
-                // would hang off the screen; nudge it back in rather than drop
-                // it, since it is the one naming the newest bar.
-                if (!padEnd) x = x.coerceAtMost(width - placeable.width)
-                placeable.place(x.coerceAtLeast(0), 0)
+                // Allowed to overhang into the gutters either side, which is
+                // what lets the first and last bars be named at all.
+                placeable.place(centre - placeable.width / 2, 0)
             }
         }
     }
