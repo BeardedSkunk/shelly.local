@@ -176,6 +176,12 @@
     <string name="power_range_week">Week</string>
     <string name="power_range_month">Month</string>
     <string name="power_range_year">Year</string>
+    <string name="settings_background">Background</string>
+    <string name="settings_battery_free">Free to run in the background</string>
+    <string name="settings_battery_free_hint">Readings are fetched every half hour, day and night. That is what keeps the fine detail: a plug writes over its oldest measurements once its own memory is full.</string>
+    <string name="settings_battery_limited">Battery optimisation is on</string>
+    <string name="settings_battery_limited_hint">Android may hold the background fetch back by hours while the phone is idle. A plug writes over its oldest measurements once its memory is full, so what is not fetched in time is lost in detail — usually overnight.</string>
+    <string name="settings_battery_allow">Allow background fetching</string>
     <string name="power_now">Now</string>
     <!-- Still the sensor charts, where the middle figure really is a reading
          taken now and the scrubbed one really is a different reading. -->

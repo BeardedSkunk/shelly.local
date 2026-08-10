@@ -18,6 +18,12 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Lets the settings screen offer the exemption dialog directly instead of
+         sending the user hunting through a list of every installed app. A plug
+         writes over its oldest measurements once its own memory fills, so work
+         deferred until morning costs detail that cannot be fetched again. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
 
     <!-- Bluetooth (BLE discovery, API 31+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"

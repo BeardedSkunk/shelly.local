@@ -1,8 +1,16 @@
 package com.pearlnode.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Warning
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -74,6 +82,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             RegionalCard(prefs, formats, settings)
             EnergyCard(prefs, formats, settings)
             OpenSenseMapCard(prefs)
+            BackgroundCard()
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -248,6 +257,98 @@ private fun OpenSenseMapCard(prefs: AppPrefs) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+// --------------------------------------------------------------- background
+
+/**
+ * Whether Android lets this app keep its side of the bargain.
+ *
+ * The recorder on a plug holds a few hundred blocks and then writes over the
+ * oldest, so what this app has not fetched in time is gone at that resolution
+ * for good. The fetch is scheduled every half hour, but a scheduled period is a
+ * lower bound and nothing more: an app the system has put in a low standby
+ * bucket has its background work deferred by hours while the phone is idle --
+ * which is the night, which is exactly when nobody notices until the chart has
+ * a hole in it.
+ *
+ * Battery optimisation is the one part of that a user can turn off, so it is
+ * the one part worth showing. Everything else about the scheduling is the
+ * system's business and not worth a row of settings nobody can act on.
+ */
+@Composable
+private fun BackgroundCard() {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var exempt by remember { mutableStateOf(isIgnoringBatteryOptimisations(context)) }
+
+    // Asked again every time the screen comes back, because the answer is
+    // changed in a system dialog this app does not hear the end of.
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exempt = isIgnoringBatteryOptimisations(context)
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+
+    SettingsCard(stringResource(R.string.settings_background)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (exempt) Icons.Default.CheckCircle else Icons.Default.Warning,
+                contentDescription = null,
+                tint = if (exempt) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(
+                    if (exempt) R.string.settings_battery_free else R.string.settings_battery_limited
+                ),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            stringResource(
+                if (exempt) R.string.settings_battery_free_hint
+                else R.string.settings_battery_limited_hint
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!exempt) {
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { requestBatteryExemption(context) }) {
+                Text(stringResource(R.string.settings_battery_allow))
+            }
+        }
+    }
+}
+
+private fun isIgnoringBatteryOptimisations(context: android.content.Context): Boolean {
+    val power = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+    return power.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+/**
+ * Asks the system to exempt this app, and falls back to the list it lives in.
+ *
+ * The direct request is one dialog and one tap. Some builds refuse to show it
+ * at all, and then the list of every app is still a place the exemption can be
+ * granted -- worse, but not a dead end.
+ */
+private fun requestBatteryExemption(context: android.content.Context) {
+    val direct = Intent(
+        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        Uri.parse("package:${context.packageName}"),
+    )
+    val fallback = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    runCatching { context.startActivity(direct) }
+        .onFailure { runCatching { context.startActivity(fallback) } }
 }
 
 // ----------------------------------------------------------------- language

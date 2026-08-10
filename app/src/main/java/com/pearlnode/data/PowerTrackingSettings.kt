@@ -109,6 +109,27 @@ class PowerTrackingSettings(context: Context) {
         }.apply()
     }
 
+    /**
+     * A fingerprint of the script this app last put on that plug.
+     *
+     * The plug cannot be asked what version of the recorder it is running --
+     * the version it reports is the archive format, which changes when the
+     * stored shape changes and not when the recording rule does. So a fix to
+     * the rule shipped with no way of reaching a plug that already had a
+     * working script on it: nothing compared, nothing deployed, and a plug went
+     * on running last month's code until somebody switched tracking off and on
+     * again. Which is exactly what happened to the low-power fix.
+     *
+     * Kept here rather than read back from the plug because this app knows what
+     * it sent, and asking would be twenty kilobytes on every sync to learn what
+     * it already knows.
+     */
+    fun deployedScript(deviceId: String): String? = prefs.getString("${deviceId}_script", null)
+
+    fun setDeployedScript(deviceId: String, fingerprint: String) {
+        prefs.edit().putString("${deviceId}_script", fingerprint).apply()
+    }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 

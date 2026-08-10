@@ -13,6 +13,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
+/**
+ * What a piece of script code fingerprints to.
+ *
+ * Length and a rolling hash rather than a real digest: this only has to tell one
+ * revision of one file from another, it is compared against a string this app
+ * wrote itself, and there is nobody to defend against. Two versions differing by
+ * one character give different answers, which is all that is asked of it.
+ */
+internal fun fingerprint(code: String): String {
+    var hash = 0
+    for (c in code) hash = hash * 31 + c.code
+    return "${code.length}:${hash.toUInt().toString(16)}"
+}
+
 /** What one sync brought in, for the view to report. */
 data class SyncResult(
     val blocksStored: Int,
@@ -71,10 +85,25 @@ class PowerJournalRepository(
      * the detail this whole thing exists to keep.
      */
     suspend fun enable(device: Device) = withContext(Dispatchers.IO) {
-        val code = context.assets.open(ASSET).bufferedReader().use { it.readText() }
-        clientFor(device).deploy(code)
+        deploy(clientFor(device), device.id)
         settings.setEnabled(device.id, true)
         PowerSyncWorker.enqueue(context, device.id)
+    }
+
+    /** The script as shipped, and what it fingerprints to. */
+    private fun asset(): String =
+        context.assets.open(ASSET).bufferedReader().use { it.readText() }
+
+    /**
+     * Puts the shipped script on the plug and notes what was sent.
+     *
+     * The note is the whole point: it is what lets the next sync tell a plug
+     * running the current recorder from one running last month's.
+     */
+    private suspend fun deploy(client: PowerJournalClient, deviceId: String) {
+        val code = asset()
+        client.deploy(code)
+        settings.setDeployedScript(deviceId, fingerprint(code))
     }
 
     /**
@@ -125,7 +154,19 @@ class PowerJournalRepository(
         // script's own storage and survives the code being replaced, and the
         // script id is reused, so this costs the history nothing.
         if (index.api < CLIENT_API) {
-            client.deploy(context.assets.open(ASSET).bufferedReader().use { it.readText() })
+            deploy(client, device.id)
+            index = client.index(scriptId)
+        } else if (settings.deployedScript(device.id) != fingerprint(asset())) {
+            // The recorder itself changed, which the plug has no way of saying:
+            // what it reports is the archive format, and a fix to how it decides
+            // where a block ends leaves that untouched. So the comparison is
+            // against what this app remembers sending. A plug that has never
+            // been noted -- every plug, the first time this runs -- is brought
+            // up to date once and then left alone.
+            //
+            // Nothing is lost by an unnecessary deployment: the archive is in
+            // the script's own storage and outlives its code.
+            deploy(client, device.id)
             index = client.index(scriptId)
         }
 
