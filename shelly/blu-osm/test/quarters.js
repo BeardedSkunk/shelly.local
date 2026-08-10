@@ -23,6 +23,8 @@ function createPlug() {
     now: 0,
     storage: {},
     values: { temperature: null, humidity: null },
+    stale: false,
+    spokeAt: 0,
     logs: [],
     endpoints: {},
     timers: [],
@@ -44,11 +46,15 @@ function createPlug() {
   const Shelly = {
     getComponentStatus(name) {
       if (name === 'sys') return { unixtime: plug.now };
+      // last_updated_ts moves when a packet arrives, not when somebody looks.
+      // plug.stale is how a silent sensor is played: the value stays in the
+      // component, the timestamp stops.
+      const spoke = plug.stale ? plug.spokeAt : (plug.spokeAt = plug.now);
       if (name === 'bthomesensor:200') {
-        return { value: plug.values.temperature, last_updated_ts: plug.now };
+        return { value: plug.values.temperature, last_updated_ts: spoke };
       }
       if (name === 'bthomesensor:201') {
-        return { value: plug.values.humidity, last_updated_ts: plug.now };
+        return { value: plug.values.humidity, last_updated_ts: spoke };
       }
       return null;
     },
@@ -133,16 +139,50 @@ function check(what, got, want, tolerance) {
 const NOON = 1786348800 - (1786348800 % 900);
 const Q = 900;
 
-test('a quarter is stored as the mean of what came in during it', () => {
+test('a quarter holds the reading that stood at the mark, not an average', () => {
   const plug = createPlug();
   sample(plug, NOON, 20.0, 50.0);
   sample(plug, NOON + 300, 21.0, 52.0);
   sample(plug, NOON + 600, 22.0, 54.0);
-  // Crossing into the next quarter is what closes the one before it.
+  // Crossing into the next quarter is what closes the one before it, and what
+  // gets written is where the sensor stood then -- 22, not the mean of 21.
   sample(plug, NOON + Q, 30.0, 80.0);
   const got = read(plug, Math.floor(NOON / Q), 1);
-  check('temperature', got.t[0], 21.0, 0.05);
-  check('humidity', got.h[0], 52.0, 0.25);
+  check('temperature', got.t[0], 22.0, 0.05);
+  check('humidity', got.h[0], 54.0, 0.25);
+});
+
+test('a packet arriving just after the mark belongs to the quarter it arrived in', () => {
+  // The ordering trap. At 12:15:01 the poll finds a reading a second old; that
+  // reading is the state of 12:15, not of 12:00, and 12:00 has to close with
+  // what stood before it.
+  const plug = createPlug();
+  sample(plug, NOON, 20.0, 50.0);
+  sample(plug, NOON + 840, 21.0, 51.0);        // 12:14
+  sample(plug, NOON + Q + 1, 25.0, 60.0);      // 12:15:01, a fresh packet
+  sample(plug, NOON + 2 * Q, 26.0, 61.0);
+  const got = read(plug, Math.floor(NOON / Q), 2);
+  check('the first quarter closed on the older reading', got.t[0], 21.0, 0.05);
+  check('and the new one on the newer', got.t[1], 25.0, 0.05);
+});
+
+test('a reading from hours ago is not the state of this quarter', () => {
+  // The sensor goes silent. Its value stays in the component, so a poll keeps
+  // seeing it -- but nothing was measured in these quarters and saying
+  // otherwise would put a flat line where the truth is a gap.
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  sample(plug, NOON, 20.0, 50.0);
+  for (let i = 1; i <= 4; i++) {
+    plug.now = NOON + i * Q;
+    plug.values.temperature = 20.0;
+    plug.values.humidity = 50.0;
+    plug.stale = true;                 // last_updated_ts stops advancing
+    plug.api.update();
+  }
+  const got = read(plug, q, 4);
+  check('the measured quarter stands', got.t[0], 20.0, 0.05);
+  check('the silent ones are unknown', got.t.slice(1, 4), [null, null, null]);
 });
 
 test('the resolution is a tenth of a degree and half a per cent', () => {

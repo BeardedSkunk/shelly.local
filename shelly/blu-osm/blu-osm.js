@@ -96,14 +96,21 @@ let ARC = {
 let A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 // Laufende Verwaltung: welche Seite gerade beschrieben wird, wo sie anfaengt,
-// wieviel drinsteht, und die Summen der laufenden Viertelstunde.
+// wieviel drinsteht, und der zuletzt gesehene Stand des Sensors.
+//
+// Gespeichert wird der Messwert, der zur vollen Viertelstunde galt -- nicht ein
+// Mittel darueber. Der Sensor sendet bei Aenderung, ein Wert gilt also bis zum
+// naechsten Paket, und dieselbe Lesart hat openSenseMap und hat die App. Ein
+// Mittelwert waere eine andere Groesse: er glaettet den Sprung, den der Sensor
+// gerade gemeldet hat, und keine der beiden anderen Seiten wuerde ihn so lesen.
 let ST = {
   page: 0,     // Index in ARC.slots
   start: 0,    // Viertelstundennummer des ersten Satzes dieser Seite
   count: 0,    // Saetze in dieser Seite
-  quarter: 0,  // Viertelstunde, fuer die gerade gesammelt wird
-  sumT: 0, nT: 0,
-  sumH: 0, nH: 0,
+  quarter: 0,  // Viertelstunde, die gerade laeuft
+  lastT: null, // zuletzt gesehener Stand ...
+  lastH: null,
+  lastAt: 0,   // ... und wann der Sensor ihn gemeldet hat
   ready: false,
 };
 
@@ -278,14 +285,21 @@ function arcAppend(text, quarter) {
 // Schreibt alles bis ausschliesslich der laufenden Viertelstunde weg. Was
 // uebersprungen wurde -- Neustart, Stromausfall, Sensor weg -- wird als
 // unbekannt eingetragen, damit die Stellen im Raster stimmen bleiben.
+//
+// Geschrieben wird der Stand, der zum Ende der jeweiligen Viertelstunde galt,
+// und nur wenn der Sensor sich waehrend dieser Viertelstunde ueberhaupt
+// gemeldet hat. Ein Wert von vor drei Stunden ist nicht der Stand um Viertel
+// nach -- er ist der letzte, den jemand kennt, und das ist etwas anderes.
 function arcCloseUpTo(quarter) {
   if (ST.quarter === 0) return;
   let guard = 0;
   while (ST.quarter < quarter && guard < ARC.per_page) {
     let tc = 1023;
     let hc = 255;
-    if (guard === 0 && ST.nT > 0) tc = arcTempCode(ST.sumT / ST.nT);
-    if (guard === 0 && ST.nH > 0) hc = arcHumCode(ST.sumH / ST.nH);
+    let fresh = ST.lastAt >= ST.quarter * ARC.step_s &&
+      ST.lastAt < (ST.quarter + 1) * ARC.step_s;
+    if (fresh && ST.lastT !== null) tc = arcTempCode(ST.lastT);
+    if (fresh && ST.lastH !== null) hc = arcHumCode(ST.lastH);
     arcAppend(arcEncode(tc, hc), ST.quarter);
     ST.quarter = ST.quarter + 1;
     guard = guard + 1;
@@ -296,12 +310,15 @@ function arcCloseUpTo(quarter) {
     ST.quarter = quarter;
     ST.count = ARC.per_page; // erzwingt eine frische Seite beim naechsten Satz
   }
-  ST.sumT = 0; ST.nT = 0;
-  ST.sumH = 0; ST.nH = 0;
 }
 
-// Sammelt den aktuellen Stand ein und schliesst faellige Viertelstunden ab.
-function arcSample(now, t, h) {
+// Schliesst faellige Viertelstunden ab und merkt sich danach den neuen Stand.
+//
+// Die Reihenfolge ist der Punkt: abgeschlossen wird mit dem Stand von vorhin,
+// also mit dem, der vor dem Ueberschreiten der vollen Viertelstunde galt. Erst
+// danach wird der neue eingetragen. Andersherum wuerde ein Paket, das eine
+// Sekunde nach Viertel nach eintrifft, als der Stand von Viertel nach abgelegt.
+function arcSample(now, t, h, at) {
   if (now <= 0) return;
   let q = Math.floor(now / ARC.step_s);
   if (!ST.ready) {
@@ -323,8 +340,11 @@ function arcSample(now, t, h) {
   }
   if (q > ST.quarter) arcCloseUpTo(q);
   if (ST.quarter === 0) ST.quarter = q;
-  if (t !== null) { ST.sumT = ST.sumT + t; ST.nT = ST.nT + 1; }
-  if (h !== null) { ST.sumH = ST.sumH + h; ST.nH = ST.nH + 1; }
+  if (t !== null) ST.lastT = t;
+  if (h !== null) ST.lastH = h;
+  // Wann der Sensor zuletzt gesprochen hat, nicht wann nachgesehen wurde. Beim
+  // Nachsehen steht der alte Wert ja weiterhin in der Komponente.
+  if (at > ST.lastAt) ST.lastAt = at;
 }
 
 // -------------------------------------------------------- Wertverarbeitung
@@ -351,14 +371,15 @@ function update() {
 
   let now = sysTime();
 
-  // Das Archiv bekommt jeden Durchlauf mit, auch den, der sonst nichts tut.
-  // Genau davon lebt der Mittelwert einer Viertelstunde.
+  // Das Archiv bekommt jeden Durchlauf mit, auch den, der sonst nichts tut --
+  // sonst wuerde eine Viertelstundengrenze erst beim naechsten Paket bemerkt.
   let te = entryByName('temperature');
   let he = entryByName('humidity');
   arcSample(
     now,
     te === null || te.last === undefined ? null : te.last,
-    he === null || he.last === undefined ? null : he.last
+    he === null || he.last === undefined ? null : he.last,
+    newest
   );
 
   let due = now - lastWriteAt >= CFG.refresh_s;
