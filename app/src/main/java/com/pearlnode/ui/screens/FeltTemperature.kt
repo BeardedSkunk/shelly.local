@@ -5,23 +5,27 @@ import androidx.compose.ui.graphics.Color
 /**
  * What a temperature feels like at a given humidity.
  *
- * Deliberately a judgement rather than a standard. The usual apparent
- * temperature formulas -- Steadman's, the heat index, humidex -- all agree that
- * damp air makes warmth harder to bear, and are either undefined below about 27
- * degrees or say the opposite of common experience at the cold end: they have
- * dry air feeling colder, because it takes more moisture off the skin. What
- * people in a damp climate report is the reverse, that a wet cold gets through
- * and a dry one does not, and that is what this follows.
+ * Deliberately a judgement rather than a standard, and now a narrower one than
+ * it started as. It used to claim that damp cold bites deeper than dry cold --
+ * the "feuchte Kälte" everyone in a damp climate says they know. That claim is
+ * out. It disagrees with the textbook formulas, which have it the other way
+ * round, and it disagrees with them for no reason anybody can point at: in
+ * still air below freezing the skin loses heat by conduction and radiation, and
+ * the water in the air is not doing the work the saying gives it credit for.
+ * Where the effect is real it is wet clothing or wind, and neither of those is
+ * what a hygrometer is reporting.
  *
- * So: fifty per cent is neutral and shifts nothing. Away from it the reading
- * moves, in opposite directions at the two ends of the scale --
+ * So the scale is one-sided now:
  *
- *   warm and damp   feels warmer   (up to five degrees at saturation)
- *   cold and damp   feels colder   (up to three)
- *   cold and dry    feels milder
+ *   at and below freezing   humidity changes nothing at all
+ *   climbing from there     mugginess is mixed in a little at a time
+ *   warm and damp           feels warmer, up to five degrees at saturation
+ *   warm and dry            feels cooler by as much
  *
- * -- blending between them over the ten degrees in the middle, where neither
- * effect is strong enough to be worth arguing about.
+ * Fifty per cent stays neutral throughout. The gradual mixing between nought
+ * and twenty degrees is not decoration: a step change would let a warmer
+ * reading feel cooler than a colder one, and a scale out of order is worse than
+ * no scale.
  */
 object FeltTemperature {
 
@@ -31,31 +35,26 @@ object FeltTemperature {
     /** The most a saturated warm day can add. */
     private const val WARM_REACH = 5.0
 
-    /** And the most a saturated cold one can take away. */
-    private const val COLD_REACH = 3.0
+    /** At and below freezing, humidity is not part of how cold it is. */
+    private const val COLD_BELOW = 0.0
 
-    /** Below this the cold rule applies, above it the warm one. */
-    private const val COLD_BELOW = 10.0
+    /** By here the full muggy effect applies. */
     private const val WARM_ABOVE = 20.0
 
     fun felt(celsius: Double, humidity: Double): Double =
         celsius + reach(celsius) * ((humidity - NEUTRAL) / NEUTRAL)
 
     /**
-     * How much a fully saturated hour moves this temperature, and which way.
+     * How much a fully saturated hour moves this temperature.
      *
-     * The blend across the middle is what keeps the whole thing rising with
-     * temperature: without it the swing from minus three to plus five over a
-     * few degrees would let a warmer reading feel cooler than a colder one, and
-     * a scale that is not in order is worse than no scale at all.
+     * Never negative any more, so damp air can only ever make a reading feel
+     * warmer than dry air at the same temperature -- and at freezing it makes
+     * no difference at all.
      */
     private fun reach(celsius: Double): Double = when {
-        celsius <= COLD_BELOW -> -COLD_REACH
+        celsius <= COLD_BELOW -> 0.0
         celsius >= WARM_ABOVE -> WARM_REACH
-        else -> {
-            val share = (celsius - COLD_BELOW) / (WARM_ABOVE - COLD_BELOW)
-            -COLD_REACH + share * (WARM_REACH + COLD_REACH)
-        }
+        else -> WARM_REACH * (celsius - COLD_BELOW) / (WARM_ABOVE - COLD_BELOW)
     }
 
     /**

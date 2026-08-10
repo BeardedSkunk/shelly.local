@@ -29,20 +29,45 @@ class FeltTemperatureTest {
     }
 
     @Test
-    fun `cold and dry feels milder, cold and damp colder`() {
-        // The half of this that disagrees with the textbook formulas, and the
-        // reason it is written down.
-        assertTrue(FeltTemperature.felt(0.0, 10.0) > 0.0)
-        assertTrue(FeltTemperature.felt(0.0, 95.0) < 0.0)
-        assertEquals(3.0, FeltTemperature.felt(0.0, 0.0), 0.01)
+    fun `at freezing the hygrometer has no vote`() {
+        // The claim this scale used to make -- that damp cold bites deeper --
+        // is gone. Below freezing the reading is the reading, whatever the air
+        // is carrying.
+        for (humidity in listOf(0.0, 30.0, 50.0, 80.0, 100.0)) {
+            assertEquals(0.0, FeltTemperature.felt(0.0, humidity), 1e-9)
+            assertEquals(-8.0, FeltTemperature.felt(-8.0, humidity), 1e-9)
+        }
+    }
+
+    @Test
+    fun `mugginess is mixed in gradually on the way up`() {
+        // Nothing at freezing, half of it at ten degrees, all of it by twenty.
+        assertEquals(0.0, FeltTemperature.felt(0.0, 100.0) - 0.0, 1e-9)
+        assertEquals(2.5, FeltTemperature.felt(10.0, 100.0) - 10.0, 0.01)
+        assertEquals(5.0, FeltTemperature.felt(20.0, 100.0) - 20.0, 0.01)
+        assertEquals(5.0, FeltTemperature.felt(35.0, 100.0) - 35.0, 0.01)
+    }
+
+    @Test
+    fun `damp is never cooler than dry at the same reading`() {
+        // The one-sidedness, stated as a property: more water in the air can
+        // only ever make it feel warmer, never colder.
+        var t = -20.0
+        while (t <= 45.0) {
+            assertTrue(
+                "damp beat dry at $t degrees",
+                FeltTemperature.felt(t, 90.0) >= FeltTemperature.felt(t, 20.0) - 1e-9,
+            )
+            t += 0.5
+        }
     }
 
     @Test
     fun `it never has a warmer reading feel cooler than a colder one`() {
-        // The blend across the middle exists for this. Without it the swing
-        // from minus three to plus five would put the scale out of order, and
-        // a bar chart drawn from that would colour a rising afternoon as if it
-        // were falling.
+        // The gradual mixing exists for this. Switching the full five degrees
+        // on at some threshold would put the scale out of order there, and a
+        // bar chart drawn from it would colour a rising afternoon as if it were
+        // falling.
         for (humidity in listOf(0.0, 25.0, 50.0, 75.0, 100.0)) {
             var previous = Double.NEGATIVE_INFINITY
             var t = -30.0
