@@ -70,7 +70,8 @@ let SENSOR_PREFIX = 'bthomesensor:';
 // verloren. Also schreibt das Script selbst mit, und zwar so, dass ein
 // spaeteres Nachreichen moeglich bleibt.
 //
-// Ein Satz je voller Viertelstunde nach Uhr, drei Zeichen lang:
+// Ein Satz je vollen fuenf Minuten nach Uhr -- zur vollen Stunde, fuenf nach,
+// zehn nach und so weiter -- drei Zeichen lang:
 //
 //   10 Bit Temperatur in Zehntelgrad, Nullpunkt -50 C, 1023 = unbekannt
 //    8 Bit Feuchte in halben Prozent,               255 = unbekannt
@@ -79,8 +80,23 @@ let SENSOR_PREFIX = 'bthomesensor:';
 // Seite, welche Viertelstunde gemeint ist -- und eine Luecke kostet denselben
 // Platz wie ein Messwert, dafuer bleibt alles ausgerichtet.
 //
-// Elf Seiten zu je 336 Saetzen, reihum beschrieben: 3,5 Tage je Seite, gut
-// 38 Tage insgesamt. Die zwoelfte Speicherstelle haelt die Verwaltung.
+// Elf Seiten zu je 336 Saetzen, reihum beschrieben: 28 Stunden je Seite, knapp
+// 13 Tage insgesamt. Die zwoelfte Speicherstelle haelt die Verwaltung.
+//
+// Gehalten werden zwischen 11,7 und 12,8 Tagen: die aelteste Seite wird geleert,
+// wenn sie wieder an der Reihe ist, es sind also nie alle elf gleichzeitig voll.
+//
+// Gemessen an sechs Tagen echter Daten aendert sich die Temperatur alle zwei
+// Minuten, die Feuchte fast ebenso oft. Eine Ablage nur bei Aenderung waere
+// deshalb teurer als dieses feste Raster und nicht billiger -- 687 Saetze am Tag
+// statt 288, jeder mit Zeitstempel. Beim festen Raster ist die Stelle in der
+// Seite die Uhrzeit, und das kostet nichts.
+//
+// Geschrieben wird nicht bei jedem Satz. Die volle Seite jedes Mal neu in den
+// Flash zu legen waere alle fuenf Minuten ein Kilobyte; gesammelt wird deshalb
+// im RAM und nur halbstuendlich abgelegt. Ein Stromausfall kostet damit die
+// letzte halbe Stunde -- der Preis dafuer, dass der Flash das jahrelang
+// mitmacht.
 //
 // Ein Code-Update loescht das alles nicht: Script.storage haengt an der
 // Script-ID, nicht am Code. Am 10.08.2026 auf sechs Steckern nachgeprueft --
@@ -89,8 +105,9 @@ let ARC = {
   slots: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'],
   meta: 'm',
   per_page: 336,
-  step_s: 900,
-  version: 1,
+  step_s: 300,
+  flush_every: 6,   // Saetze im RAM, bevor der Flash sie zu sehen bekommt
+  version: 2,
 };
 
 let A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -106,8 +123,9 @@ let A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 let ST = {
   page: 0,     // Index in ARC.slots
   start: 0,    // Viertelstundennummer des ersten Satzes dieser Seite
-  count: 0,    // Saetze in dieser Seite
-  quarter: 0,  // Viertelstunde, die gerade laeuft
+  count: 0,    // Saetze dieser Seite, die schon im Flash stehen
+  buf: '',     // fertige Saetze, die noch im RAM warten
+  quarter: 0,  // Zeitscheibe, die gerade laeuft
   lastT: null, // zuletzt gesehener Stand ...
   lastH: null,
   lastAt: 0,   // ... und wann der Sensor ihn gemeldet hat
@@ -243,7 +261,7 @@ function arcHumCode(h) {
   return c;
 }
 
-// "1|<seite>|<start>|<anzahl>"
+// "<version>|<seite>|<start>|<anzahl>"
 function arcSaveMeta() {
   Script.storage.setItem(
     ARC.meta,
@@ -264,22 +282,40 @@ function arcLoadMeta() {
   return true;
 }
 
+// Wieviel in dieser Seite steht, den wartenden Puffer eingerechnet.
+function arcFilled() {
+  return ST.count + Math.floor(ST.buf.length / 3);
+}
+
+// Legt ab, was im RAM wartet. Der einzige Punkt, an dem der Flash beschrieben
+// wird -- und deshalb der einzige, der zaehlt, wenn es um Verschleiss geht.
+function arcFlush() {
+  if (ST.buf.length === 0) return;
+  let key = ARC.slots[ST.page];
+  let old = Script.storage.getItem(key);
+  if (old === null || old === undefined) old = '';
+  Script.storage.setItem(key, old + ST.buf);
+  ST.count = ST.count + Math.floor(ST.buf.length / 3);
+  ST.buf = '';
+  arcSaveMeta();
+}
+
 // Haengt einen Satz an, wechselt die Seite wenn sie voll ist. Die aelteste
 // Seite wird ueberschrieben -- das ist der Ringpuffer.
 function arcAppend(text, quarter) {
-  if (ST.count >= ARC.per_page) {
+  if (arcFilled() >= ARC.per_page) {
+    // Was noch wartet, gehoert in die alte Seite und muss vor dem Wechsel
+    // hinein -- danach zeigt ST.page woandershin.
+    arcFlush();
     ST.page = (ST.page + 1) % ARC.slots.length;
     ST.count = 0;
     ST.start = quarter;
     Script.storage.setItem(ARC.slots[ST.page], '');
+    arcSaveMeta();
   }
-  if (ST.count === 0) ST.start = quarter;
-  let key = ARC.slots[ST.page];
-  let old = Script.storage.getItem(key);
-  if (old === null || old === undefined) old = '';
-  Script.storage.setItem(key, old + text);
-  ST.count = ST.count + 1;
-  arcSaveMeta();
+  if (arcFilled() === 0) ST.start = quarter;
+  ST.buf = ST.buf + text;
+  if (Math.floor(ST.buf.length / 3) >= ARC.flush_every) arcFlush();
 }
 
 // Schreibt alles bis ausschliesslich der laufenden Viertelstunde weg. Was
@@ -308,6 +344,7 @@ function arcCloseUpTo(quarter) {
   // vollgeschrieben -- dann faengt das Raster einfach neu an.
   if (ST.quarter < quarter) {
     ST.quarter = quarter;
+    arcFlush();
     ST.count = ARC.per_page; // erzwingt eine frische Seite beim naechsten Satz
   }
 }
@@ -330,6 +367,7 @@ function arcSample(now, t, h, at) {
       // damit eine falsche Uhrzeit. Was dazwischen fehlt, fuellt arcCloseUpTo
       // gleich als unbekannt auf.
       ST.quarter = ST.start + ST.count;
+      ST.buf = '';
     } else {
       ST.page = 0; ST.start = q; ST.count = 0;
       Script.storage.setItem(ARC.slots[0], '');
@@ -490,7 +528,11 @@ function arcRead(from, count) {
       pos = q - (ST.start - steps * ARC.per_page);
     }
     let text = Script.storage.getItem(ARC.slots[page]);
-    if (text === null || text === undefined || pos < 0 || (pos + 1) * 3 > text.length) {
+    if (text === null || text === undefined) text = '';
+    // Die laufende Seite hat einen Schwanz im RAM, der noch nicht im Flash
+    // steht. Wer ihn beim Lesen auslaesst, sieht die letzte halbe Stunde nicht.
+    if (page === ST.page) text = text + ST.buf;
+    if (pos < 0 || (pos + 1) * 3 > text.length) {
       t.push(null); h.push(null);
       continue;
     }
@@ -519,9 +561,9 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
   }
   let head = '{"api":1,"step_s":' + JSON.stringify(ARC.step_s) +
     ',"oldest":' + JSON.stringify(arcOldest()) +
-    ',"next":' + JSON.stringify(ST.start + ST.count) +
+    ',"next":' + JSON.stringify(ST.start + arcFilled()) +
     ',"page":' + JSON.stringify(ST.page) +
-    ',"count":' + JSON.stringify(ST.count);
+    ',"count":' + JSON.stringify(arcFilled());
   if (from <= 0) {
     res.body = head + '}';
   } else {

@@ -25,6 +25,7 @@ function createPlug() {
     values: { temperature: null, humidity: null },
     stale: false,
     spokeAt: 0,
+    writes: {},
     logs: [],
     endpoints: {},
     timers: [],
@@ -32,6 +33,7 @@ function createPlug() {
 
   const storage = {
     setItem(key, value) {
+      plug.writes[key] = (plug.writes[key] || 0) + 1;
       if (typeof value !== 'string') throw new Error('storage takes strings');
       if (value.length > VALUE_LIMIT) throw new Error(`page ${key} over the limit`);
       if (!(key in plug.storage) && Object.keys(plug.storage).length >= ITEM_LIMIT) {
@@ -135,17 +137,17 @@ function check(what, got, want, tolerance) {
   if (!ok) failures++;
 }
 
-// A Monday noon, on a quarter boundary.
-const NOON = 1786348800 - (1786348800 % 900);
-const Q = 900;
+// A Monday noon, on a grid boundary.
+const NOON = 1786348800 - (1786348800 % 300);
+const Q = 300;   // five minutes, the grid the script keeps
 
 test('a quarter holds the reading that stood at the mark, not an average', () => {
   const plug = createPlug();
   sample(plug, NOON, 20.0, 50.0);
-  sample(plug, NOON + 300, 21.0, 52.0);
-  sample(plug, NOON + 600, 22.0, 54.0);
-  // Crossing into the next quarter is what closes the one before it, and what
-  // gets written is where the sensor stood then -- 22, not the mean of 21.
+  sample(plug, NOON + 100, 21.0, 52.0);
+  sample(plug, NOON + 200, 22.0, 54.0);
+  // Crossing into the next slot is what closes the one before it, and what gets
+  // written is where the sensor stood then -- 22, not the mean of 21.
   sample(plug, NOON + Q, 30.0, 80.0);
   const got = read(plug, Math.floor(NOON / Q), 1);
   check('temperature', got.t[0], 22.0, 0.05);
@@ -153,13 +155,13 @@ test('a quarter holds the reading that stood at the mark, not an average', () =>
 });
 
 test('a packet arriving just after the mark belongs to the quarter it arrived in', () => {
-  // The ordering trap. At 12:15:01 the poll finds a reading a second old; that
-  // reading is the state of 12:15, not of 12:00, and 12:00 has to close with
+  // The ordering trap. At 12:05:01 the poll finds a reading a second old; that
+  // reading is the state of 12:05, not of 12:00, and 12:00 has to close with
   // what stood before it.
   const plug = createPlug();
   sample(plug, NOON, 20.0, 50.0);
-  sample(plug, NOON + 840, 21.0, 51.0);        // 12:14
-  sample(plug, NOON + Q + 1, 25.0, 60.0);      // 12:15:01, a fresh packet
+  sample(plug, NOON + 240, 21.0, 51.0);        // 12:04
+  sample(plug, NOON + Q + 1, 25.0, 60.0);      // 12:05:01, a fresh packet
   sample(plug, NOON + 2 * Q, 26.0, 61.0);
   const got = read(plug, Math.floor(NOON / Q), 2);
   check('the first quarter closed on the older reading', got.t[0], 21.0, 0.05);
@@ -227,9 +229,11 @@ test('a page holds three and a half days and then the next one starts', () => {
   // A quarter is written when the next one begins, so filling a page takes one
   // sample more than it holds records, and starting the next takes one beyond.
   for (let i = 0; i <= per + 1; i++) sample(plug, (q + i) * Q, 20 + (i % 10) / 10, 50);
-  check('one page is 3.5 days', per / 96, 3.5, 0.01);
+  check('one page is 28 hours', per / 12, 28.0, 0.1);
   check('the second page is in use', plug.api.ST.page, 1);
-  check('and holds one record', plug.api.ST.count, 1);
+  // Counted through the endpoint, because ST.count is what reached the flash
+  // and the newest records are still in the buffer by design.
+  check('and holds one record', overview(plug).count, 1);
   check('the first page is full', plug.storage.a.length, per * 3);
   check('which is inside the firmware limit', plug.storage.a.length <= VALUE_LIMIT, true);
 });
@@ -245,8 +249,8 @@ test('the ring wraps, and the oldest is what is left', () => {
   // Ten full pages plus whatever the current one has so far. A page is emptied
   // when it comes round again, so the holding swings between 35 days just after
   // a wrap and 38.5 just before one -- it is never all eleven at once.
-  const days = (view.next - view.oldest) / 96;
-  check('it holds between 35 and 38.5 days', days >= 35 && days <= 38.5, true);
+  const days = (view.next - view.oldest) / 288;
+  check('it holds between 11.5 and 13 days', days >= 11.5 && days <= 13, true);
   check('never more storage than exists', Object.keys(plug.storage).length <= ITEM_LIMIT, true);
   // The record from ten quarters ago has to still be readable and right.
   const recent = read(plug, q + total - 10, 1);
@@ -256,19 +260,20 @@ test('the ring wraps, and the oldest is what is left', () => {
 test('a restart picks the grid up where it left it', () => {
   const plug = createPlug();
   const q = Math.floor(NOON / Q);
-  for (let i = 0; i < 5; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  // Seven samples, so six records reach the flash and one waits.
+  for (let i = 0; i < 7; i++) sample(plug, (q + i) * Q, 20 + i, 50);
 
   // The script is reloaded -- a reboot, a code update -- against the same
   // storage. Nothing in memory survives; everything in storage does.
   const kept = Object.assign({}, plug.storage);
   const again = createPlug();
   Object.assign(again.storage, kept);
-  sample(again, (q + 5) * Q, 26.0, 55.0);
-  sample(again, (q + 6) * Q, 27.0, 56.0);
+  sample(again, (q + 7) * Q, 27.0, 55.0);
+  sample(again, (q + 8) * Q, 28.0, 56.0);
 
-  const got = read(again, q, 7);
-  check('what was there before is still there', got.t.slice(0, 4), [20, 21, 22, 23]);
-  check('and the new records follow on', got.t[5], 26.0, 0.05);
+  const got = read(again, q, 9);
+  check('what reached the flash is still there', got.t.slice(0, 6), [20, 21, 22, 23, 24, 25]);
+  check('and the new records follow on', got.t[7], 27.0, 0.05);
 });
 
 test('a very long outage starts a fresh grid instead of filling months with holes', () => {
@@ -276,13 +281,51 @@ test('a very long outage starts a fresh grid instead of filling months with hole
   const q = Math.floor(NOON / Q);
   sample(plug, NOON, 20.0, 50.0);
   // Away for a fortnight.
-  const later = q + 96 * 14;
+  const later = q + 288 * 14;
   sample(plug, later * Q, 15.0, 70.0);
   sample(plug, (later + 1) * Q, 15.0, 70.0);
   const got = read(plug, later, 1);
   check('the reading after the outage is stored', got.t[0], 15.0, 0.05);
-  check('and it did not write two weeks of nulls', plug.api.ST.count < 96, true);
+  check('and it did not write two weeks of nulls', plug.api.ST.count < 288, true);
+});
+
+test('the flash is written every half hour, not every five minutes', () => {
+  // The whole page is rewritten on every flush, so a flush is what wears the
+  // flash out. Six records is thirty minutes, which is the same rate the
+  // fifteen-minute version had -- and the exposure on a power cut is the same
+  // half hour it always was.
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  for (let i = 0; i <= 12; i++) sample(plug, (q + i) * Q, 20 + i / 10, 50);
+  // Measured over the second hour, because the first also pays for the page
+  // being created.
+  const after = plug.writes.a;
+  for (let i = 13; i <= 24; i++) sample(plug, (q + i) * Q, 20 + i / 10, 50);
+  check('twelve records is an hour', 12 * Q / 3600, 1.0, 0.01);
+  check('and costs two flushes', plug.writes.a - after, 2);
+  check('which is 48 page writes a day', 2 * 24, 48);
+  // Everything is readable all the same: what has not reached the flash is
+  // still in the buffer, and reading looks in both.
+  const got = read(plug, q, 12);
+  check('nothing is invisible while it waits', got.t.filter((x) => x !== null).length, 12);
+});
+
+test('a power cut costs the buffer and nothing else', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  for (let i = 0; i <= 8; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  // Six records reached the flash, two are still waiting. The lights go out.
+  const survived = Object.assign({}, plug.storage);
+  const again = createPlug();
+  Object.assign(again.storage, survived);
+  sample(again, (q + 9) * Q, 30.0, 70.0);
+  sample(again, (q + 10) * Q, 31.0, 71.0);
+  const got = read(again, q, 10);
+  check('what was flushed survived', got.t.slice(0, 6), [20, 21, 22, 23, 24, 25]);
+  check('what was in the buffer is gone, and says so', got.t.slice(6, 9), [null, null, null]);
+  check('and the grid did not slip', got.t[9], 30.0, 0.05);
 });
 
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
+
