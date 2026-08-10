@@ -54,8 +54,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,6 +86,7 @@ import java.time.ZonedDateTime
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Everything about one plug's energy: whether it is recording, and what it
@@ -160,6 +164,7 @@ fun PowerScreen(
                 onLevel = vm::setLevel,
                 onOpenPicker = vm::openPicker,
                 onStep = vm::step,
+                onScroll = vm::scroll,
                 onDrill = vm::drillInto,
                 onScrub = vm::scrub,
             )
@@ -282,6 +287,7 @@ private fun ChartCard(
     onLevel: (PowerLevel) -> Unit,
     onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
+    onScroll: (Long) -> Unit,
     onDrill: (Int) -> Unit,
     onScrub: (Int?) -> Unit,
 ) {
@@ -318,7 +324,7 @@ private fun ChartCard(
             // The band that says which stretch of time is on screen, and the
             // band you swipe to change it. Both readings of "which period" in
             // one place, so the plot below is only ever about values.
-            Column(Modifier.fillMaxWidth().pageSwipe(onStep)) {
+            Column(Modifier.fillMaxWidth().pageSwipe(state.buckets.size, onScroll)) {
                 // Five levels do not always fit across a phone, so the row
                 // scrolls rather than squeezing the labels -- but only when
                 // there is something to scroll to. A scroller that cannot move
@@ -389,22 +395,102 @@ fun PeriodPicker(
     onOpenPicker: () -> Unit,
     onStep: (Long) -> Unit,
 ) {
-    val rollingLabel = stringResource(R.string.power_last_24h)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { onStep(-1) }) {
             Icon(Icons.Default.ChevronLeft, contentDescription = stringResource(R.string.power_earlier))
         }
-        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            TextButton(onClick = onOpenPicker) {
-                Icon(Icons.Default.CalendarMonth, contentDescription = null,
-                    modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (window.rolling) rollingLabel else window.label())
-            }
-        }
+        PeriodName(window, onOpenPicker, Modifier.weight(1f))
         IconButton(onClick = { onStep(1) }, enabled = !atLatest) {
             Icon(Icons.Default.ChevronRight, contentDescription = stringResource(R.string.power_later))
         }
+    }
+}
+
+/**
+ * The name of what is on screen, which is two names while the window sits
+ * between two periods.
+ *
+ * Scrolled to midday, a day window is half Saturday and half Sunday, and one
+ * name for it would have to be a lie in one direction or the other. So both
+ * stand there, and they move: the one being left slides towards its edge as the
+ * chart moves off it, the one being entered comes in from the other side. Where
+ * they are says how far along the window is, which is the one thing a single
+ * label could never say.
+ *
+ * Placed by hand rather than by a Row, because the two names have to sit
+ * symmetrically about the middle at half way and neither can be given a fixed
+ * share of the width -- "KW 32 · 04.08.–10.08." and "2026" are the same thing
+ * at different levels.
+ */
+@Composable
+private fun PeriodName(
+    window: PowerWindow,
+    onOpenPicker: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val offset = window.offset
+    val leaving = window.alignedWindow
+    val entering = leaving.stepped(1)
+    // Each fades over the fifth of the travel nearest the edge it lives on, so
+    // at rest there is one name and in the middle there are two solid ones.
+    val fade = 0.2f
+    val gap = 16.dp
+
+    Box(
+        modifier
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onOpenPicker),
+        contentAlignment = Alignment.Center,
+    ) {
+        Layout(
+            content = {
+                // The icon only at rest. Two of them would be noise, and one
+                // that hops from name to name halfway through a scroll worse.
+                PeriodLabel(leaving.label(), withIcon = offset == 0f,
+                    alpha = ((1f - offset) / fade).coerceIn(0f, 1f))
+                PeriodLabel(entering.label(), withIcon = false,
+                    alpha = (offset / fade).coerceIn(0f, 1f))
+            },
+            modifier = Modifier.fillMaxWidth().clipToBounds(),
+        ) { measurables, constraints ->
+            val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
+            val height = placeables.maxOf { it.height }
+            val gapPx = gap.roundToPx()
+            layout(constraints.maxWidth, height) {
+                val centre = constraints.maxWidth / 2
+                // Travel is the label's own width plus the gap, so at half way
+                // the two sit exactly one gap apart around the middle, and at
+                // either end the one that belongs there is centred.
+                val leavingX = centre - placeables[0].width / 2 -
+                    (offset * (placeables[0].width + gapPx)).roundToInt()
+                val enteringX = centre - placeables[1].width / 2 +
+                    ((1f - offset) * (placeables[1].width + gapPx)).roundToInt()
+                placeables[0].place(leavingX, (height - placeables[0].height) / 2)
+                placeables[1].place(enteringX, (height - placeables[1].height) / 2)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PeriodLabel(text: String, withIcon: Boolean, alpha: Float) {
+    Row(
+        Modifier.alpha(alpha).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (withIcon) {
+            Icon(Icons.Default.CalendarMonth, contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
@@ -527,7 +613,7 @@ fun PeriodPickerDialog(
                     Modifier.fillMaxWidth().padding(top = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    TextButton(onClick = onNow) { Text(stringResource(R.string.power_last_24h)) }
+                    TextButton(onClick = onNow) { Text(stringResource(R.string.power_now)) }
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                 }
             }

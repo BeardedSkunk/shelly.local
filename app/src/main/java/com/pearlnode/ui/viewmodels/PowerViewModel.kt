@@ -94,7 +94,7 @@ data class PowerUiState(
     val deploying: Boolean = false,
     val syncing: Boolean = false,
     val error: PowerFailure? = null,
-    val window: PowerWindow = PowerWindow.LAST_24H,
+    val window: PowerWindow = PowerWindow.of(PowerLevel.DAY, LocalDateTime.now()),
     val buckets: List<PowerBucket> = emptyList(),
     /** True while the window runs up to now, so there is no later one to step to. */
     val atLatest: Boolean = true,
@@ -201,10 +201,6 @@ class PowerViewModel(
     )
     val uiState: StateFlow<PowerUiState> = _uiState.asStateFlow()
 
-    // The page opens on the last 24 hours, which is the only window that is not
-    // a calendar period and the only one that is always worth something.
-    private val window = MutableStateFlow(PowerWindow.LAST_24H)
-
     /**
      * The zone the chart is drawn in: the plug's, once a sync has learned it,
      * and the phone's until then.
@@ -217,11 +213,10 @@ class PowerViewModel(
     /**
      * Ticks when the hour turns.
      *
-     * The rolling window ends at the next whole hour, so once an hour it grows
-     * a bar and drops the oldest -- but only if somebody works that out again.
-     * Without this the chart quietly stops at the hour the screen was opened,
-     * which on a screen left open looks exactly like a plug that stopped
-     * recording.
+     * A window that reaches into the current hour grows as that hour fills, and
+     * the bar for it is only redrawn if somebody works it out again. Without
+     * this the chart quietly stops at the hour the screen was opened, which on a
+     * screen left open looks exactly like a plug that stopped recording.
      */
     private val hourTick = MutableStateFlow(0L)
 
@@ -231,6 +226,12 @@ class PowerViewModel(
     private fun storedZone(): ZoneId = journal.settings.zoneId(deviceId) ?: ZoneId.systemDefault()
     private fun nowUtc() = System.currentTimeMillis() / 1000
     private fun now() = LocalDateTime.now(zone)
+
+    // The page opens on today, from midnight, rather than on a rolling
+    // twenty-four hours. A window that starts at whatever time it is now is the
+    // one window a reader cannot compare with any other, and comparing days is
+    // most of what this chart is for. Scrolling reaches everything in between.
+    private val window = MutableStateFlow(PowerWindow.of(PowerLevel.DAY, now()))
 
     private val picker = MutableStateFlow<PowerWindow?>(null)
 
@@ -300,9 +301,7 @@ class PowerViewModel(
                 val start = formats().firstDayOfWeek
                 val shown = window.value
                 if (shown.weekStart != start) {
-                    window.value = shown.anchor
-                        ?.let { PowerWindow.of(shown.level, it, start) }
-                        ?: shown.copy(weekStart = start)
+                    window.value = PowerWindow.of(shown.level, shown.anchor, start)
                 }
             }
         }
@@ -352,15 +351,15 @@ class PowerViewModel(
                 _uiState.update { it.copy(
                     window = selected,
                     buckets = bucketize(segments, edges),
-                    atLatest = selected.isCurrent(nowUtc(), zone),
+                    atLatest = selected.atLatest(now()),
                     zone = zone,
                 ) }
             }
         }
     }
 
-    /** Back to the last 24 hours, cut the way the user counts weeks. */
-    fun showLatest() = show(PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek))
+    /** Back to the period now is in, whole, at the level in view. */
+    fun showLatest() = show(windowAt(window.value.level, now()))
 
     fun show(selected: PowerWindow) {
         window.value = selected
@@ -377,12 +376,9 @@ class PowerViewModel(
      * rather than by a guess.
      */
     fun openPicker() {
-        val current = window.value
-        picker.value = if (current.rolling) windowAt(PowerLevel.MONTH, now()).let {
-            // The rolling window is not in any month, so the picker opens on
-            // this one and offers its days.
-            it
-        } else current.pickingParent() ?: YEARS
+        // From a scrolled window, the period it started in: the grid offers
+        // whole periods, so it has to open on one.
+        picker.value = window.value.alignedWindow.pickingParent() ?: YEARS
     }
 
     fun closePicker() {
@@ -392,15 +388,11 @@ class PowerViewModel(
     fun pagePicker(steps: Long) {
         val open = picker.value ?: return
         if (open === YEARS) return
-        picker.value = open.shifted(steps, now())
+        picker.value = open.stepped(steps)
     }
 
-    private fun childLevelFor(parent: PowerWindow): PowerLevel {
-        val level = window.value.level
-        // The rolling window counts as choosing a day.
-        if (window.value.rolling) return PowerLevel.DAY
-        return if (parent === YEARS) PowerLevel.YEAR else level
-    }
+    private fun childLevelFor(parent: PowerWindow): PowerLevel =
+        if (parent === YEARS) PowerLevel.YEAR else window.value.level
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observePicker() {
@@ -444,8 +436,10 @@ class PowerViewModel(
                 label = pickerCellLabel(child, cell),
                 energyMwh = bucket?.energyMwh ?: 0.0,
                 known = bucket?.coarsestTier != null,
-                selected = cell.anchor == shown.anchor && cell.level == shown.level,
-                weekdayIndex = cell.anchor?.dayOfWeek?.ordinal ?: 0,
+                // Against the period the window starts in, so a scrolled window
+                // still marks where it came from rather than nothing at all.
+                selected = cell.anchor == shown.alignedWindow.anchor && cell.level == shown.level,
+                weekdayIndex = cell.anchor.dayOfWeek.ordinal,
             )
         }
         return PowerPicker(
@@ -474,19 +468,14 @@ class PowerViewModel(
         while (out.size < 40) {
             out.add(at)
             if (at.anchor == last.anchor) break
-            at = at.shifted(1, now())
+            at = at.stepped(1)
         }
         return out
     }
 
     /** Keeps the moment being looked at and changes how much around it is shown. */
     fun setLevel(level: PowerLevel) {
-        // Coming back to the day level lands on the rolling window rather than
-        // on today, because that is what the page means by 24 h.
-        window.value =
-            if (level == PowerLevel.DAY && window.value.level != PowerLevel.DAY)
-                PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek)
-            else window.value.atLevel(level, now())
+        window.value = window.value.atLevel(level).clamped(now())
     }
 
     /** Opens the period behind one bar: a year's month, a day's hour, and so on. */
@@ -495,20 +484,25 @@ class PowerViewModel(
     }
 
     /**
-     * Steps whole periods, from the arrows and from a swipe across the chart.
-     * Stepping back out of the rolling window lands on yesterday, since today is
-     * mostly what the rolling window already is. There is nothing after the
-     * latest period, so forward stops there rather than showing empty future.
+     * The arrows: whole periods, and always landing on one. From a window
+     * scrolled to somewhere in between, one press settles onto the period it is
+     * heading for rather than carrying the offset along.
      */
     fun step(periods: Long) {
         if (periods == 0L) return
-        var moved = window.value
-        repeat(kotlin.math.abs(periods).toInt()) {
-            val next = moved.shifted(if (periods > 0) 1 else -1, now())
-            if (periods > 0 && moved.isCurrent(nowUtc(), zone)) return@repeat
-            moved = next
-        }
-        window.value = moved
+        window.value = window.value.stepped(periods).clamped(now())
+    }
+
+    /**
+     * The swipe: whole bars, so the window can sit anywhere between two periods.
+     *
+     * Deliberately not the same gesture as the arrows. An evening that runs past
+     * midnight is two halves of two charts under the old rule, and no amount of
+     * stepping between whole days will ever show it in one piece.
+     */
+    fun scroll(bars: Long) {
+        if (bars == 0L) return
+        window.value = window.value.scrolled(bars).clamped(now())
     }
 
     /** Asks the plug what it is running, and syncs if the journal is there. */
@@ -594,8 +588,12 @@ class PowerViewModel(
         /**
          * Stands for "the years the archive covers" -- the one picker page that
          * is not a calendar period, because years have nothing above them.
+         *
+         * A marker rather than a window: it is only ever compared by identity,
+         * and every place that could ask it about time asks whether it is this
+         * first. The date in it is never read.
          */
-        private val YEARS = PowerWindow(PowerLevel.YEAR, null)
+        private val YEARS = PowerWindow(PowerLevel.YEAR, LocalDateTime.MIN)
     }
 
     class Factory(
@@ -611,7 +609,7 @@ class PowerViewModel(
 }
 
 fun pickerCellLabel(level: PowerLevel, cell: PowerWindow): String {
-    val at = cell.anchor ?: return ""
+    val at = cell.anchor
     return when (level) {
         PowerLevel.HOUR -> String.format(java.util.Locale.getDefault(), "%02d", at.hour)
         PowerLevel.DAY -> at.dayOfMonth.toString()

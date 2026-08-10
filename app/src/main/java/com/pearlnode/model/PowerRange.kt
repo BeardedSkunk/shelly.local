@@ -4,7 +4,6 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
 import java.time.temporal.WeekFields
 import java.util.Locale
@@ -15,12 +14,16 @@ enum class PowerLevel { HOUR, DAY, WEEK, MONTH, YEAR }
 /**
  * Which stretch of time is on screen, and what the bars across it are.
  *
- * A window is a real calendar period -- an hour, a day, an ISO week, a month, a
- * year -- anchored to a moment, rather than a span counted backwards from now.
- * That is what lets a bar be tapped: tapping August in a year has to open
- * August, not "the thirty days before now". The one exception is the rolling
- * window of the last 24 hours, which is what the page opens on and which has no
- * anchor.
+ * A window is one period long -- an hour, a day, a week, a month, a year -- and
+ * starts wherever its anchor puts it. Usually that is the start of a calendar
+ * period, which is what lets a bar be tapped: tapping August in a year has to
+ * open August, not "the thirty days before now". But it does not have to be.
+ * Scrolling moves the anchor a bar at a time, so a day window can start at noon
+ * and cover the second half of Saturday and the first half of Sunday -- which
+ * is the only way to look at an evening without a midnight cutting it in two.
+ *
+ * The bars stay where they always were: hours are still hours and days still
+ * days, because the anchor moves by whole bars and never between them.
  *
  * Bars per screen: 30 two-minute bars in an hour, 24 hours in a day, 7 days in
  * a week, 28 to 31 in a month, 12 months in a year. The day is 23 or 25 bars on
@@ -32,8 +35,8 @@ enum class PowerLevel { HOUR, DAY, WEEK, MONTH, YEAR }
  */
 data class PowerWindow(
     val level: PowerLevel,
-    /** Start of the period, or null for the rolling last 24 hours. */
-    val anchor: LocalDateTime?,
+    /** Where the window starts. A calendar boundary unless it has been scrolled. */
+    val anchor: LocalDateTime,
     /**
      * Which day a week begins on. Part of the window rather than a parameter
      * because it decides where a week starts, and a window derived from this one
@@ -42,16 +45,32 @@ data class PowerWindow(
      */
     val weekStart: DayOfWeek = DayOfWeek.MONDAY,
 ) {
-    val rolling: Boolean get() = anchor == null
+    /** The calendar period the window begins inside. Itself when nothing is scrolled. */
+    val alignedWindow: PowerWindow get() = of(level, anchor, weekStart)
+
+    /** True while the window is exactly one calendar period. */
+    val aligned: Boolean get() = anchor == alignedWindow.anchor
+
+    /**
+     * How far the window has slid out of the period it starts in: nought while
+     * it is that period, a half when it straddles two evenly, and never one --
+     * at one it is the next period and has slid out of nothing.
+     *
+     * Measured in wall-clock minutes rather than real ones. It positions the two
+     * names above the chart, and a reader who scrolls to what the clock calls
+     * midday expects to see the two days side by side whether or not the clocks
+     * moved that night.
+     */
+    val offset: Float get() {
+        val start = alignedWindow.anchor
+        val whole = ChronoUnit.MINUTES.between(start, start.plusPeriods(1, level))
+        if (whole <= 0L) return 0f
+        return (ChronoUnit.MINUTES.between(start, anchor).toFloat() / whole).coerceIn(0f, 1f)
+    }
 
     /** Bar boundaries, oldest first. One more entry than there are bars. */
     fun edges(nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): List<Long> {
-        if (rolling) {
-            val end = ZonedDateTime.ofInstant(Instant.ofEpochSecond(nowUtc), zone)
-                .truncatedTo(ChronoUnit.HOURS).plusHours(1)
-            return (ROLLING_HOURS downTo 0).map { end.minusHours(it.toLong()).toEpochSecond() }
-        }
-        val start = anchor!!.atZone(zone)
+        val start = anchor.atZone(zone)
         val end = when (level) {
             PowerLevel.HOUR -> start.plusHours(1)
             PowerLevel.DAY -> start.plusDays(1)
@@ -92,17 +111,47 @@ data class PowerWindow(
         }
     }
 
-    /** The same level, moved by whole periods. From the rolling window, now is the base. */
-    fun shifted(steps: Long, now: LocalDateTime): PowerWindow {
-        val base = anchor ?: now
-        return of(level, weekStart = weekStart, at = when (level) {
-            PowerLevel.HOUR -> base.plusHours(steps)
-            PowerLevel.DAY -> base.plusDays(steps)
-            PowerLevel.WEEK -> base.plusWeeks(steps)
-            PowerLevel.MONTH -> base.plusMonths(steps)
-            PowerLevel.YEAR -> base.plusYears(steps)
-        })
+    /**
+     * The same level, moved by whole periods, and always landing on one.
+     *
+     * From between two periods a single step lands on a whole one rather than
+     * carrying the offset along: forward on the period being scrolled into,
+     * back on the one being scrolled out of. That is what the arrows are for --
+     * the scroll is how you get to the places in between, and the arrows are how
+     * you get back out of them.
+     */
+    fun stepped(steps: Long): PowerWindow {
+        if (steps == 0L) return alignedWindow
+        val start = alignedWindow.anchor
+        val whole = if (aligned || steps > 0) steps else steps + 1
+        return copy(anchor = start.plusPeriods(whole, level))
     }
+
+    /**
+     * Moved by whole bars, which is what a finger dragging the chart does.
+     *
+     * Bars rather than pixels or seconds: an hour bar that began on the hour has
+     * to stay on the hour however far the window has been dragged, or the chart
+     * would be redrawn from readings cut at a boundary that means nothing.
+     */
+    fun scrolled(bars: Long): PowerWindow =
+        if (bars == 0L) this else copy(anchor = anchor.plusBars(bars, level))
+
+    /**
+     * Kept from running off the end of the archive into empty future.
+     *
+     * The furthest forward is the period now is in, whole -- today, this month,
+     * this year. Scrolling past that would only add bars nothing can have
+     * happened in yet.
+     */
+    fun clamped(now: LocalDateTime): PowerWindow {
+        val last = of(level, now, weekStart).anchor
+        return if (anchor.isAfter(last)) copy(anchor = last) else this
+    }
+
+    /** True once the window has reached the period now is in, which is as far as it goes. */
+    fun atLatest(now: LocalDateTime): Boolean =
+        !anchor.isBefore(of(level, now, weekStart).anchor)
 
     /**
      * The periods of a finer level that fall inside this one: the twelve months
@@ -114,7 +163,6 @@ data class PowerWindow(
      * long the archive runs.
      */
     fun subWindows(child: PowerLevel, zone: ZoneId = ZoneId.systemDefault()): List<PowerWindow> {
-        val anchor = anchor ?: return emptyList()
         val start = anchor.atZone(zone)
         val end = when (level) {
             PowerLevel.HOUR -> start.plusHours(1)
@@ -144,7 +192,6 @@ data class PowerWindow(
      * above them, so they are offered as the span the archive actually covers.
      */
     fun pickingParent(): PowerWindow? {
-        val anchor = anchor ?: return null
         return when (level) {
             PowerLevel.HOUR -> of(PowerLevel.DAY, anchor, weekStart)
             PowerLevel.DAY -> of(PowerLevel.MONTH, anchor, weekStart)
@@ -153,18 +200,21 @@ data class PowerWindow(
         }
     }
 
-    /** Keeps the moment being looked at and changes how much around it is shown. */
-    fun atLevel(target: PowerLevel, now: LocalDateTime): PowerWindow =
-        of(target, anchor ?: now, weekStart)
+    /**
+     * Keeps the moment being looked at and changes how much around it is shown.
+     *
+     * Lands on a whole period: coming from a scrolled window, the level that is
+     * being left decided where the anchor sat, and carrying that offset into a
+     * level it means nothing in would put a year window in the middle of March.
+     */
+    fun atLevel(target: PowerLevel): PowerWindow = of(target, anchor, weekStart)
 
     /** True while the period runs up to or past now, which is when there is no later one. */
-    fun isCurrent(nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): Boolean {
-        if (rolling) return true
-        return edges(nowUtc, zone).last() > nowUtc
-    }
+    fun isCurrent(nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): Boolean =
+        edges(nowUtc, zone).last() > nowUtc
 
     fun label(locale: Locale = Locale.getDefault()): String {
-        val at = anchor ?: return ""
+        val at = anchor
         val weekday = at.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, locale)
         return when (level) {
             PowerLevel.HOUR -> String.format(locale, "%s, %02d.%02d. %02d:00–%02d:00",
@@ -186,13 +236,8 @@ data class PowerWindow(
     }
 
     companion object {
-        /** How many hours the rolling window covers. */
-        const val ROLLING_HOURS = 24
-
         /** Bar width inside an hour. The plug's native tier resolves far finer. */
         const val BAR_MINUTES = 2L
-
-        val LAST_24H = PowerWindow(PowerLevel.DAY, null)
 
         fun of(
             level: PowerLevel,
@@ -214,4 +259,24 @@ data class PowerWindow(
         }
 
     }
+}
+
+/** One whole period of this level, forwards or back. */
+private fun LocalDateTime.plusPeriods(count: Long, level: PowerLevel): LocalDateTime = when (level) {
+    PowerLevel.HOUR -> plusHours(count)
+    PowerLevel.DAY -> plusDays(count)
+    PowerLevel.WEEK -> plusWeeks(count)
+    PowerLevel.MONTH -> plusMonths(count)
+    PowerLevel.YEAR -> plusYears(count)
+}
+
+/**
+ * One bar of this level: the same unit the chart is drawn in, which is what
+ * makes a scrolled window line up with an unscrolled one.
+ */
+private fun LocalDateTime.plusBars(count: Long, level: PowerLevel): LocalDateTime = when (level) {
+    PowerLevel.HOUR -> plusMinutes(count * PowerWindow.BAR_MINUTES)
+    PowerLevel.DAY -> plusHours(count)
+    PowerLevel.WEEK, PowerLevel.MONTH -> plusDays(count)
+    PowerLevel.YEAR -> plusMonths(count)
 }

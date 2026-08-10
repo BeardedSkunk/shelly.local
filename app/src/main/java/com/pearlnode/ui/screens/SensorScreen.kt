@@ -273,7 +273,7 @@ private fun SeriesCard(
             // the second card that is the heading alone, which is thin -- but
             // both charts move together anyway, so a swipe on either one is the
             // same swipe, and the one with the controls is right above it.
-            Column(Modifier.fillMaxWidth().pageSwipe(vm::step)) {
+            Column(Modifier.fillMaxWidth().pageSwipe(series.buckets.size, vm::scroll)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

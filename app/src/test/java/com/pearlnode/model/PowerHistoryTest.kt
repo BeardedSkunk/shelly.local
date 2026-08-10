@@ -250,12 +250,15 @@ class PowerHistoryTest {
     }
 
     @Test
-    fun `the rolling window ends at the next full hour and reaches back a day`() {
+    fun `a day scrolled to noon is still 24 bars of an hour each`() {
         val zone = java.time.ZoneId.of("Europe/Berlin")
         val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
-        val edges = PowerWindow.LAST_24H.edges(now, zone)
+        val edges = PowerWindow.of(PowerLevel.DAY, java.time.LocalDate.of(2026, 8, 5).atStartOfDay())
+            .scrolled(12)
+            .edges(now, zone)
         assertEquals(25, edges.size)
         assertEquals(24 * hour, edges.last() - edges.first())
+        assertTrue("every bar is still an hour", edges.zipWithNext().all { (a, b) -> b - a == hour })
         assertTrue("it covers now", edges.first() < now && edges.last() > now)
     }
 
@@ -293,9 +296,9 @@ class PowerHistoryTest {
     }
 
     @Test
-    fun `stepping back out of the rolling window lands on yesterday`() {
+    fun `stepping back from today lands on yesterday`() {
         val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
-        val yesterday = PowerWindow.LAST_24H.shifted(-1, today)
+        val yesterday = PowerWindow.of(PowerLevel.DAY, today).stepped(-1)
         assertEquals(PowerLevel.DAY, yesterday.level)
         assertEquals(java.time.LocalDate.of(2026, 8, 4).atStartOfDay(), yesterday.anchor)
     }
@@ -306,7 +309,6 @@ class PowerHistoryTest {
         val now = java.time.ZonedDateTime.of(2026, 8, 5, 13, 37, 0, 0, zone).toEpochSecond()
         val today = java.time.LocalDate.of(2026, 8, 5).atStartOfDay()
 
-        assertTrue(PowerWindow.LAST_24H.isCurrent(now, zone))
         assertTrue(PowerWindow.of(PowerLevel.DAY, today).isCurrent(now, zone))
         assertTrue(PowerWindow.of(PowerLevel.MONTH, today).isCurrent(now, zone))
         assertFalse(PowerWindow.of(PowerLevel.DAY, today.minusDays(1)).isCurrent(now, zone))

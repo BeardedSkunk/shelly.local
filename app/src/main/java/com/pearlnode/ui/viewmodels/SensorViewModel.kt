@@ -78,7 +78,7 @@ data class SensorSeries(
 data class SensorUiState(
     val device: Device? = null,
     val host: Device? = null,
-    val window: PowerWindow = PowerWindow.LAST_24H,
+    val window: PowerWindow = PowerWindow.of(PowerLevel.DAY, LocalDateTime.now()),
     val temperature: SensorSeries = SensorSeries(SensorKind.TEMPERATURE),
     val humidity: SensorSeries = SensorSeries(SensorKind.HUMIDITY),
     val atLatest: Boolean = true,
@@ -139,7 +139,6 @@ class SensorViewModel(
     )
     val uiState: StateFlow<SensorUiState> = _uiState.asStateFlow()
 
-    private val window = MutableStateFlow(PowerWindow.LAST_24H)
     private val hourTick = MutableStateFlow(0L)
     private val picker = MutableStateFlow<PowerWindow?>(null)
 
@@ -147,6 +146,11 @@ class SensorViewModel(
     private fun zone(): ZoneId = ZoneId.systemDefault()
     private fun nowUtc() = System.currentTimeMillis() / 1000
     private fun now() = LocalDateTime.now(zone())
+
+    // Today from midnight, like the energy screen. Scrolling reaches whatever
+    // stretch a reader actually wants -- a night, an afternoon, a spell of
+    // weather that paid no attention to where the days were cut.
+    private val window = MutableStateFlow(PowerWindow.of(PowerLevel.DAY, now()))
 
     init {
         observe(SensorKind.TEMPERATURE)
@@ -250,7 +254,7 @@ class SensorViewModel(
                     )
                     state.withSeries(series).copy(
                         window = selected,
-                        atLatest = selected.isCurrent(nowUtc(), zone()),
+                        atLatest = selected.atLatest(now()),
                         zone = zone(),
                     )
                 }
@@ -325,28 +329,27 @@ class SensorViewModel(
         _uiState.update { it.copy(picker = null) }
     }
 
-    fun showLatest() = show(PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek))
+    /** Back to the period now is in, whole, at the level in view. */
+    fun showLatest() = show(PowerWindow.of(window.value.level, now(), formats().firstDayOfWeek))
 
     fun setLevel(level: PowerLevel) {
-        window.value =
-            if (level == PowerLevel.DAY && window.value.level != PowerLevel.DAY)
-                PowerWindow.LAST_24H.copy(weekStart = formats().firstDayOfWeek)
-            else window.value.atLevel(level, now())
+        window.value = window.value.atLevel(level).clamped(now())
     }
 
     fun drillInto(barIndex: Int) {
         window.value.drillInto(barIndex, nowUtc(), zone())?.let { window.value = it }
     }
 
+    /** The arrows: whole periods, landing on one whichever side it started from. */
     fun step(periods: Long) {
         if (periods == 0L) return
-        var moved = window.value
-        repeat(kotlin.math.abs(periods).toInt()) {
-            val next = moved.shifted(if (periods > 0) 1 else -1, now())
-            if (periods > 0 && moved.isCurrent(nowUtc(), zone())) return@repeat
-            moved = next
-        }
-        window.value = moved
+        window.value = window.value.stepped(periods).clamped(now())
+    }
+
+    /** The swipe: whole bars, so a night can be looked at without being cut in two. */
+    fun scroll(bars: Long) {
+        if (bars == 0L) return
+        window.value = window.value.scrolled(bars).clamped(now())
     }
 
     // ------------------------------------------------------------- the picker
@@ -360,10 +363,9 @@ class SensorViewModel(
      * card it was opened from would be two calendars.
      */
     fun openPicker() {
-        val current = window.value
-        picker.value =
-            if (current.rolling) PowerWindow.of(PowerLevel.MONTH, now(), formats().firstDayOfWeek)
-            else current.pickingParent() ?: YEARS
+        // The grid offers whole periods, so from a scrolled window it opens on
+        // the one that window starts in.
+        picker.value = window.value.alignedWindow.pickingParent() ?: YEARS
     }
 
     fun closePicker() {
@@ -374,7 +376,7 @@ class SensorViewModel(
     fun pagePicker(steps: Long) {
         val open = picker.value ?: return
         if (open === YEARS) return
-        picker.value = open.shifted(steps, now())
+        picker.value = open.stepped(steps)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -406,8 +408,7 @@ class SensorViewModel(
         parent: PowerWindow,
         blocks: List<com.pearlnode.model.SensorBlock>,
     ): PowerPicker {
-        val child = if (window.value.rolling) PowerLevel.DAY
-            else if (parent === YEARS) PowerLevel.YEAR else window.value.level
+        val child = if (parent === YEARS) PowerLevel.YEAR else window.value.level
         val cells = if (parent === YEARS) yearWindows() else parent.subWindows(child, zone())
         val edges = cells.map { it.edges(nowUtc(), zone()).first() } +
             (cells.lastOrNull()?.edges(nowUtc(), zone()).let { it?.last() ?: nowUtc() })
@@ -430,8 +431,9 @@ class SensorViewModel(
                     label = pickerCellLabel(child, cell),
                     energyMwh = 0.0,
                     known = known,
-                    selected = cell.anchor == shown.anchor && cell.level == shown.level,
-                    weekdayIndex = cell.anchor?.dayOfWeek?.ordinal ?: 0,
+                    selected = cell.anchor == shown.alignedWindow.anchor &&
+                        cell.level == shown.level,
+                    weekdayIndex = cell.anchor.dayOfWeek.ordinal,
                     bandValue = if (known) bucket!!.energyMwh / 1000.0 else null,
                 )
             },
@@ -456,7 +458,7 @@ class SensorViewModel(
         while (out.size < 40) {
             out.add(at)
             if (at.anchor == last.anchor) break
-            at = at.shifted(1, now())
+            at = at.stepped(1)
         }
         return out
     }
@@ -544,8 +546,11 @@ class SensorViewModel(
     }
 
     private companion object {
-        /** The sentinel that means "the years themselves", as on the energy screen. */
-        val YEARS = PowerWindow(PowerLevel.YEAR, null)
+        /**
+         * The sentinel that means "the years themselves", as on the energy
+         * screen. Compared by identity; the date inside it is never read.
+         */
+        val YEARS = PowerWindow(PowerLevel.YEAR, LocalDateTime.MIN)
     }
 
     class Factory(

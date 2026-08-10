@@ -5,6 +5,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -151,12 +152,12 @@ class PowerRangeTest {
         // moment they touched an arrow.
         val week = PowerWindow.of(PowerLevel.WEEK, at("2026-08-05T14:00"), DayOfWeek.SUNDAY)
         val now = at("2026-08-05T14:00")
-        assertEquals(DayOfWeek.SUNDAY, week.shifted(-1, now).weekStart)
-        assertEquals(at("2026-07-26T00:00"), week.shifted(-1, now).anchor)
+        assertEquals(DayOfWeek.SUNDAY, week.stepped(-1).weekStart)
+        assertEquals(at("2026-07-26T00:00"), week.stepped(-1).anchor)
         assertEquals(DayOfWeek.SUNDAY,
             week.drillInto(0, nowIn("2026-08-10T00:00"), berlin)!!.weekStart)
         assertEquals(DayOfWeek.SUNDAY, week.pickingParent()!!.weekStart)
-        assertEquals(DayOfWeek.SUNDAY, week.atLevel(PowerLevel.MONTH, now).weekStart)
+        assertEquals(DayOfWeek.SUNDAY, week.atLevel(PowerLevel.MONTH).weekStart)
         assertTrue(week.subWindows(PowerLevel.DAY, berlin).all { it.weekStart == DayOfWeek.SUNDAY })
     }
 
@@ -170,28 +171,70 @@ class PowerRangeTest {
         assertEquals(at("2027-01-01T00:00"), newYear.anchor)
     }
 
-    // ------------------------------------------------------- the rolling day
+    // ------------------------------------------------ scrolled between periods
 
     @Test
-    fun `the last 24 hours ends at the next whole hour and has 24 bars`() {
-        val now = nowIn("2026-08-05T12:34")
-        val edges = PowerWindow.LAST_24H.edges(now, berlin)
-        assertEquals(24, edges.size - 1)
-        assertEquals(nowIn("2026-08-05T13:00"), edges.last())
-        assertEquals(24L * 3600, edges.last() - edges.first())
-        assertNull("the rolling window has no anchor", PowerWindow.LAST_24H.anchor)
+    fun `a day scrolled to noon covers two half days and still has 24 bars`() {
+        // The whole point of scrolling: an evening that runs past midnight in
+        // one piece, rather than as two halves of two charts.
+        val now = nowIn("2026-08-06T12:34")
+        val noon = PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00")).scrolled(12)
+        assertEquals(at("2026-08-05T12:00"), noon.anchor)
+        assertEquals(24, noon.edges(now, berlin).size - 1)
+        assertEquals(24L * 3600, noon.edges(now, berlin).let { it.last() - it.first() })
+        assertFalse("it is no longer one calendar day", noon.aligned)
+        assertEquals(0.5f, noon.offset, 0.001f)
     }
 
     @Test
-    fun `the last 24 hours across a clock change is still 24 hours of bars`() {
-        // Asked for at noon on the day the clocks went forward, the window
-        // reaches back into the day before -- 24 bars, 24 hours of real time,
-        // and one of them a wall clock hour that never existed.
-        val now = nowIn("2026-03-29T12:34")
-        val edges = PowerWindow.LAST_24H.edges(now, berlin)
-        assertEquals(24, edges.size - 1)
-        assertEquals(24L * 3600, edges.last() - edges.first())
-        assertTrue(edges.zipWithNext().all { (a, b) -> b - a == 3600L })
+    fun `scrolling a whole period's worth of bars is the next period`() {
+        val day = PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00"))
+        val scrolled = day.scrolled(24)
+        assertEquals(PowerWindow.of(PowerLevel.DAY, at("2026-08-06T00:00")), scrolled)
+        assertTrue("and it is a whole day again", scrolled.aligned)
+        assertEquals(0f, scrolled.offset, 0f)
+    }
+
+    @Test
+    fun `the offset says how far between two periods the window sits`() {
+        val day = PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00"))
+        assertEquals(0f, day.offset, 0f)
+        assertEquals(0.25f, day.scrolled(6).offset, 0.001f)
+        assertEquals(0.75f, day.scrolled(18).offset, 0.001f)
+        // A month is measured against its own length, not against a fixed one:
+        // the same fifteen days is half of a thirty day month.
+        val june = PowerWindow.of(PowerLevel.MONTH, at("2026-06-01T00:00"))
+        assertEquals(0.5f, june.scrolled(15).offset, 0.001f)
+        val july = PowerWindow.of(PowerLevel.MONTH, at("2026-07-01T00:00"))
+        assertEquals(15f / 31f, july.scrolled(15).offset, 0.001f)
+    }
+
+    @Test
+    fun `an arrow out of a scrolled window lands on a whole period either way`() {
+        // Forward on the period being scrolled into, back on the one being
+        // scrolled out of -- so one press always ends somewhere nameable.
+        val noon = PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00")).scrolled(12)
+        assertEquals(at("2026-08-06T00:00"), noon.stepped(1).anchor)
+        assertEquals(at("2026-08-05T00:00"), noon.stepped(-1).anchor)
+        assertTrue(noon.stepped(1).aligned && noon.stepped(-1).aligned)
+
+        // From a whole period it still moves a whole period, as it always did.
+        val day = PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00"))
+        assertEquals(at("2026-08-06T00:00"), day.stepped(1).anchor)
+        assertEquals(at("2026-08-04T00:00"), day.stepped(-1).anchor)
+    }
+
+    @Test
+    fun `scrolling stops at the period now is in`() {
+        val now = at("2026-08-10T15:00")
+        val today = PowerWindow.of(PowerLevel.DAY, now)
+        assertEquals(at("2026-08-10T00:00"), today.anchor)
+        // Half a day further would be half of tomorrow, which has not happened.
+        assertEquals(today, today.scrolled(12).clamped(now))
+        assertTrue(today.atLatest(now))
+        assertFalse(today.scrolled(-1).atLatest(now))
+        // Backwards is not clamped: the archive reaches as far back as it does.
+        assertEquals(at("2026-08-09T18:00"), today.scrolled(-6).clamped(now).anchor)
     }
 
     // ------------------------------------------------- stepping and drilling
@@ -199,10 +242,10 @@ class PowerRangeTest {
     @Test
     fun `stepping a month lands on the month, not on 30 days later`() {
         val january = PowerWindow.of(PowerLevel.MONTH, at("2028-01-31T00:00"))
-        val february = january.shifted(1, at("2028-06-01T00:00"))
+        val february = january.stepped(1)
         assertEquals(at("2028-02-01T00:00"), february.anchor)
         assertEquals(29, bars(february))
-        assertEquals(at("2028-03-01T00:00"), february.shifted(1, at("2028-06-01T00:00")).anchor)
+        assertEquals(at("2028-03-01T00:00"), february.stepped(1).anchor)
     }
 
     @Test
@@ -243,7 +286,9 @@ class PowerRangeTest {
         assertTrue(PowerWindow.of(PowerLevel.DAY, at("2026-08-05T00:00")).isCurrent(now, berlin))
         assertTrue(PowerWindow.of(PowerLevel.YEAR, at("2026-01-01T00:00")).isCurrent(now, berlin))
         assertTrue(!PowerWindow.of(PowerLevel.DAY, at("2026-08-04T00:00")).isCurrent(now, berlin))
-        assertTrue(PowerWindow.LAST_24H.isCurrent(now, berlin))
+        // A scrolled window that reaches into now counts too: it is running.
+        assertTrue(PowerWindow.of(PowerLevel.DAY, at("2026-08-04T00:00"))
+            .scrolled(18).isCurrent(now, berlin))
     }
 
     @Test
@@ -261,10 +306,13 @@ class PowerRangeTest {
     fun `bar edges never repeat and never run backwards`() {
         val now = nowIn("2026-08-05T12:00")
         val windows = listOf(
-            PowerWindow.LAST_24H,
             PowerWindow.of(PowerLevel.HOUR, at("2026-03-29T01:00")),
             PowerWindow.of(PowerLevel.DAY, at("2026-03-29T00:00")),
             PowerWindow.of(PowerLevel.DAY, at("2026-10-25T00:00")),
+            // Scrolled across both clock changes, where a window that starts at
+            // noon reaches over the hour that is missing or doubled.
+            PowerWindow.of(PowerLevel.DAY, at("2026-03-28T00:00")).scrolled(12),
+            PowerWindow.of(PowerLevel.DAY, at("2026-10-24T00:00")).scrolled(12),
             PowerWindow.of(PowerLevel.WEEK, at("2026-12-28T00:00")),
             PowerWindow.of(PowerLevel.MONTH, at("2028-02-01T00:00")),
             PowerWindow.of(PowerLevel.YEAR, at("2028-01-01T00:00")),

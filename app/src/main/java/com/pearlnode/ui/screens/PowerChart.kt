@@ -598,17 +598,20 @@ private fun scrubModifier(barCount: Int, onScrub: ((Int?) -> Unit)?): Modifier =
     }
 
 /**
- * Swiping this region moves through history, one whole period per swipe of
- * about a third of its width.
+ * Swiping this region drags the chart through time, one bar per bar's width of
+ * travel.
  *
- * Dragging right reaches back, the way pulling a strip of paper to the right
- * brings earlier parts into view. A slow drag steps through several periods
- * rather than one, because the count comes out of the distance travelled rather
- * than out of the gesture ending.
+ * The window moves with the finger: pull right and earlier bars come in from
+ * the left, the way pulling a strip of paper to the right brings earlier parts
+ * into view. A full width of travel is a full screen of bars, which is one whole
+ * period -- but every position in between is reachable, and that is the point.
+ * A day window scrolled twelve bars is noon to noon, and an evening that runs
+ * past midnight can be looked at in one piece instead of as two halves of two
+ * charts.
  *
  * Meant for the band of controls above a chart -- the level chips and the row
- * naming the period. That row already has an arrow at each end doing exactly
- * this, so the gesture lands where a reader is looking when they want it, and
+ * naming the period. That row already has an arrow at each end for whole
+ * periods, so the gesture lands where a reader is looking when they want it, and
  * leaves the plot free for reading values.
  *
  * Buttons and chips inside the region keep working: they settle whether they
@@ -617,10 +620,11 @@ private fun scrubModifier(barCount: Int, onScrub: ((Int?) -> Unit)?): Modifier =
  * wins over this, which is the same rule a list inside a pager follows.
  */
 @Composable
-fun Modifier.pageSwipe(onStep: (Long) -> Unit): Modifier {
-    val step by rememberUpdatedState(onStep)
-    return this.pointerInput(Unit) {
-        val stepPx = size.width / 3f
+fun Modifier.pageSwipe(barCount: Int, onScroll: (Long) -> Unit): Modifier {
+    val scroll by rememberUpdatedState(onScroll)
+    return this.pointerInput(barCount) {
+        if (barCount <= 0) return@pointerInput
+        val stepPx = size.width / barCount.toFloat()
         var carried = 0f
         detectHorizontalDragGestures(
             onDragStart = { carried = 0f },
@@ -629,10 +633,10 @@ fun Modifier.pageSwipe(onStep: (Long) -> Unit): Modifier {
         ) { change, dragAmount ->
             change.consume()
             carried += dragAmount
-            val steps = (carried / stepPx).toInt()
-            if (steps != 0) {
-                carried -= steps * stepPx
-                step(-steps.toLong())
+            val bars = (carried / stepPx).toInt()
+            if (bars != 0) {
+                carried -= bars * stepPx
+                scroll(-bars.toLong())
             }
         }
     }
