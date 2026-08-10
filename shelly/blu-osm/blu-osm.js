@@ -107,6 +107,7 @@ let ARC = {
   per_page: 336,
   step_s: 300,
   flush_every: 6,   // Saetze im RAM, bevor der Flash sie zu sehen bekommt
+  send_slots: 20,   // Zeitscheiben je Nachtrag-Anfrage
   version: 2,
 };
 
@@ -129,6 +130,7 @@ let ST = {
   lastT: null, // zuletzt gesehener Stand ...
   lastH: null,
   lastAt: 0,   // ... und wann der Sensor ihn gemeldet hat
+  sent: 0,     // erste Zeitscheibe, die openSenseMap noch nicht hat
   ready: false,
 };
 
@@ -261,12 +263,17 @@ function arcHumCode(h) {
   return c;
 }
 
-// "<version>|<seite>|<start>|<anzahl>"
+// "<version>|<seite>|<start>|<anzahl>|<gesendet>"
+//
+// gesendet ist die erste Zeitscheibe, die openSenseMap noch nicht hat. Sie
+// steht hier und nicht im RAM, weil sie einen Neustart ueberleben muss: sonst
+// wuerde nach jedem Stromausfall alles noch einmal geschickt, oder gar nichts.
 function arcSaveMeta() {
   Script.storage.setItem(
     ARC.meta,
     JSON.stringify(ARC.version) + '|' + JSON.stringify(ST.page) + '|' +
-      JSON.stringify(ST.start) + '|' + JSON.stringify(ST.count)
+      JSON.stringify(ST.start) + '|' + JSON.stringify(ST.count) + '|' +
+      JSON.stringify(ST.sent)
   );
 }
 
@@ -274,10 +281,11 @@ function arcLoadMeta() {
   let raw = Script.storage.getItem(ARC.meta);
   if (raw === null || raw === undefined) return false;
   let f = raw.split('|');
-  if (f.length !== 4 || JSON.parse(f[0]) !== ARC.version) return false;
+  if (f.length < 5 || JSON.parse(f[0]) !== ARC.version) return false;
   ST.page = JSON.parse(f[1]);
   ST.start = JSON.parse(f[2]);
   ST.count = JSON.parse(f[3]);
+  ST.sent = JSON.parse(f[4]);
   if (ST.page < 0 || ST.page >= ARC.slots.length) return false;
   return true;
 }
@@ -369,7 +377,7 @@ function arcSample(now, t, h, at) {
       ST.quarter = ST.start + ST.count;
       ST.buf = '';
     } else {
-      ST.page = 0; ST.start = q; ST.count = 0;
+      ST.page = 0; ST.start = q; ST.count = 0; ST.sent = q;
       Script.storage.setItem(ARC.slots[0], '');
       arcSaveMeta();
       ST.quarter = q;
@@ -419,6 +427,10 @@ function update() {
     he === null || he.last === undefined ? null : he.last,
     newest
   );
+
+  // Nachreichen, was openSenseMap noch fehlt. Laeuft neben dem Live-Push und
+  // stoert ihn nicht: es schickt nur, wenn gerade kein anderer Request laeuft.
+  bfSend();
 
   let due = now - lastWriteAt >= CFG.refresh_s;
   if (!changed && !due && lastWriteAt !== 0) return;
@@ -483,6 +495,126 @@ function buildMap(offset) {
     update();
     Timer.set(CFG.poll_ms, true, update);
   });
+}
+
+// ------------------------------------------------------------- Nachreichen
+//
+// Was waehrend eines Ausfalls aufgezeichnet wurde, geht hinterher hinaus. Die
+// API nimmt CSV mit eigenem Zeitstempel je Zeile und bis zu 2500 Werten am
+// Stueck; hier sind es 20 Zeitscheiben, also hoechstens 40 Zeilen und knapp
+// zwei Kilobyte -- der Stecker hat keine 8 KB frei, und ein Rumpf, den er nicht
+// bauen kann, waere ein Ausfall im Ausfall.
+//
+// Der Zeiger auf das erste noch nicht gesendete Feld steht in der Verwaltung
+// und wird erst nach einer bestaetigten Antwort weitergesetzt. Ein Fehlschlag
+// aendert nichts, der naechste Durchlauf versucht dieselbe Stelle noch einmal.
+
+let bfBusy = false;
+
+// Ein Zeilenumbruch als Zeichen statt als Escape: der Minifier arbeitet
+// zeilenweise, und ein Escape im Quelltext hat ihn schon einmal gestolpert.
+let NL = String.fromCharCode(10);
+
+function two(n) {
+  return n < 10 ? '0' + JSON.stringify(n) : JSON.stringify(n);
+}
+
+// Unixsekunde als RFC 3339. mJS kennt kein Date, also von Hand -- die
+// Kalenderrechnung nach Hinnant, die ohne Sonderfaelle fuer Schaltjahre
+// auskommt, weil sie das Jahr im Maerz beginnen laesst.
+function isoTime(t) {
+  let days = Math.floor(t / 86400);
+  let secs = t - days * 86400;
+  let z = days + 719468;
+  let era = Math.floor(z / 146097);
+  let doe = z - era * 146097;
+  let yoe = Math.floor(
+    (doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365
+  );
+  let y = yoe + era * 400;
+  let doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  let mp = Math.floor((5 * doy + 2) / 153);
+  let d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  let m = mp < 10 ? mp + 3 : mp - 9;
+  if (m <= 2) y = y + 1;
+  return JSON.stringify(y) + '-' + two(m) + '-' + two(d) + 'T' +
+    two(Math.floor(secs / 3600)) + ':' + two(Math.floor(secs / 60) % 60) + ':' +
+    two(secs % 60) + 'Z';
+}
+
+function bfSensorId(name) {
+  for (let i = 0; i < OSM.sensors.length; i++) {
+    if (OSM.sensors[i].name === name) return OSM.sensors[i].id;
+  }
+  return null;
+}
+
+// Baut den Rumpf fuer die naechsten Felder und schickt ihn. Unbekannte Felder
+// werden uebersprungen, zaehlen aber als erledigt -- eine Luecke bleibt eine
+// Luecke, und sie noch einmal anzusehen wuerde den Zeiger nie weiterbringen.
+function bfSend() {
+  if (!OSM.enable || bfBusy || osmBusy) return;
+  let last = ST.start + arcFilled();       // erste Scheibe, die es noch nicht gibt
+  if (ST.sent >= last) return;
+  if (ST.sent < arcOldest()) ST.sent = arcOldest();
+
+  let count = last - ST.sent;
+  if (count > ARC.send_slots) count = ARC.send_slots;
+  let got = arcRead(ST.sent, count);
+  let tid = bfSensorId('temperature');
+  let hid = bfSensorId('humidity');
+
+  let body = '';
+  let lines = 0;
+  for (let i = 0; i < count; i++) {
+    let stamp = isoTime((ST.sent + i) * ARC.step_s);
+    if (got.t[i] !== null && tid !== null) {
+      body = body + tid + ',' + JSON.stringify(got.t[i]) + ',' + stamp + NL;
+      lines = lines + 1;
+    }
+    if (got.h[i] !== null && hid !== null) {
+      body = body + hid + ',' + JSON.stringify(got.h[i]) + ',' + stamp + NL;
+      lines = lines + 1;
+    }
+  }
+
+  // Nur Luecken in diesem Stueck: nichts zu senden, aber erledigt.
+  if (lines === 0) {
+    ST.sent = ST.sent + count;
+    arcSaveMeta();
+    return;
+  }
+
+  bfBusy = true;
+  let advance = count;
+  Shelly.call(
+    'HTTP.Request',
+    {
+      method: 'POST',
+      url: OSM.url,
+      headers: { 'Content-Type': 'text/csv', Authorization: OSM.token },
+      body: body,
+      ssl_ca: OSM.ssl_ca,
+      timeout: OSM.timeout_s,
+    },
+    function (res, ec, em) {
+      bfBusy = false;
+      if (ec !== 0) {
+        print('Nachtrag: Aufruf fehlgeschlagen: ' + em);
+        return;
+      }
+      if (res.code < 200 || res.code > 299) {
+        print('Nachtrag: HTTP ' + JSON.stringify(res.code) + ' ' + res.body);
+        return;
+      }
+      ST.sent = ST.sent + advance;
+      arcSaveMeta();
+      if (CFG.log) {
+        print('Nachtrag: ' + JSON.stringify(lines) + ' Werte bis ' +
+          JSON.stringify(ST.sent) + ' bestaetigt');
+      }
+    }
+  );
 }
 
 // ---------------------------------------------------------------- Auslesen

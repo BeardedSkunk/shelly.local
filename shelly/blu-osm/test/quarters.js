@@ -26,6 +26,8 @@ function createPlug() {
     stale: false,
     spokeAt: 0,
     writes: {},
+    http: [],
+    httpReply: { code: 201, body: '"Measurements saved in box"' },
     logs: [],
     endpoints: {},
     timers: [],
@@ -61,6 +63,12 @@ function createPlug() {
       return null;
     },
     call(method, params, cb) {
+      if (method === 'HTTP.Request') {
+        plug.http.push(params);
+        const reply = plug.httpReply;
+        if (cb) cb({ code: reply.code, body: reply.body || '' }, reply.ec || 0, reply.em || '');
+        return;
+      }
       if (method === 'Shelly.GetComponents') {
         const components = [
           { key: 'bthomesensor:200', config: { obj_id: 69 } },
@@ -324,6 +332,82 @@ test('a power cut costs the buffer and nothing else', () => {
   check('what was flushed survived', got.t.slice(0, 6), [20, 21, 22, 23, 24, 25]);
   check('what was in the buffer is gone, and says so', got.t.slice(6, 9), [null, null, null]);
   check('and the grid did not slip', got.t[9], 30.0, 0.05);
+});
+
+
+/** The backfill requests only -- the live push sends JSON, this sends CSV. */
+function backfills(plug) {
+  return plug.http.filter((r) => (r.headers || {})['Content-Type'] === 'text/csv');
+}
+
+test('what was recorded goes out with its own timestamps', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  for (let i = 0; i <= 3; i++) sample(plug, (q + i) * Q, 20 + i, 50 + i);
+
+  const sent = backfills(plug);
+  check('something was sent', sent.length >= 1, true);
+  // The first request, not the last: by the end the pointer has moved on and
+  // the newest request starts where that one stopped.
+  const lines = sent[0].body.trim().split(String.fromCharCode(10));
+  check('two sensors per slot', lines.length % 2, 0);
+  // The first line has to carry the moment the reading belongs to, not now.
+  const [sensor, value, stamp] = lines[0].split(',');
+  check('the temperature sensor', sensor, 't');
+  check('its value', Number(value), 20.0, 0.05);
+  check('and the slot it stood in', stamp, new Date(q * Q * 1000).toISOString().replace(/\.\d\d\dZ$/, 'Z'));
+});
+
+test('the pointer moves only on a confirmed answer', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 500, body: 'the service is having an evening' };
+  for (let i = 0; i <= 3; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  check('nothing counts as delivered', plug.api.ST.sent, q);
+  const tries = backfills(plug).length;
+  check('and it kept trying', tries >= 2, true);
+
+  // The service comes back.
+  plug.httpReply = { code: 201, body: 'ok' };
+  sample(plug, (q + 4) * Q, 24, 50);
+  check('now it has moved', plug.api.ST.sent > q, true);
+});
+
+test('a refused call is not mistaken for an empty one', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 0, ec: -104, em: 'no route to host' };
+  for (let i = 0; i <= 3; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  check('the pointer stayed put', plug.api.ST.sent, q);
+});
+
+test('gaps are skipped but do not block the pointer', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  sample(plug, NOON, 20.0, 50.0);
+  // Silence for three slots, then a reading again.
+  for (let i = 1; i <= 3; i++) {
+    plug.now = NOON + i * Q; plug.stale = true; plug.api.update();
+  }
+  plug.stale = false;
+  sample(plug, NOON + 4 * Q, 25.0, 60.0);
+  sample(plug, NOON + 5 * Q, 26.0, 61.0);
+  check('the pointer went past the hole', plug.api.ST.sent > q + 3, true);
+  const body = backfills(plug).map((r) => r.body).join('');
+  check('and nothing was invented for it', body.indexOf('null'), -1);
+});
+
+test('one request never carries more than it can build', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 500 };          // hold everything back
+  for (let i = 0; i <= 60; i++) sample(plug, (q + i) * Q, 20 + (i % 5), 50);
+  plug.httpReply = { code: 201 };
+  sample(plug, (q + 61) * Q, 20, 50);
+  const last = backfills(plug)[backfills(plug).length - 1];
+  const lines = last.body.trim().split(String.fromCharCode(10)).length;
+  check('at most 20 slots, two sensors each', lines <= 40, true);
+  check('which stays under two kilobytes', last.body.length < 2048, true);
 });
 
 console.log(`\n${checks} checks, ${failures} failed`);
