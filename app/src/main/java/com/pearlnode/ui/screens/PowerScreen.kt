@@ -626,47 +626,58 @@ fun PeriodPickerDialog(
 }
 
 /**
- * What the period came to, and what the rate did inside it.
+ * The line under the chart, which says two different things.
  *
- * The three big figures are the period's own: what went through the meter, what
- * it was worth, and what it typically ran at. Under the outer two sit the
- * extremes, which are the figures a bar cannot give -- a bar is an average over
- * its own width, so the tallest bar of a week is the busiest day's average and
- * about a third of that day's real peak. They come from the stored blocks
- * instead.
+ * With no finger on the chart it describes the period: what went through the
+ * meter, what the plug is drawing this second, and what it came to in money.
  *
- * The middle has no heading. It used to say "Now" and then "Selected", and
- * neither was worth a line: what it holds is the rate, the two figures beside
- * it are the ends of the same rate, and putting a finger on a bar lights that
- * bar up as well.
+ * Touch a bar and all three become that bar, and become rates: how low it went,
+ * what it averaged, how high it reached. The average is the bar's own height --
+ * it is the only height a bar can have, since the money beside it and the total
+ * to its left are both built on it -- so the peak has to be told rather than
+ * shown, and touching a bar is where it gets told. That was the whole question:
+ * the tallest bar of a week is the busiest day's average, and the peak of that
+ * day is half as much again.
  */
 @Composable
 private fun Totals(state: PowerUiState, formats: Formats) {
     val kwh = state.totalKwh
     val euro = state.totalEuro
-    val extremes = state.extremes
+    val range = state.scrubbedRange
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Column {
-            Text(stringResource(R.string.power_total_energy),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(String.format(Locale.getDefault(), "%.2f kWh", abs(kwh)),
-                style = MaterialTheme.typography.titleMedium)
-            // No split line here. It ran wider than the column and pushed the
-            // middle one off centre, and the middle is where the eye goes.
-            extremes?.let { Extreme(R.string.power_lowest, it.lowMw) }
+            if (range == null) {
+                Label(R.string.power_total_energy)
+                Text(String.format(Locale.getDefault(), "%.2f kWh", abs(kwh)),
+                    style = MaterialTheme.typography.titleMedium)
+                // No split line here. It ran wider than the column and pushed
+                // the middle one off centre, and the middle is where the eye
+                // goes.
+            } else {
+                Label(R.string.power_lowest)
+                Text(formatWatt(range.lowMw), style = MaterialTheme.typography.titleMedium)
+            }
         }
-        // The middle column is the one that changes under the finger. Left and
-        // right describe the whole period and do not move; this one is the rate
-        // the period ran at until a bar is scrubbed, when it is that bar's.
+        // The middle column is the one that changes under the finger.
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            val watt = state.scrubbedWatt ?: extremes?.let { it.meanMw / 1000.0 }
+            // No falling back to the live reading while a bar is being held.
+            // A bar nothing was recorded for has no figure, and answering it
+            // with what the plug is drawing this second put a number from now
+            // under a heading pointing at last Tuesday.
+            //
+            // Unsigned while scrubbing, because it is then the middle of the
+            // two figures either side of it and they are the size of a flow,
+            // not a direction. The money underneath keeps its sign, which is
+            // where the direction belongs: earned or spent.
+            val watt = if (state.scrubbed != null) state.scrubbedWatt?.let { abs(it) }
+                       else state.livePowerW
+            Label(if (state.scrubbed != null) R.string.power_average else R.string.power_now)
             Text(
                 watt?.let { String.format(Locale.getDefault(), "%.1f W", it) } ?: "—",
                 style = MaterialTheme.typography.titleMedium,
             )
-            // Only while scrubbing: the period's own money is already on the
-            // right, and the typical rate has not cost anything by itself.
+            // Only while scrubbing: a live reading is a rate and has not cost
+            // anything yet.
             state.scrubbedCents?.let { cents ->
                 Text(
                     formats.money(cents),
@@ -674,40 +685,29 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // Said once, quietly: the mean of a plant skips its nights, and a
-            // figure that leaves something out has to admit it.
-            if (state.scrubbed == null && extremes?.meanWhileActive == true) {
-                Text(
-                    stringResource(R.string.power_mean_active),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
         Column(horizontalAlignment = Alignment.End) {
-            // A plug on a plant earns rather than costs, and the difference is
-            // worth naming rather than leaving to a minus sign.
-            Text(
-                stringResource(if (euro < 0) R.string.power_earned else R.string.power_cost),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(formats.major(abs(euro)),
-                style = MaterialTheme.typography.titleMedium,
-                color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
-            extremes?.let { Extreme(R.string.power_highest, it.highMw) }
+            if (range == null) {
+                // A plug on a plant earns rather than costs, and the difference
+                // is worth naming rather than leaving to a minus sign.
+                Label(if (euro < 0) R.string.power_earned else R.string.power_cost)
+                Text(formats.major(abs(euro)),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
+            } else {
+                Label(R.string.power_highest)
+                Text(formatWatt(range.highMw), style = MaterialTheme.typography.titleMedium)
+            }
         }
     }
 }
 
-/** One end of the range, small and beneath the figure it belongs under. */
 @Composable
-private fun Extreme(label: Int, milliwatts: Double) {
+private fun Label(id: Int) {
     Text(
-        stringResource(label, formatWatt(milliwatts)),
-        style = MaterialTheme.typography.labelSmall,
+        stringResource(id),
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
     )
 }
 

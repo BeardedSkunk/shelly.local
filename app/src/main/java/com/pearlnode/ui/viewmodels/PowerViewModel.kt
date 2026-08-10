@@ -79,81 +79,48 @@ data class PowerPicker(
 enum class PowerTask { SYNC, TRACKING }
 
 /**
- * The three figures under the chart: how low it went, how high, and what it sat
- * at in between. All in milliwatts, unsigned -- the same way the bars are drawn,
- * where height is the size of the flow and the colour says which way.
+ * How far the rate ranged inside one bar. In milliwatts, unsigned, the way the
+ * bars themselves are drawn.
  *
- * Taken from the stored blocks rather than from the bars, which is the whole
- * point of having them. A bar is an average over its own width, so the tallest
- * bar of a week is the busiest day's average and not the peak of that day --
- * roughly a third of it, for a solar plant. The blocks resolve as finely as the
- * plug still holds them: minutes for the last day or so, quarter hours for the
- * week, and only whole days once the plug has thinned the rest away. So the peak
- * is as sharp as the archive allows and no sharper.
+ * The bar's own height sits between the two: it is the average over the bar's
+ * width, and an hour that ran from nothing to nine hundred watts draws at four
+ * hundred and something. That average is the only height that can be drawn --
+ * the money beside it and the total beneath it are both built on it -- so the
+ * peak has to be told rather than shown, and this is what tells it.
+ *
+ * Taken from the stored blocks, which resolve as finely as the plug still holds
+ * them: minutes for the last day or so, quarter hours for the week, whole days
+ * once the plug has thinned the rest away. The peak is as sharp as the archive
+ * allows and no sharper -- in a year of old months it closes on the average,
+ * which is honest rather than wrong.
  */
-data class PowerExtremes(
-    val lowMw: Double,
-    val highMw: Double,
-    /** Time-weighted, and for a plant only over the hours it was producing. */
-    val meanMw: Double,
-    /** Whether the mean skipped anything, which is the only case worth saying so. */
-    val meanWhileActive: Boolean,
-)
+data class BarRange(val lowMw: Double, val highMw: Double)
 
 /**
- * Where a reading stops counting as production.
+ * The range inside each bar, one entry per bar and null where nothing is known.
  *
- * The same one and a half watts the recorder on the plug uses: below that the
- * plug's own power figure flaps between nought and a watt or so and its time
- * average is not to be trusted, and for a plant it means night. Nights are left
- * out of a plant's average on purpose -- a solar day that averages 600 watts
- * while the sun is up averages 200 across the whole twenty-four hours, and it is
- * the first figure that describes the plant.
+ * A segment is a stretch of constant power, so where one straddles a bar edge
+ * both bars saw that rate and neither needs it split.
  */
-private const val ACTIVE_MW = 1_500.0
-
-/**
- * Left out rather than trimmed at the ends.
- *
- * Dropping the run of zeroes at each edge is the same thing for a whole
- * midnight-to-midnight day, and stops being the same thing the moment the window
- * is scrolled: from noon to noon the night sits in the middle, and a rule about
- * the edges would quietly go back to averaging over it. This one gives the same
- * answer wherever the window happens to start, and the same answer in the week
- * view as in the day view.
- */
-private fun extremesOf(segments: List<PowerSegment>): PowerExtremes? {
-    var low = Double.MAX_VALUE
-    var high = 0.0
-    var energy = 0.0
-    var seconds = 0.0
-    var activeEnergy = 0.0
-    var activeSeconds = 0.0
-    var earns = false
+internal fun barRanges(segments: List<PowerSegment>, edges: List<Long>): List<BarRange?> {
+    val bars = maxOf(edges.size - 1, 0)
+    if (bars == 0) return emptyList()
+    val low = DoubleArray(bars) { Double.MAX_VALUE }
+    val high = DoubleArray(bars) { -1.0 }
     for (segment in segments) {
         val span = (segment.endUtc - segment.startUtc).toDouble()
         if (span <= 0.0) continue
         val watt = abs(segment.energyMwh) * 3600.0 / span
-        if (segment.energyMwh < 0) earns = true
-        if (watt < low) low = watt
-        if (watt > high) high = watt
-        energy += watt * span
-        seconds += span
-        if (watt >= ACTIVE_MW) {
-            activeEnergy += watt * span
-            activeSeconds += span
+        for (bar in 0 until bars) {
+            if (edges[bar + 1] <= segment.startUtc) continue
+            if (edges[bar] >= segment.endUtc) break
+            if (watt < low[bar]) low[bar] = watt
+            if (watt > high[bar]) high[bar] = watt
         }
     }
-    if (seconds <= 0.0) return null
-    // Only a plant gets its idle hours taken out. For a load, the hours it was
-    // off are part of what it costs to have around.
-    val whileActive = earns && activeSeconds > 0.0
-    return PowerExtremes(
-        lowMw = if (low == Double.MAX_VALUE) 0.0 else low,
-        highMw = high,
-        meanMw = if (whileActive) activeEnergy / activeSeconds else energy / seconds,
-        meanWhileActive = whileActive,
-    )
+    return (0 until bars).map { bar ->
+        if (high[bar] < 0.0) null else BarRange(low[bar], high[bar])
+    }
 }
 
 data class PowerFailure(val task: PowerTask, val detail: String)
@@ -176,8 +143,8 @@ data class PowerUiState(
     val error: PowerFailure? = null,
     val window: PowerWindow = PowerWindow.of(PowerLevel.DAY, LocalDateTime.now()),
     val buckets: List<PowerBucket> = emptyList(),
-    /** The lowest, highest and typical rate over the window. Null while nothing is known. */
-    val extremes: PowerExtremes? = null,
+    /** How far the rate ranged inside each bar, for the one under a finger. */
+    val barRanges: List<BarRange?> = emptyList(),
     /** True while the window runs up to now, so there is no later one to step to. */
     val atLatest: Boolean = true,
     val priceCentsPerKwh: Double = 30.0,
@@ -197,6 +164,9 @@ data class PowerUiState(
 ) {
     /** The bar under the finger, if there is one. */
     val scrubbedBucket: PowerBucket? get() = scrubbed?.let { buckets.getOrNull(it) }
+
+    /** How far the rate ranged inside that bar, which is what the bar cannot show. */
+    val scrubbedRange: BarRange? get() = scrubbed?.let { barRanges.getOrNull(it) }
 
     /**
      * The power a bar stands for: its energy spread over its own width.
@@ -433,7 +403,7 @@ class PowerViewModel(
                 _uiState.update { it.copy(
                     window = selected,
                     buckets = bucketize(segments, edges),
-                    extremes = extremesOf(segments),
+                    barRanges = barRanges(segments, edges),
                     atLatest = selected.atLatest(now()),
                     zone = zone,
                 ) }

@@ -180,9 +180,9 @@
     <!-- Still the sensor charts, where the middle figure really is a reading
          taken now and the scrubbed one really is a different reading. -->
     <string name="power_at_bar">Selected</string>
-    <string name="power_lowest">min. %1$s</string>
-    <string name="power_highest">max. %1$s</string>
-    <string name="power_mean_active">while producing</string>
+    <string name="power_lowest">Min</string>
+    <string name="power_highest">Max</string>
+    <string name="power_average">Average</string>
     <string name="power_total_energy">Energy</string>
     <string name="power_cost">Cost</string>
     <string name="power_earned">Earned</string>
