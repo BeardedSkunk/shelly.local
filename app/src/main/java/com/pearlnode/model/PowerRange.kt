@@ -200,15 +200,6 @@ data class PowerWindow(
         }
     }
 
-    /**
-     * Keeps the moment being looked at and changes how much around it is shown.
-     *
-     * Lands on a whole period: coming from a scrolled window, the level that is
-     * being left decided where the anchor sat, and carrying that offset into a
-     * level it means nothing in would put a year window in the middle of March.
-     */
-    fun atLevel(target: PowerLevel): PowerWindow = of(target, anchor, weekStart)
-
     /** True while the period runs up to or past now, which is when there is no later one. */
     fun isCurrent(nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): Boolean =
         edges(nowUtc, zone).last() > nowUtc

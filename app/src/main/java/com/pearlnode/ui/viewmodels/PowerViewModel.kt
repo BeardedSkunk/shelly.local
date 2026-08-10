@@ -473,9 +473,19 @@ class PowerViewModel(
         return out
     }
 
-    /** Keeps the moment being looked at and changes how much around it is shown. */
+    /**
+     * The chips land on the current period of that level: this hour, today,
+     * this week.
+     *
+     * They used to keep the moment already on screen and only change how much
+     * around it was shown, which sounds helpful and is not: reaching for "Week"
+     * is asking what this week looks like, and a chip that answered with the
+     * week around some day scrolled to last March would have to be undone
+     * before it was any use. Getting back to a past period is what the arrows,
+     * the scroll and the calendar are for.
+     */
     fun setLevel(level: PowerLevel) {
-        window.value = window.value.atLevel(level).clamped(now())
+        window.value = windowAt(level, now())
     }
 
     /** Opens the period behind one bar: a year's month, a day's hour, and so on. */

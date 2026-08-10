@@ -157,7 +157,8 @@ class PowerRangeTest {
         assertEquals(DayOfWeek.SUNDAY,
             week.drillInto(0, nowIn("2026-08-10T00:00"), berlin)!!.weekStart)
         assertEquals(DayOfWeek.SUNDAY, week.pickingParent()!!.weekStart)
-        assertEquals(DayOfWeek.SUNDAY, week.atLevel(PowerLevel.MONTH).weekStart)
+        assertEquals(DayOfWeek.SUNDAY, week.scrolled(3).weekStart)
+        assertEquals(DayOfWeek.SUNDAY, week.scrolled(3).alignedWindow.weekStart)
         assertTrue(week.subWindows(PowerLevel.DAY, berlin).all { it.weekStart == DayOfWeek.SUNDAY })
     }
 

@@ -332,8 +332,9 @@ class SensorViewModel(
     /** Back to the period now is in, whole, at the level in view. */
     fun showLatest() = show(PowerWindow.of(window.value.level, now(), formats().firstDayOfWeek))
 
+    /** The current period of that level, as on the energy screen. */
     fun setLevel(level: PowerLevel) {
-        window.value = window.value.atLevel(level).clamped(now())
+        window.value = PowerWindow.of(level, now(), formats().firstDayOfWeek)
     }
 
     fun drillInto(barIndex: Int) {
