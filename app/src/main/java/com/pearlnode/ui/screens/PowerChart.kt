@@ -335,7 +335,13 @@ private fun projected(bucket: PowerBucket, nowUtc: Long?): Double {
  * against that same top, so the tallest one stops a little short of the ceiling
  * instead of always reaching it exactly.
  *
- * Three steps, which is four figures counting the zero at the baseline.
+ * How short is the whole difficulty. With the step count fixed at three, a peak
+ * of 16 had nowhere to go but 3 x 10, and the chart spent nearly half its height
+ * on empty air above the bars. So the count is not fixed: three to five steps
+ * are all tried against every round step size, and the combination that reaches
+ * the peak with the least room to spare wins. Sixteen becomes four steps of five
+ * and fills four fifths of the chart; a hundred becomes four of twenty-five and
+ * fills all of it.
  */
 data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
     val top: Double get() = step * steps
@@ -350,9 +356,29 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
     val values: List<Double> get() = (steps downTo -stepsBelow).map { it * step }
 
     companion object {
-        private const val STEPS = 3
+        /** Four figures at the fewest, six at the most, counting the zero. */
+        private const val MIN_STEPS = 3
+        private const val MAX_STEPS = 5
 
-        fun forPeak(peak: Double): Scale = Scale(niceStep(peak, STEPS), STEPS)
+        /** Rounding at the edge of a step should not cost a whole extra one. */
+        private const val SLACK = 1e-9
+
+        fun forPeak(peak: Double): Scale {
+            if (peak <= 0.0) return Scale(0.0, MIN_STEPS)
+            var best: Scale? = null
+            for (step in roundSteps(peak)) {
+                for (count in MIN_STEPS..MAX_STEPS) {
+                    if (step * count < peak - SLACK) continue
+                    // Least room to spare wins; where two reach the same top,
+                    // the one with fewer gridlines.
+                    if (tidier(step * count, count, best?.top, best?.steps)) {
+                        best = Scale(step, count)
+                    }
+                    break
+                }
+            }
+            return best ?: Scale(0.0, MIN_STEPS)
+        }
 
         /**
          * A scale with a real zero line, for a quantity where below zero means
@@ -365,81 +391,105 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
          */
         fun forRange(min: Double, max: Double): Scale {
             val reach = maxOf(abs(min), abs(max))
-            if (reach <= 0.0) return Scale(niceStep(1.0, STEPS), 1, 0)
-            val step = niceStep(reach, STEPS)
-            val above = ceil(max / step).toInt().coerceAtLeast(0)
-            val below = ceil(-min / step).toInt().coerceAtLeast(0)
+            if (reach <= 0.0) return Scale(1.0, 1, 0)
+            var best: Scale? = null
+            for (step in roundSteps(reach)) {
+                val above = ceil(max / step - SLACK).toInt().coerceAtLeast(0)
+                val below = ceil(-min / step - SLACK).toInt().coerceAtLeast(0)
+                val count = above + below
+                if (count !in MIN_STEPS..MAX_STEPS) continue
+                if (tidier(step * count, count, best?.span, best?.let { it.steps + it.stepsBelow })) {
+                    best = Scale(step, above, below)
+                }
+            }
             // Something has to be on the axis even if every reading is zero.
-            return if (above == 0 && below == 0) Scale(step, 1, 0)
-            else Scale(step, above, below)
+            return best ?: Scale(reach, 1, 0)
+        }
+
+        /** Shorter wins; equal length, fewer lines. */
+        private fun tidier(span: Double, count: Int, bestSpan: Double?, bestCount: Int?): Boolean {
+            if (bestSpan == null || bestCount == null) return true
+            if (span < bestSpan - SLACK) return true
+            return abs(span - bestSpan) < SLACK && count < bestCount
+        }
+
+        /**
+         * The round numbers worth trying as a step, around the size of the data.
+         *
+         * One, two, two and a half or five times a power of ten -- ten itself is
+         * one of the next magnitude up and comes round again there. Never finer
+         * than a milliwatt hour, because that is the smallest thing the plug
+         * counts: an axis in halves of one would offer a precision the archive
+         * underneath it does not have.
+         */
+        private fun roundSteps(reach: Double): List<Double> {
+            val out = ArrayList<Double>()
+            val magnitude = floor(log10(reach)).toInt()
+            for (power in (magnitude - 2)..(magnitude + 1)) {
+                val unit = 10.0.pow(power)
+                for (nice in listOf(1.0, 2.0, 2.5, 5.0)) {
+                    val step = nice * unit
+                    if (step >= 1.0) out.add(step)
+                }
+            }
+            return out
         }
     }
-}
-
-/**
- * The smallest round number -- 1, 2, 2.5 or 5 times a power of ten -- that
- * [steps] of will reach [peak].
- *
- * Never finer than a milliwatt hour, because that is the smallest thing the
- * plug counts. An axis in halves of one would be offering precision that the
- * archive underneath it does not have.
- */
-private fun niceStep(peak: Double, steps: Int): Double {
-    if (peak <= 0.0 || steps <= 0) return 0.0
-    val raw = peak / steps
-    val magnitude = 10.0.pow(floor(log10(raw)))
-    val normalised = raw / magnitude
-    val nice = when {
-        normalised <= 1.0 -> 1.0
-        normalised <= 2.0 -> 2.0
-        normalised <= 2.5 -> 2.5
-        normalised <= 5.0 -> 5.0
-        else -> 10.0
-    }
-    return max(1.0, nice * magnitude)
 }
 
 /** One side of the chart: what it is measured in, and what it says at each step. */
 class Axis(val unit: String, val ticks: List<String>)
 
 /**
- * The energy axis, in whichever of milliwatt hours, watt hours or kilowatt
- * hours makes the step a figure in its own right.
+ * The power axis, in whichever of milliwatts, watts or kilowatts makes the step
+ * a figure in its own right.
  *
- * Unsigned: the bars all go up and the colour says which way the energy went,
- * so a minus sign down this side would be describing something the chart does
- * not use height for.
+ * Power rather than the energy each bar holds, which is what this used to read.
+ * A bar's height is its energy, but the number worth putting beside it is the
+ * rate: watts are what the plug reports, what the figure under the chart says,
+ * and what anyone knows a kettle or a fridge by. Watt hours per two-minute bar
+ * are a quantity nobody has a feel for, and they change meaning with the level
+ * -- the same load reads 13 in an hour chart and 300 in a day chart.
  *
- * Two minutes of a plug on standby is a small fraction of a watt hour, and an
- * axis reading zero four times over says nothing at all -- so the unit follows
- * the data down rather than the numbers being rounded away to fit a unit.
+ * It also puts an end to a quiet distortion: a bar for February was shorter than
+ * one for March because February is, and a 25 hour day looked like a day of
+ * higher consumption. As a rate, all of them are comparable.
+ *
+ * Unsigned: the bars all go up and the colour says which way the power went, so
+ * a minus sign down this side would be describing something the chart does not
+ * use height for.
  */
-fun energyAxis(scale: Scale): Axis {
+fun powerAxis(scale: Scale): Axis {
     if (scale.step <= 0.0) return Axis("", scale.values.map { "" })
     val unit: String
     val per: Double
     when {
-        scale.step >= 1_000_000 -> { unit = "kWh"; per = 1_000_000.0 }
-        scale.step >= 1_000 -> { unit = "Wh"; per = 1_000.0 }
-        else -> { unit = "mWh"; per = 1.0 }
+        scale.step >= 1_000_000 -> { unit = "kW"; per = 1_000_000.0 }
+        scale.step >= 1_000 -> { unit = "W"; per = 1_000.0 }
+        else -> { unit = "mW"; per = 1.0 }
     }
     return Axis(unit, ticks(scale.values, per, scale.step / per))
 }
 
 /**
- * The money axis, which is the energy axis re-priced -- same gridlines, same
- * bars, read the other way.
+ * The money axis, which is the same chart read as what it costs -- same
+ * gridlines, same bars, the other side of the meter.
+ *
+ * [barHours] is how long one bar lasts, which is what turns a rate back into a
+ * quantity: a bar is worth its watts times its own length times the tariff. All
+ * the bars of a chart are the same length, give or take the day the clocks move
+ * and the length of February, so one figure prices the whole axis.
  *
  * An axis names its unit once, so unlike a single figure it cannot pick the
  * unit that suits it: the minor one is what keeps two minutes of a small load
  * readable, and where the user has cleared it the whole unit is all there is.
  */
-fun moneyAxis(scale: Scale, centsPerKwh: Double, formats: Formats): Axis {
-    if (scale.step <= 0.0) return Axis("", scale.values.map { "" })
-    val perMwh = formats.moneyOnAxis(centsPerKwh / 1_000_000.0)
+fun moneyAxis(scale: Scale, centsPerKwh: Double, barHours: Double, formats: Formats): Axis {
+    if (scale.step <= 0.0 || barHours <= 0.0) return Axis("", scale.values.map { "" })
+    val perMilliwatt = formats.moneyOnAxis(centsPerKwh * barHours / 1_000_000.0)
     return Axis(
         formats.moneyAxisUnit,
-        ticks(scale.values.map { it * perMwh }, per = 1.0, step = scale.step * perMwh),
+        ticks(scale.values.map { it * perMilliwatt }, per = 1.0, step = scale.step * perMilliwatt),
     )
 }
 

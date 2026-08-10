@@ -354,11 +354,15 @@ private fun ChartCard(
             Spacer(Modifier.padding(8.dp))
             val cents = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
                         else state.priceCentsPerKwh
+            // Drawn as a rate. Each bar keeps its own length, so the money axis
+            // beside it can turn the rate back into what the bar cost.
+            val rates = remember(state.buckets) { state.buckets.map { it.asRate() } }
+            val barHours = remember(state.buckets) { meanBarHours(state.buckets) }
             SeriesChart(
-                buckets = state.buckets,
+                buckets = rates,
                 labels = barLabels(state.window, state.buckets, state.zone, formats),
-                left = ::energyAxis,
-                right = { scale -> moneyAxis(scale, cents, formats) },
+                left = ::powerAxis,
+                right = { scale -> moneyAxis(scale, cents, barHours, formats) },
                 highlight = state.scrubbed,
                 projectFrom = System.currentTimeMillis() / 1000,
                 onBarTap = if (state.canDrill) onDrill else null,
@@ -676,6 +680,37 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                 color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
         }
     }
+}
+
+/**
+ * The same bar, as a rate: its energy spread over its own width.
+ *
+ * The archive counts energy, which is the only thing a plug can honestly
+ * accumulate, but a chart of it reads differently at every level -- the same
+ * fridge is 13 watt hours in a two minute bar and 400 in an hour one. Dividing
+ * by the bar's own length undoes that, and what is left is watts, which is the
+ * figure the plug reports and the one under the chart.
+ *
+ * In milliwatts, the same thousandths the rest of the chart carries.
+ */
+private fun PowerBucket.asRate(): PowerBucket {
+    val seconds = endUtc - startUtc
+    if (seconds <= 0L) return this
+    return copy(energyMwh = energyMwh * 3600.0 / seconds)
+}
+
+/**
+ * How long one bar of this chart lasts, on average.
+ *
+ * Averaged because not every bar is the same length: February is shorter than
+ * March, and two days a year are 23 and 25 hours long. The money axis needs one
+ * figure for the whole side, and the mean is the one that prices the chart as a
+ * whole correctly.
+ */
+private fun meanBarHours(buckets: List<PowerBucket>): Double {
+    if (buckets.isEmpty()) return 0.0
+    val span = buckets.last().endUtc - buckets.first().startUtc
+    return span.toDouble() / buckets.size / 3600.0
 }
 
 fun levelLabel(level: PowerLevel): Int = when (level) {
