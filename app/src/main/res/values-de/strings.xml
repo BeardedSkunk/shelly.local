@@ -176,6 +176,9 @@
     <string name="power_range_year">Jahr</string>
     <string name="power_now">Jetzt</string>
     <string name="power_at_bar">Ausgewählt</string>
+    <string name="power_lowest">min. %1$s</string>
+    <string name="power_highest">max. %1$s</string>
+    <string name="power_mean_active">im Betrieb</string>
     <string name="power_total_energy">Energie</string>
     <string name="power_cost">Kosten</string>
     <string name="power_earned">Ertrag</string>

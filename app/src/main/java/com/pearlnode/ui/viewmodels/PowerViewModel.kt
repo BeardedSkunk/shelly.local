@@ -11,6 +11,7 @@ import com.pearlnode.model.Device
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.PowerBucket
 import com.pearlnode.model.PowerLevel
+import com.pearlnode.model.PowerSegment
 import com.pearlnode.model.PowerWindow
 import com.pearlnode.model.bucketize
 import com.pearlnode.model.mergeFinest
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * One cell of the period picker: a period, and how much energy is behind it.
@@ -76,6 +78,84 @@ data class PowerPicker(
  */
 enum class PowerTask { SYNC, TRACKING }
 
+/**
+ * The three figures under the chart: how low it went, how high, and what it sat
+ * at in between. All in milliwatts, unsigned -- the same way the bars are drawn,
+ * where height is the size of the flow and the colour says which way.
+ *
+ * Taken from the stored blocks rather than from the bars, which is the whole
+ * point of having them. A bar is an average over its own width, so the tallest
+ * bar of a week is the busiest day's average and not the peak of that day --
+ * roughly a third of it, for a solar plant. The blocks resolve as finely as the
+ * plug still holds them: minutes for the last day or so, quarter hours for the
+ * week, and only whole days once the plug has thinned the rest away. So the peak
+ * is as sharp as the archive allows and no sharper.
+ */
+data class PowerExtremes(
+    val lowMw: Double,
+    val highMw: Double,
+    /** Time-weighted, and for a plant only over the hours it was producing. */
+    val meanMw: Double,
+    /** Whether the mean skipped anything, which is the only case worth saying so. */
+    val meanWhileActive: Boolean,
+)
+
+/**
+ * Where a reading stops counting as production.
+ *
+ * The same one and a half watts the recorder on the plug uses: below that the
+ * plug's own power figure flaps between nought and a watt or so and its time
+ * average is not to be trusted, and for a plant it means night. Nights are left
+ * out of a plant's average on purpose -- a solar day that averages 600 watts
+ * while the sun is up averages 200 across the whole twenty-four hours, and it is
+ * the first figure that describes the plant.
+ */
+private const val ACTIVE_MW = 1_500.0
+
+/**
+ * Left out rather than trimmed at the ends.
+ *
+ * Dropping the run of zeroes at each edge is the same thing for a whole
+ * midnight-to-midnight day, and stops being the same thing the moment the window
+ * is scrolled: from noon to noon the night sits in the middle, and a rule about
+ * the edges would quietly go back to averaging over it. This one gives the same
+ * answer wherever the window happens to start, and the same answer in the week
+ * view as in the day view.
+ */
+private fun extremesOf(segments: List<PowerSegment>): PowerExtremes? {
+    var low = Double.MAX_VALUE
+    var high = 0.0
+    var energy = 0.0
+    var seconds = 0.0
+    var activeEnergy = 0.0
+    var activeSeconds = 0.0
+    var earns = false
+    for (segment in segments) {
+        val span = (segment.endUtc - segment.startUtc).toDouble()
+        if (span <= 0.0) continue
+        val watt = abs(segment.energyMwh) * 3600.0 / span
+        if (segment.energyMwh < 0) earns = true
+        if (watt < low) low = watt
+        if (watt > high) high = watt
+        energy += watt * span
+        seconds += span
+        if (watt >= ACTIVE_MW) {
+            activeEnergy += watt * span
+            activeSeconds += span
+        }
+    }
+    if (seconds <= 0.0) return null
+    // Only a plant gets its idle hours taken out. For a load, the hours it was
+    // off are part of what it costs to have around.
+    val whileActive = earns && activeSeconds > 0.0
+    return PowerExtremes(
+        lowMw = if (low == Double.MAX_VALUE) 0.0 else low,
+        highMw = high,
+        meanMw = if (whileActive) activeEnergy / activeSeconds else energy / seconds,
+        meanWhileActive = whileActive,
+    )
+}
+
 data class PowerFailure(val task: PowerTask, val detail: String)
 
 private fun Throwable.failure(task: PowerTask) =
@@ -96,6 +176,8 @@ data class PowerUiState(
     val error: PowerFailure? = null,
     val window: PowerWindow = PowerWindow.of(PowerLevel.DAY, LocalDateTime.now()),
     val buckets: List<PowerBucket> = emptyList(),
+    /** The lowest, highest and typical rate over the window. Null while nothing is known. */
+    val extremes: PowerExtremes? = null,
     /** True while the window runs up to now, so there is no later one to step to. */
     val atLatest: Boolean = true,
     val priceCentsPerKwh: Double = 30.0,
@@ -351,6 +433,7 @@ class PowerViewModel(
                 _uiState.update { it.copy(
                     window = selected,
                     buckets = bucketize(segments, edges),
+                    extremes = extremesOf(segments),
                     atLatest = selected.atLatest(now()),
                     zone = zone,
                 ) }

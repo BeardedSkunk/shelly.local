@@ -368,7 +368,7 @@ private fun SeriesCard(
             Spacer(Modifier.height(8.dp))
             HorizontalDivider()
             Spacer(Modifier.height(4.dp))
-            SeriesTotals(series, temperature, formats)
+            SeriesTotals(series, temperature, formats, live = state.atLatest)
         }
     }
 }
@@ -424,9 +424,21 @@ private fun outdoorColour(state: SensorUiState, index: Int, humidityMilli: Doubl
 }
 
 @Composable
-private fun SeriesTotals(series: SensorSeries, temperature: Boolean, formats: Formats) {
-    val low = series.lowMilli?.toDouble()
-    val high = series.highMilli?.toDouble()
+private fun SeriesTotals(
+    series: SensorSeries,
+    temperature: Boolean,
+    formats: Formats,
+    /** Whether the window runs up to now, so the live reading belongs inside it. */
+    live: Boolean,
+) {
+    // The sensor over Bluetooth is ahead of the copy from openSenseMap, which
+    // arrives in batches half an hour apart. So on a window that reaches now,
+    // what the sensor is saying this second is part of the range -- otherwise
+    // the screen shows 27.4 under "now" and 27.3 under "highest" and is wrong
+    // in the one way a reader is certain to notice.
+    val current = (if (live) series.liveMilli ?: series.storedMilli else null)?.toDouble()
+    val low = listOfNotNull(series.lowMilli?.toDouble(), current).minOrNull()
+    val high = listOfNotNull(series.highMilli?.toDouble(), current).maxOrNull()
     val show: (Double?) -> String = { milli ->
         when {
             milli == null -> "—"
@@ -449,6 +461,17 @@ private fun SeriesTotals(series: SensorSeries, temperature: Boolean, formats: Fo
                     TemperatureColors.of(series.shown!! / 1000.0)
                 else MaterialTheme.colorScheme.onSurface,
             )
+            // The middle of the range, under the middle column. Small, because
+            // what a weather screen is asked first is what it is doing now and
+            // how far it went either way; the average is the answer to a slower
+            // question.
+            series.meanMilli?.let { mean ->
+                Text(
+                    "Ø " + show(mean),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Label(R.string.sensor_high)

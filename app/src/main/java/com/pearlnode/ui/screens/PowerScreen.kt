@@ -625,10 +625,26 @@ fun PeriodPickerDialog(
     }
 }
 
+/**
+ * What the period came to, and what the rate did inside it.
+ *
+ * The three big figures are the period's own: what went through the meter, what
+ * it was worth, and what it typically ran at. Under the outer two sit the
+ * extremes, which are the figures a bar cannot give -- a bar is an average over
+ * its own width, so the tallest bar of a week is the busiest day's average and
+ * about a third of that day's real peak. They come from the stored blocks
+ * instead.
+ *
+ * The middle has no heading. It used to say "Now" and then "Selected", and
+ * neither was worth a line: what it holds is the rate, the two figures beside
+ * it are the ends of the same rate, and putting a finger on a bar lights that
+ * bar up as well.
+ */
 @Composable
 private fun Totals(state: PowerUiState, formats: Formats) {
     val kwh = state.totalKwh
     val euro = state.totalEuro
+    val extremes = state.extremes
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Column {
             Text(stringResource(R.string.power_total_energy),
@@ -638,31 +654,32 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                 style = MaterialTheme.typography.titleMedium)
             // No split line here. It ran wider than the column and pushed the
             // middle one off centre, and the middle is where the eye goes.
+            extremes?.let { Extreme(R.string.power_lowest, it.lowMw) }
         }
         // The middle column is the one that changes under the finger. Left and
-        // right describe the whole period and do not move; this one answers
-        // "and right now?" until a bar is scrubbed, when it answers "and
-        // there?" instead. It is the only figure here that belongs to a moment
-        // rather than to the period, and the space was empty.
+        // right describe the whole period and do not move; this one is the rate
+        // the period ran at until a bar is scrubbed, when it is that bar's.
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            val watt = state.scrubbedWatt ?: state.livePowerW
-            Text(
-                stringResource(
-                    if (state.scrubbed != null) R.string.power_at_bar else R.string.power_now
-                ),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val watt = state.scrubbedWatt ?: extremes?.let { it.meanMw / 1000.0 }
             Text(
                 watt?.let { String.format(Locale.getDefault(), "%.1f W", it) } ?: "—",
                 style = MaterialTheme.typography.titleMedium,
             )
-            // Only while scrubbing: a live reading is a rate and has not cost
-            // anything yet.
+            // Only while scrubbing: the period's own money is already on the
+            // right, and the typical rate has not cost anything by itself.
             state.scrubbedCents?.let { cents ->
                 Text(
                     formats.money(cents),
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Said once, quietly: the mean of a plant skips its nights, and a
+            // figure that leaves something out has to admit it.
+            if (state.scrubbed == null && extremes?.meanWhileActive == true) {
+                Text(
+                    stringResource(R.string.power_mean_active),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -678,8 +695,28 @@ private fun Totals(state: PowerUiState, formats: Formats) {
             Text(formats.major(abs(euro)),
                 style = MaterialTheme.typography.titleMedium,
                 color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
+            extremes?.let { Extreme(R.string.power_highest, it.highMw) }
         }
     }
+}
+
+/** One end of the range, small and beneath the figure it belongs under. */
+@Composable
+private fun Extreme(label: Int, milliwatts: Double) {
+    Text(
+        stringResource(label, formatWatt(milliwatts)),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+    )
+}
+
+/** Watts, or kilowatts once there are enough of them to be worth four figures. */
+private fun formatWatt(milliwatts: Double): String {
+    val watts = milliwatts / 1000.0
+    return if (abs(watts) >= 1000.0)
+        String.format(Locale.getDefault(), "%.2f kW", watts / 1000.0)
+    else String.format(Locale.getDefault(), "%.1f W", watts)
 }
 
 /**

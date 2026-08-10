@@ -57,6 +57,18 @@ data class SensorSeries(
      */
     val lowMilli: Long? = null,
     val highMilli: Long? = null,
+    /**
+     * What it stood at on average over the window, weighted by how long each
+     * reading held.
+     *
+     * Nothing is left out here. On the energy screen a plant's nights are taken
+     * out of its average, because a plant that is not producing is not doing
+     * anything and the hours it slept say nothing about how well it ran. A
+     * thermometer at night is still telling the truth about the night, and an
+     * average of the daylight hours would be a different measurement wearing the
+     * same name.
+     */
+    val meanMilli: Double? = null,
 ) {
     val scrubbedBucket: PowerBucket?
         get() = scrubbed?.let { buckets.getOrNull(it) }?.takeIf { it.coarsestTier != null }
@@ -246,11 +258,17 @@ class SensorViewModel(
                 val inWindow = blocks.filter {
                     it.endUtc > edges.first() && it.startUtc < edges.last()
                 }
+                // The mean over the whole window rather than the mean of the
+                // bars: bars that hold nothing would otherwise count as gaps of
+                // equal weight to a full one, and a night with three readings
+                // would pull as hard as a day with sixty.
+                val held = segments.sumOf { (it.endUtc - it.startUtc).toDouble() }
                 _uiState.update { state ->
                     val series = state.series(kind).copy(
                         buckets = buckets,
                         lowMilli = inWindow.minOfOrNull { it.milliValue },
                         highMilli = inWindow.maxOfOrNull { it.milliValue },
+                        meanMilli = if (held > 0.0) segments.sumOf { it.energyMwh } / held else null,
                     )
                     state.withSeries(series).copy(
                         window = selected,
