@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -147,7 +149,6 @@ fun SeriesChart(
      */
     projectFrom: Long? = null,
     onBarTap: ((Int) -> Unit)? = null,
-    onSwipe: ((Long) -> Unit)? = null,
     /** A bar was scrubbed to, or null when the finger left the chart. */
     onScrub: ((Int?) -> Unit)? = null,
     axisColor: Color = MaterialTheme.colorScheme.outlineVariant,
@@ -191,7 +192,7 @@ fun SeriesChart(
                         .fillMaxWidth()
                         .height(CHART_HEIGHT)
                         .then(tapModifier(buckets.size, onBarTap))
-                        .then(dragModifier(buckets.size, onSwipe, onScrub))
+                        .then(scrubModifier(buckets.size, onScrub))
                 ) {
                     if (scale.span <= 0.0 || buckets.isEmpty()) return@Canvas
                     // Where nothing is negative the zero line is the floor, so
@@ -568,58 +569,71 @@ private fun tapModifier(barCount: Int, onBarTap: ((Int) -> Unit)?): Modifier =
     }
 
 /**
- * Dragging the chart moves through history, one whole period per swipe of about
- * a third of the width. Dragging right reaches back, the way pulling a strip of
- * paper to the right brings earlier parts into view. A slow drag across the
- * chart steps through several periods rather than one, because the count comes
- * out of the distance rather than out of the gesture ending.
- */
-/**
- * A drag means one of two things depending on where it starts.
+ * Dragging the chart reads it: the bar under the finger lights up and its
+ * figures replace the totals underneath, so a value can be picked out without a
+ * tooltip that would be hidden by the finger holding it.
  *
- * High up, near the period the chart is showing, it pages through history the
- * way it always has. Low down, among the bars, it reads them: the bar under the
- * finger lights up and its figures replace the totals underneath, so a value
- * can be picked out of the chart without a tooltip that would be under the
- * finger holding it.
- *
- * The zone is fixed when the drag starts, not followed as it moves, so a
- * gesture that drifts upward does not change its mind halfway.
+ * The whole plot does this, top to bottom. It used to be the lower half only,
+ * with the upper half paging through history -- two meanings for one gesture,
+ * told apart by a boundary nothing on screen drew. Paging lives on the row of
+ * controls above the chart now, where the period is named and the arrows that
+ * do the same thing already are.
  */
-private fun dragModifier(
-    barCount: Int,
-    onSwipe: ((Long) -> Unit)?,
-    onScrub: ((Int?) -> Unit)?,
-): Modifier =
-    if (onSwipe == null && onScrub == null) Modifier
+private fun scrubModifier(barCount: Int, onScrub: ((Int?) -> Unit)?): Modifier =
+    if (onScrub == null) Modifier
     else Modifier.pointerInput(barCount) {
-        val stepPx = size.width / 3f
-        var carried = 0f
-        var scrubbing = false
         fun barAt(x: Float): Int? {
             if (barCount <= 0) return null
             val index = (x / (size.width.toFloat() / barCount)).toInt()
             return index.coerceIn(0, barCount - 1)
         }
         detectHorizontalDragGestures(
-            onDragStart = { start ->
-                carried = 0f
-                scrubbing = onScrub != null && start.y > size.height / 2f
-                if (scrubbing) onScrub?.invoke(barAt(start.x))
-            },
-            onDragEnd = { if (scrubbing) onScrub?.invoke(null); carried = 0f },
-            onDragCancel = { if (scrubbing) onScrub?.invoke(null); carried = 0f },
+            onDragStart = { start -> onScrub(barAt(start.x)) },
+            onDragEnd = { onScrub(null) },
+            onDragCancel = { onScrub(null) },
+        ) { change, _ ->
+            change.consume()
+            onScrub(barAt(change.position.x))
+        }
+    }
+
+/**
+ * Swiping this region moves through history, one whole period per swipe of
+ * about a third of its width.
+ *
+ * Dragging right reaches back, the way pulling a strip of paper to the right
+ * brings earlier parts into view. A slow drag steps through several periods
+ * rather than one, because the count comes out of the distance travelled rather
+ * than out of the gesture ending.
+ *
+ * Meant for the band of controls above a chart -- the level chips and the row
+ * naming the period. That row already has an arrow at each end doing exactly
+ * this, so the gesture lands where a reader is looking when they want it, and
+ * leaves the plot free for reading values.
+ *
+ * Buttons and chips inside the region keep working: they settle whether they
+ * have been tapped only once the finger lifts, so a drag that crosses one
+ * cancels it rather than firing it. A row that can actually scroll sideways
+ * wins over this, which is the same rule a list inside a pager follows.
+ */
+@Composable
+fun Modifier.pageSwipe(onStep: (Long) -> Unit): Modifier {
+    val step by rememberUpdatedState(onStep)
+    return this.pointerInput(Unit) {
+        val stepPx = size.width / 3f
+        var carried = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { carried = 0f },
+            onDragEnd = { carried = 0f },
+            onDragCancel = { carried = 0f },
         ) { change, dragAmount ->
             change.consume()
-            if (scrubbing) {
-                onScrub?.invoke(barAt(change.position.x))
-                return@detectHorizontalDragGestures
-            }
             carried += dragAmount
             val steps = (carried / stepPx).toInt()
             if (steps != 0) {
                 carried -= steps * stepPx
-                onSwipe?.invoke(-steps.toLong())
+                step(-steps.toLong())
             }
         }
     }
+}

@@ -315,23 +315,35 @@ private fun ChartCard(
             }
 
             Spacer(Modifier.padding(4.dp))
-            // Five levels do not fit across a phone, so the row scrolls rather
-            // than squeezing the labels.
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                PowerLevel.entries.forEach { level ->
-                    FilterChip(
-                        selected = state.window.level == level,
-                        onClick = { onLevel(level) },
-                        label = { Text(stringResource(levelLabel(level))) },
-                    )
+            // The band that says which stretch of time is on screen, and the
+            // band you swipe to change it. Both readings of "which period" in
+            // one place, so the plot below is only ever about values.
+            Column(Modifier.fillMaxWidth().pageSwipe(onStep)) {
+                // Five levels do not always fit across a phone, so the row
+                // scrolls rather than squeezing the labels -- but only when
+                // there is something to scroll to. A scroller that cannot move
+                // still swallows the drag, and this row is inside the band that
+                // pages through history, so where the chips fit the swipe has
+                // to reach it.
+                val chips = rememberScrollState()
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(chips, enabled = chips.maxValue > 0),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PowerLevel.entries.forEach { level ->
+                        FilterChip(
+                            selected = state.window.level == level,
+                            onClick = { onLevel(level) },
+                            label = { Text(stringResource(levelLabel(level))) },
+                        )
+                    }
                 }
-            }
 
-            Spacer(Modifier.padding(4.dp))
-            PeriodPicker(state.window, state.atLatest, onOpenPicker = onOpenPicker, onStep = onStep)
+                Spacer(Modifier.padding(4.dp))
+                PeriodPicker(state.window, state.atLatest, onOpenPicker = onOpenPicker, onStep = onStep)
+            }
 
             Spacer(Modifier.padding(8.dp))
             val cents = if (state.hasExport) state.feedInCentsPerKwh ?: state.priceCentsPerKwh
@@ -344,7 +356,6 @@ private fun ChartCard(
                 highlight = state.scrubbed,
                 projectFrom = System.currentTimeMillis() / 1000,
                 onBarTap = if (state.canDrill) onDrill else null,
-                onSwipe = onStep,
                 onScrub = onScrub,
             )
 

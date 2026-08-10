@@ -269,13 +269,52 @@ private fun SeriesCard(
     val temperature = series.kind == SensorKind.TEMPERATURE
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Column(Modifier.padding(16.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                if (state.syncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            // Everything above the plot pages through history when swiped. On
+            // the second card that is the heading alone, which is thin -- but
+            // both charts move together anyway, so a swipe on either one is the
+            // same swipe, and the one with the controls is right above it.
+            Column(Modifier.fillMaxWidth().pageSwipe(vm::step)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    if (state.syncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+
+                // The level chips and the period picker steer both charts at
+                // once: they are two views of the same stretch of time, and
+                // letting them drift apart would only invite comparing the
+                // wrong hours.
+                if (state.configured && temperature) {
+                    Spacer(Modifier.height(4.dp))
+                    // Scrollable only where the chips overflow: a scroller that
+                    // cannot move still eats the drag, and this row pages
+                    // through history.
+                    val chips = rememberScrollState()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(chips, enabled = chips.maxValue > 0),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PowerLevel.entries.forEach { level ->
+                            FilterChip(
+                                selected = state.window.level == level,
+                                onClick = { vm.setLevel(level) },
+                                label = { Text(stringResource(levelLabel(level))) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    PeriodPicker(
+                        window = state.window,
+                        atLatest = state.atLatest,
+                        onOpenPicker = vm::openPicker,
+                        onStep = vm::step,
+                    )
+                }
             }
 
             if (!state.configured) {
@@ -286,32 +325,6 @@ private fun SeriesCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 return@Column
-            }
-
-            // The level chips and the period picker steer both charts at once:
-            // they are two views of the same stretch of time, and letting them
-            // drift apart would only invite comparing the wrong hours.
-            Spacer(Modifier.height(4.dp))
-            if (temperature) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    PowerLevel.entries.forEach { level ->
-                        FilterChip(
-                            selected = state.window.level == level,
-                            onClick = { vm.setLevel(level) },
-                            label = { Text(stringResource(levelLabel(level))) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                PeriodPicker(
-                    window = state.window,
-                    atLatest = state.atLatest,
-                    onOpenPicker = vm::openPicker,
-                    onStep = vm::step,
-                )
             }
 
             Spacer(Modifier.height(8.dp))
@@ -335,6 +348,10 @@ private fun SeriesCard(
                     }
                 },
                 bands = when {
+                    // Outdoors the same reading feels different depending on
+                    // the air it comes with, so these marks move too -- driven
+                    // by the other series, the same way its own are by this.
+                    temperature && !state.indoor -> { index -> feltLadder(state, index) }
                     temperature -> { _ -> TemperatureColors.ladder }
                     state.indoor -> { _ -> HumidityColors.ladder }
                     // Outdoors the cuts move with the hour's temperature: the
@@ -345,7 +362,6 @@ private fun SeriesCard(
                 },
                 highlight = series.scrubbed,
                 onBarTap = if (state.canDrill) vm::drillInto else null,
-                onSwipe = vm::step,
                 onScrub = { index -> vm.scrub(series.kind, index) },
             )
 
@@ -365,6 +381,18 @@ private fun SeriesCard(
  * Left and right are the extremes of the period, which for a reading is what a
  * total is for a quantity -- adding temperatures up would mean nothing.
  */
+/**
+ * Where the temperature bands fall once this hour's humidity is taken into
+ * account. With no humidity for that hour there is nothing to shift by, so the
+ * plain scale stands in.
+ */
+private fun feltLadder(state: SensorUiState, index: Int): List<Pair<Double, Color>> {
+    val humidity = state.humidity.buckets.getOrNull(index)
+        ?.takeIf { it.coarsestTier != null }?.energyMwh
+        ?: return TemperatureColors.ladder
+    return FeltTemperature.ladderFor(humidity / 1000.0)
+}
+
 /**
  * Where the comfort bands fall on this hour's humidity axis.
  *
