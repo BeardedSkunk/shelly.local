@@ -21,7 +21,12 @@ class PearlnodeApp : Application() {
     val firmwareRepository: FirmwareRepository by lazy { FirmwareRepository() }
     val appSettings: AppSettings by lazy { AppSettings(this) }
     val sensorRepository: SensorRepository by lazy {
-        SensorRepository(this, AppDatabase.getInstance(this).sensorBlockDao(), appSettings)
+        SensorRepository(
+            this,
+            AppDatabase.getInstance(this).sensorBlockDao(),
+            appSettings,
+            devices = { id -> repository.getAllDevices().find { it.id == id } },
+        )
     }
     val powerJournalRepository: PowerJournalRepository by lazy {
         val db = AppDatabase.getInstance(this)

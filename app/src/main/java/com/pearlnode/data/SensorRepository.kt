@@ -5,7 +5,9 @@ import com.pearlnode.data.api.OpenSenseMapClient
 import com.pearlnode.data.api.InstalledOsmScript
 import com.pearlnode.data.api.OsmBox
 import com.pearlnode.data.api.OsmScript
+import com.pearlnode.data.api.PlugArchiveClient
 import com.pearlnode.data.api.ScriptDeployer
+import com.pearlnode.data.api.valueFor
 import com.pearlnode.data.api.ShellyClientFactory
 import com.pearlnode.model.Device
 import com.pearlnode.data.db.SensorBlockDao
@@ -36,9 +38,24 @@ class SensorRepository(
     private val context: Context,
     private val dao: SensorBlockDao,
     private val settings: AppSettings,
+    /**
+     * How a sensor finds the Shelly it talks through.
+     *
+     * A BLU sensor has no address of its own -- everything it says reaches the
+     * network through the plug it is paired with -- so reading the plug's own
+     * archive means looking that plug up first.
+     */
+    private val devices: suspend (String) -> Device? = { null },
     private val client: OpenSenseMapClient = OpenSenseMapClient(),
 ) {
     private val credentials = CredentialStore(context.applicationContext)
+
+    /** The Shelly a sensor is paired with, or null while it is not known. */
+    private suspend fun hostFor(deviceId: String): Device? {
+        val sensor = devices(deviceId) ?: return null
+        val hostId = sensor.hostDeviceId ?: return null
+        return devices(hostId)
+    }
 
     /** Ties a device to a station and arms the background fetch for it. */
     fun useBox(deviceId: String, boxId: String) {
@@ -170,6 +187,35 @@ class SensorRepository(
             .deploy(SCRIPT_NAME, code)
     }
 
+    /**
+     * Puts the current script on the plug if what is there is out of date.
+     *
+     * The power journal taught this the hard way: a change to a script that
+     * nothing compares is a change that never reaches a device. It sat in the
+     * repository for four days while six plugs went on running last month's
+     * code, because the only trigger for a deployment was switching tracking off
+     * and on again, and nobody had a reason to.
+     *
+     * No account needed. Everything this script has to be told -- which box,
+     * which sensors, which token -- is already in the copy on the plug, so an
+     * update reads it back out and fills the current template with it. A user
+     * who signed in once never has to again for this.
+     */
+    suspend fun updateScriptIfStale(deviceId: String): Boolean = withContext(Dispatchers.IO) {
+        val host = hostFor(deviceId) ?: return@withContext false
+        val installed = installedScript(host) ?: return@withContext false
+        if (scriptIsCurrent(installed)) return@withContext false
+        val boxId = installed.boxId ?: return@withContext false
+        val token = installed.token ?: return@withContext false
+        val temperature = installed.temperatureSensorId ?: return@withContext false
+        val humidity = installed.humiditySensorId ?: return@withContext false
+
+        val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }
+        ScriptDeployer(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
+            .deploy(SCRIPT_NAME, fill(boxId, token, temperature, humidity))
+        true
+    }
+
     // --------------------------------------------------------------- the data
 
     /**
@@ -187,19 +233,78 @@ class SensorRepository(
      */
     suspend fun sync(deviceId: String, nowUtc: Long): SensorSyncResult = withContext(Dispatchers.IO) {
         val boxId = settings.boxId(deviceId) ?: error("no openSenseMap box chosen for this device")
+        // Before reading anything: is the plug still running the script this app
+        // ships? A recorder that was fixed in the repository and never sent is
+        // no recorder at all.
+        runCatching { updateScriptIfStale(deviceId) }
         var stored = 0
         var through: Long? = null
+        var failure: Throwable? = null
         for (kind in SensorKind.entries) {
             val sensorId = settings.sensorId(deviceId, kind.name) ?: continue
             val from = dao.latestStart(deviceId, kind) ?: (nowUtc - FIRST_REACH_SEC)
-            val blocks = fetch(boxId, sensorId, deviceId, kind, from, nowUtc)
+            val blocks = runCatching { fetch(boxId, sensorId, deviceId, kind, from, nowUtc) }
+                .onFailure { failure = it }
+                .getOrDefault(emptyList())
             if (blocks.isEmpty()) continue
             dao.upsertAll(blocks)
             stored += blocks.size
             through = maxOf(through ?: 0L, blocks.maxOf { it.endUtc })
         }
+        // Whatever openSenseMap could not supply, the Shelly may still have. It
+        // keeps about five weeks of quarter hours for exactly this, so an outage
+        // there leaves a coarser line rather than a hole -- and a hole is what
+        // there was, for hours, on the evening this was written.
+        val rescued = runCatching { fromPlug(deviceId, nowUtc) }.getOrDefault(0)
+        stored += rescued
         settings.setLastSensorSync(deviceId, nowUtc)
+        // Only worth complaining about when nothing at all came in. A failure
+        // that the plug covered for is a failure nobody has to hear about.
+        failure?.let { if (stored == 0) throw it }
         SensorSyncResult(stored, through)
+    }
+
+    /**
+     * Fills the gaps from the Shelly's own archive.
+     *
+     * Only the stretches openSenseMap has not supplied. A quarter hour the copy
+     * already holds at full resolution must not be overwritten by the plug's
+     * average of it, so anything already covered is left alone -- which is why
+     * this runs after the fetch and not instead of it.
+     */
+    private suspend fun fromPlug(deviceId: String, nowUtc: Long): Int {
+        val host = hostFor(deviceId) ?: return 0
+        val installed = installedScript(host) ?: return 0
+        val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }
+        val archive = PlugArchiveClient(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
+        val span = archive.span(installed.scriptId) ?: return 0
+        if (span.next <= span.oldest) return 0
+
+        var stored = 0
+        for (kind in SensorKind.entries) {
+            val have = dao.latestStart(deviceId, kind) ?: 0L
+            // Where the copy already reaches, plus its own last quarter, which
+            // may have been written before the hour finished.
+            val fromQuarter = maxOf(span.oldest, have / span.stepSec)
+            if (fromQuarter >= span.next) continue
+            val blocks = archive
+                .quarters(installed.scriptId, fromQuarter, span.next, span.stepSec)
+                .mapNotNull { quarter ->
+                    val value = quarter.valueFor(kind) ?: return@mapNotNull null
+                    if (quarter.startUtc + span.stepSec > nowUtc) return@mapNotNull null
+                    SensorBlock(
+                        deviceId = deviceId,
+                        kind = kind,
+                        startUtc = quarter.startUtc,
+                        durationSec = span.stepSec,
+                        milliValue = Math.round(value * 1000.0),
+                    )
+                }
+            if (blocks.isEmpty()) continue
+            dao.upsertAll(blocks)
+            stored += blocks.size
+        }
+        return stored
     }
 
     /**
