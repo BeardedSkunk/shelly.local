@@ -79,8 +79,9 @@ data class PowerPicker(
 enum class PowerTask { SYNC, TRACKING }
 
 /**
- * How far the rate ranged inside one bar. In milliwatts, unsigned, the way the
- * bars themselves are drawn.
+ * How far the reading ranged inside one bar, in the thousandths the charts
+ * carry -- milliwatts on the energy screen, thousandths of a degree or a per
+ * cent on the sensor one.
  *
  * The bar's own height sits between the two: it is the average over the bar's
  * width, and an hour that ran from nothing to nine hundred watts draws at four
@@ -88,38 +89,53 @@ enum class PowerTask { SYNC, TRACKING }
  * the money beside it and the total beneath it are both built on it -- so the
  * peak has to be told rather than shown, and this is what tells it.
  *
- * Taken from the stored blocks, which resolve as finely as the plug still holds
- * them: minutes for the last day or so, quarter hours for the week, whole days
+ * Taken from the stored blocks, which resolve as finely as they were kept: for
+ * a plug, minutes for the last day or so, quarter hours for the week, whole days
  * once the plug has thinned the rest away. The peak is as sharp as the archive
  * allows and no sharper -- in a year of old months it closes on the average,
  * which is honest rather than wrong.
  */
-data class BarRange(val lowMw: Double, val highMw: Double)
+data class BarRange(val low: Double, val high: Double)
 
 /**
  * The range inside each bar, one entry per bar and null where nothing is known.
  *
- * A segment is a stretch of constant power, so where one straddles a bar edge
- * both bars saw that rate and neither needs it split.
+ * A segment is a stretch of one constant reading, so where one straddles a bar
+ * edge both bars saw that reading and neither needs it split.
+ *
+ * [scale] turns a segment's own accumulation into what it reads as: energy over
+ * a stretch is watts once multiplied by the seconds in an hour, while a
+ * thermometer's is already the reading and needs nothing. [magnitude] is for the
+ * quantities the charts draw unsigned, where a sign is a direction and not a
+ * size -- a plant returning eight hundred watts reaches further than one
+ * returning two, and eighteen degrees below zero is not a bigger anything.
  */
-internal fun barRanges(segments: List<PowerSegment>, edges: List<Long>): List<BarRange?> {
+internal fun barRanges(
+    segments: List<PowerSegment>,
+    edges: List<Long>,
+    scale: Double = 3600.0,
+    magnitude: Boolean = true,
+): List<BarRange?> {
     val bars = maxOf(edges.size - 1, 0)
     if (bars == 0) return emptyList()
     val low = DoubleArray(bars) { Double.MAX_VALUE }
-    val high = DoubleArray(bars) { -1.0 }
+    val high = DoubleArray(bars) { -Double.MAX_VALUE }
+    val seen = BooleanArray(bars)
     for (segment in segments) {
         val span = (segment.endUtc - segment.startUtc).toDouble()
         if (span <= 0.0) continue
-        val watt = abs(segment.energyMwh) * 3600.0 / span
+        val raw = segment.energyMwh * scale / span
+        val value = if (magnitude) abs(raw) else raw
         for (bar in 0 until bars) {
             if (edges[bar + 1] <= segment.startUtc) continue
             if (edges[bar] >= segment.endUtc) break
-            if (watt < low[bar]) low[bar] = watt
-            if (watt > high[bar]) high[bar] = watt
+            seen[bar] = true
+            if (value < low[bar]) low[bar] = value
+            if (value > high[bar]) high[bar] = value
         }
     }
     return (0 until bars).map { bar ->
-        if (high[bar] < 0.0) null else BarRange(low[bar], high[bar])
+        if (!seen[bar]) null else BarRange(low[bar], high[bar])
     }
 }
 

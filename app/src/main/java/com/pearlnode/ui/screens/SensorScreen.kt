@@ -447,13 +447,19 @@ private fun SeriesTotals(
         }
     }
 
+    // Held down, the whole row is about that bar instead of about the window --
+    // the same switch the energy screen makes. An hour drawn at 22 that ran
+    // from 19 to 26 is a different hour from one that sat at 22 all through,
+    // and the bar has no way of saying which it was.
+    val range = series.scrubbedRange
+
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Column {
-            Label(R.string.sensor_low)
-            Text(show(low), style = MaterialTheme.typography.titleMedium)
+            Label(if (range == null) R.string.sensor_low else R.string.power_lowest)
+            Text(show(range?.low ?: low), style = MaterialTheme.typography.titleMedium)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Label(if (series.scrubbed != null) R.string.power_at_bar else R.string.power_now)
+            Label(if (series.scrubbed != null) R.string.power_average else R.string.power_now)
             Text(
                 show(series.shown),
                 style = MaterialTheme.typography.titleMedium,
@@ -464,18 +470,21 @@ private fun SeriesTotals(
             // The middle of the range, under the middle column. Small, because
             // what a weather screen is asked first is what it is doing now and
             // how far it went either way; the average is the answer to a slower
-            // question.
-            series.meanMilli?.let { mean ->
-                Text(
-                    "Ø " + show(mean),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // question. Gone while a bar is held, where the middle figure is
+            // already an average and saying so twice would be noise.
+            if (series.scrubbed == null) {
+                series.meanMilli?.let { mean ->
+                    Text(
+                        "Ø " + show(mean),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         Column(horizontalAlignment = Alignment.End) {
-            Label(R.string.sensor_high)
-            Text(show(high), style = MaterialTheme.typography.titleMedium)
+            Label(if (range == null) R.string.sensor_high else R.string.power_highest)
+            Text(show(range?.high ?: high), style = MaterialTheme.typography.titleMedium)
         }
     }
 }

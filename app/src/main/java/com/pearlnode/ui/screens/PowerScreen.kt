@@ -655,7 +655,7 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                 // goes.
             } else {
                 Label(R.string.power_lowest)
-                Text(formatWatt(range.lowMw), style = MaterialTheme.typography.titleMedium)
+                Text(formatWatt(range.low), style = MaterialTheme.typography.titleMedium)
             }
         }
         // The middle column is the one that changes under the finger.
@@ -696,7 +696,7 @@ private fun Totals(state: PowerUiState, formats: Formats) {
                     color = if (euro < 0) PowerEarnedColor else MaterialTheme.colorScheme.onSurface)
             } else {
                 Label(R.string.power_highest)
-                Text(formatWatt(range.highMw), style = MaterialTheme.typography.titleMedium)
+                Text(formatWatt(range.high), style = MaterialTheme.typography.titleMedium)
             }
         }
     }

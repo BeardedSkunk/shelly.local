@@ -69,9 +69,19 @@ data class SensorSeries(
      * same name.
      */
     val meanMilli: Double? = null,
+    /**
+     * How far the reading ranged inside each bar, for the one under a finger.
+     *
+     * Signed, unlike the energy screen's: eighteen degrees below zero is colder
+     * than one below, not eighteen times bigger than anything.
+     */
+    val ranges: List<BarRange?> = emptyList(),
 ) {
     val scrubbedBucket: PowerBucket?
         get() = scrubbed?.let { buckets.getOrNull(it) }?.takeIf { it.coarsestTier != null }
+
+    /** What that bar's own hour ranged over, which its averaged height cannot show. */
+    val scrubbedRange: BarRange? get() = scrubbed?.let { ranges.getOrNull(it) }
 
     /**
      * Whichever value the middle column shows.
@@ -269,6 +279,9 @@ class SensorViewModel(
                         lowMilli = inWindow.minOfOrNull { it.milliValue },
                         highMilli = inWindow.maxOfOrNull { it.milliValue },
                         meanMilli = if (held > 0.0) segments.sumOf { it.energyMwh } / held else null,
+                        // A reading rather than a rate, so nothing to spread
+                        // over an hour, and signed, so a frost stays a frost.
+                        ranges = barRanges(segments, edges, scale = 1.0, magnitude = false),
                     )
                     state.withSeries(series).copy(
                         window = selected,

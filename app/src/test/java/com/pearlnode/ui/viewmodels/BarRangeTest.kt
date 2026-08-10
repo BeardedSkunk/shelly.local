@@ -40,8 +40,8 @@ class BarRangeTest {
             listOf(0L, 3 * hour),
         )
         assertEquals(1, ranges.size)
-        assertEquals(0.0, ranges[0]!!.lowMw, 0.0)
-        assertEquals(900_000.0, ranges[0]!!.highMw, 0.0)
+        assertEquals(0.0, ranges[0]!!.low, 0.0)
+        assertEquals(900_000.0, ranges[0]!!.high, 0.0)
     }
 
     @Test
@@ -55,8 +55,8 @@ class BarRangeTest {
             ),
             edges,
         )
-        assertEquals(listOf(10_000.0, 500_000.0, 20_000.0, 30_000.0), ranges.map { it!!.highMw })
-        assertEquals(listOf(10_000.0, 500_000.0, 20_000.0, 30_000.0), ranges.map { it!!.lowMw })
+        assertEquals(listOf(10_000.0, 500_000.0, 20_000.0, 30_000.0), ranges.map { it!!.high })
+        assertEquals(listOf(10_000.0, 500_000.0, 20_000.0, 30_000.0), ranges.map { it!!.low })
     }
 
     @Test
@@ -66,7 +66,7 @@ class BarRangeTest {
         val ranges = barRanges(listOf(segment(2, 3, 40.0)), edges)
         assertNull(ranges[0])
         assertNull(ranges[1])
-        assertEquals(40_000.0, ranges[2]!!.highMw, 0.0)
+        assertEquals(40_000.0, ranges[2]!!.high, 0.0)
         assertNull(ranges[3])
     }
 
@@ -78,9 +78,9 @@ class BarRangeTest {
             listOf(segment(0, 1, 5.0), PowerSegment(hour, 3 * hour, 200.0 * 1000.0 * 2, 0)),
             edges,
         )
-        assertEquals(200_000.0, ranges[1]!!.highMw, 0.0)
-        assertEquals(200_000.0, ranges[2]!!.highMw, 0.0)
-        assertEquals(5_000.0, ranges[0]!!.highMw, 0.0)
+        assertEquals(200_000.0, ranges[1]!!.high, 0.0)
+        assertEquals(200_000.0, ranges[2]!!.high, 0.0)
+        assertEquals(5_000.0, ranges[0]!!.high, 0.0)
     }
 
     @Test
@@ -88,7 +88,26 @@ class BarRangeTest {
         // Energy sent back out is stored negative. The bars are drawn unsigned
         // and coloured by direction, and these two figures go with the bars.
         val ranges = barRanges(listOf(segment(0, 1, -800.0)), listOf(0L, hour))
-        assertEquals(800_000.0, ranges[0]!!.highMw, 0.0)
-        assertEquals(800_000.0, ranges[0]!!.lowMw, 0.0)
+        assertEquals(800_000.0, ranges[0]!!.high, 0.0)
+        assertEquals(800_000.0, ranges[0]!!.low, 0.0)
+    }
+
+    @Test
+    fun `a thermometer keeps its sign and needs no hour to spread over`() {
+        // The sensor charts read the other way: a segment already holds the
+        // reading times the seconds it stood, so the scale is one -- and a
+        // frost has to stay a frost, so nothing is taken as a magnitude. Six
+        // degrees below zero must not come out warmer than one below.
+        val ranges = barRanges(
+            listOf(
+                PowerSegment(0, hour, -6_000.0 * hour, 0),
+                PowerSegment(hour, 2 * hour, -1_000.0 * hour, 0),
+            ),
+            listOf(0L, 2 * hour),
+            scale = 1.0,
+            magnitude = false,
+        )
+        assertEquals(-6_000.0, ranges[0]!!.low, 0.1)
+        assertEquals(-1_000.0, ranges[0]!!.high, 0.1)
     }
 }
