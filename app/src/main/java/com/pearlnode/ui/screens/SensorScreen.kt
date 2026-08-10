@@ -467,20 +467,6 @@ private fun SeriesTotals(
                     TemperatureColors.of(series.shown!! / 1000.0)
                 else MaterialTheme.colorScheme.onSurface,
             )
-            // The middle of the range, under the middle column. Small, because
-            // what a weather screen is asked first is what it is doing now and
-            // how far it went either way; the average is the answer to a slower
-            // question. Gone while a bar is held, where the middle figure is
-            // already an average and saying so twice would be noise.
-            if (series.scrubbed == null) {
-                series.meanMilli?.let { mean ->
-                    Text(
-                        "Ø " + show(mean),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Label(if (range == null) R.string.sensor_high else R.string.power_highest)
