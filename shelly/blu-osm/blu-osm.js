@@ -108,6 +108,7 @@ let ARC = {
   step_s: 300,
   flush_every: 6,   // Saetze im RAM, bevor der Flash sie zu sehen bekommt
   send_slots: 20,   // Zeitscheiben je Nachtrag-Anfrage
+  give_up: 5,       // abgelehnte Anlaeufe, bis ein Stueck uebersprungen wird
   version: 2,
 };
 
@@ -508,8 +509,23 @@ function buildMap(offset) {
 // Der Zeiger auf das erste noch nicht gesendete Feld steht in der Verwaltung
 // und wird erst nach einer bestaetigten Antwort weitergesetzt. Ein Fehlschlag
 // aendert nichts, der naechste Durchlauf versucht dieselbe Stelle noch einmal.
+//
+// Zwei Sorten Fehlschlag, und sie sind nicht gleich viel wert. Ein Aufruf, der
+// gar nicht ankommt, ist genau der Ausfall, gegen den das Nachreichen gebaut
+// ist -- er darf beliebig oft wiederkommen und zaehlt nichts. Eine Antwort
+// dagegen, die das Stueck ablehnt, wird es beim naechsten Mal genauso ablehnen:
+// nach ARC.give_up Anlaeufen geht der Zeiger darueber hinweg. Sonst haelt eine
+// einzige unverdauliche Scheibe den ganzen Nachtrag fuer immer an, und alles
+// dahinter verfaellt still, waehrend der Ringpuffer weiterlaeuft.
+//
+// Was die API geantwortet hat, bleibt in bfNote stehen und ist ueber den
+// quarters-Endpunkt abzuholen. Das kostet ein paar Byte und hat eine Nacht
+// Ratens gekostet, weil es fehlte: der Code allein sagt nicht, welche Zeile
+// nicht gefiel.
 
 let bfBusy = false;
+let bfFails = 0;
+let bfNote = 'noch nichts versucht';
 
 // Ein Zeilenumbruch als Zeichen statt als Escape: der Minifier arbeitet
 // zeilenweise, und ein Escape im Quelltext hat ihn schon einmal gestolpert.
@@ -553,9 +569,11 @@ function bfSensorId(name) {
 // werden uebersprungen, zaehlen aber als erledigt -- eine Luecke bleibt eine
 // Luecke, und sie noch einmal anzusehen wuerde den Zeiger nie weiterbringen.
 function bfSend() {
-  if (!OSM.enable || bfBusy || osmBusy) return;
+  if (!OSM.enable) { bfNote = 'abgeschaltet'; return; }
+  if (bfBusy) { bfNote = 'wartet auf die letzte Antwort'; return; }
+  if (osmBusy) { bfNote = 'der Live-Push ist dran'; return; }
   let last = ST.start + arcFilled();       // erste Scheibe, die es noch nicht gibt
-  if (ST.sent >= last) return;
+  if (ST.sent >= last) { bfNote = 'nichts offen'; return; }
   if (ST.sent < arcOldest()) ST.sent = arcOldest();
 
   let count = last - ST.sent;
@@ -581,12 +599,14 @@ function bfSend() {
   // Nur Luecken in diesem Stueck: nichts zu senden, aber erledigt.
   if (lines === 0) {
     ST.sent = ST.sent + count;
+    bfNote = 'nur Luecken, ' + JSON.stringify(count) + ' uebersprungen';
     arcSaveMeta();
     return;
   }
 
   bfBusy = true;
   let advance = count;
+  let first = body.slice(0, body.indexOf(NL));
   Shelly.call(
     'HTTP.Request',
     {
@@ -600,13 +620,31 @@ function bfSend() {
     function (res, ec, em) {
       bfBusy = false;
       if (ec !== 0) {
-        print('Nachtrag: Aufruf fehlgeschlagen: ' + em);
+        bfNote = 'Aufruf fehlgeschlagen: ' + em;
+        print('Nachtrag: ' + bfNote);
         return;
       }
       if (res.code < 200 || res.code > 299) {
-        print('Nachtrag: HTTP ' + JSON.stringify(res.code) + ' ' + res.body);
+        // 400 und 422 sind die beiden Antworten, mit denen die API sagt, dass
+        // sie diesen Rumpf nicht lesen kann. Die wiederholen sich zeichengleich.
+        // Alles andere -- 5xx, 429, ein abgelaufener Token -- geht vorueber
+        // oder gehoert von Hand behoben, und da waere Wegwerfen das Falsche.
+        let hopeless = res.code === 400 || res.code === 422;
+        bfFails = hopeless ? bfFails + 1 : 0;
+        bfNote = 'HTTP ' + JSON.stringify(res.code) + ' ' +
+          (res.body ? res.body.slice(0, 120) : '') +
+          ' [ab ' + JSON.stringify(ST.sent) + ', erste Zeile: ' + first + ']';
+        print('Nachtrag: ' + bfNote);
+        if (hopeless && bfFails >= ARC.give_up) {
+          ST.sent = ST.sent + advance;
+          bfFails = 0;
+          arcSaveMeta();
+          print('Nachtrag: ' + JSON.stringify(advance) + ' Felder aufgegeben.');
+        }
         return;
       }
+      bfFails = 0;
+      bfNote = JSON.stringify(lines) + ' Werte bestaetigt';
       ST.sent = ST.sent + advance;
       arcSaveMeta();
       if (CFG.log) {
@@ -695,7 +733,9 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
     ',"oldest":' + JSON.stringify(arcOldest()) +
     ',"next":' + JSON.stringify(ST.start + arcFilled()) +
     ',"page":' + JSON.stringify(ST.page) +
-    ',"count":' + JSON.stringify(arcFilled());
+    ',"count":' + JSON.stringify(arcFilled()) +
+    ',"sent":' + JSON.stringify(ST.sent) +
+    ',"note":' + JSON.stringify(bfNote);
   if (from <= 0) {
     res.body = head + '}';
   } else {

@@ -397,6 +397,41 @@ test('gaps are skipped but do not block the pointer', () => {
   check('and nothing was invented for it', body.indexOf('null'), -1);
 });
 
+test('what the service refuses to read is eventually stepped over', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 422, body: 'Illegal value for parameter' };
+  for (let i = 0; i <= 10; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  check('the pointer got past it', plug.api.ST.sent > q, true);
+  check('and it took several tries first',
+    backfills(plug).length >= plug.api.ARC.give_up, true);
+});
+
+test('a bad hour at the service is not a reason to throw data away', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 503, body: 'try again later' };
+  for (let i = 0; i <= 30; i++) sample(plug, (q + i) * Q, 20 + (i % 5), 50);
+  check('nothing was given up on', plug.api.ST.sent, q);
+
+  plug.httpReply = { code: 201, body: 'ok' };
+  sample(plug, (q + 31) * Q, 21, 50);
+  check('and it all goes out once the service is back', plug.api.ST.sent > q, true);
+});
+
+test('the answer that refused it can be read back', () => {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  plug.httpReply = { code: 422, body: 'Illegal value for parameter "value"' };
+  for (let i = 0; i <= 2; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  const note = overview(plug).note;
+  check('it names the code', note.indexOf('422') >= 0, true);
+  check('it keeps what the service said', note.indexOf('Illegal value') >= 0, true);
+  check('and the line it choked on', note.indexOf('t,20') >= 0, true);
+  // The quotes in that answer must not tear the overview apart.
+  check('the overview is still readable JSON', typeof overview(plug).count, 'number');
+});
+
 test('one request never carries more than it can build', () => {
   const plug = createPlug();
   const q = Math.floor(NOON / Q);
