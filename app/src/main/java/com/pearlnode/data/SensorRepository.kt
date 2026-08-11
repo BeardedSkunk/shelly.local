@@ -34,6 +34,27 @@ data class SensorSyncResult(val blocksStored: Int, val throughUtc: Long?)
  * account is only consulted to turn a box into a name and to hand a push script
  * its token.
  */
+/**
+ * Which of a plug's scripts to look at first: the one this app maintains.
+ *
+ * Order is the whole decision here, and getting it wrong cost a morning. A plug
+ * that has been publishing for a while still carries the hand-written
+ * predecessor, and that one mentions a box exactly as this one does -- so "the
+ * first script with a box id in it" picked up the old one, found it unlike the
+ * current template, and would have deployed over a perfectly current recorder.
+ * Worse, the archive was then read from that script's id, and the old script has
+ * no archive endpoint at all.
+ *
+ * Sorting rather than searching twice, and a stable sort, so everything after
+ * the name match keeps its own order: with no script of this name the plug is
+ * still searched from the top for one that publishes anywhere, which is how a
+ * hand-written first script gets adopted in the first place.
+ */
+internal fun searchOrder(
+    listed: List<Pair<Int, String>>,
+    wanted: String,
+): List<Pair<Int, String>> = listed.sortedBy { (_, name) -> if (name == wanted) 0 else 1 }
+
 class SensorRepository(
     private val context: Context,
     private val dao: SensorBlockDao,
@@ -142,7 +163,7 @@ class SensorRepository(
     suspend fun installedScript(host: Device): InstalledOsmScript? = withContext(Dispatchers.IO) {
         val (user, pass) = credentials.get(host.id).let { it?.first to it?.second }
         val deployer = ScriptDeployer(host.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
-        deployer.scripts()
+        searchOrder(deployer.scripts(), SCRIPT_NAME)
             .asSequence()
             .map { (id, name) -> OsmScript.read(id, name, deployer.code(id)) }
             .firstOrNull { it.boxId != null || it.name == SCRIPT_NAME }

@@ -217,6 +217,11 @@ class PowerJournalClient(
         return scriptId
     }
 
+    /** What the plug is actually running, so a guess never has to stand in for it. */
+    fun code(scriptId: Int): String =
+        rpc("Script.GetCode", buildJsonObject { put("id", scriptId) })["data"]
+            ?.jsonPrimitive?.contentOrNull ?: ""
+
     private fun putCode(id: Int, code: String) {
         var offset = 0
         while (offset < code.length) {

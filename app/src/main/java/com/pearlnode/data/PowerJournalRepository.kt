@@ -159,15 +159,25 @@ class PowerJournalRepository(
         } else if (settings.deployedScript(device.id) != fingerprint(asset())) {
             // The recorder itself changed, which the plug has no way of saying:
             // what it reports is the archive format, and a fix to how it decides
-            // where a block ends leaves that untouched. So the comparison is
-            // against what this app remembers sending. A plug that has never
-            // been noted -- every plug, the first time this runs -- is brought
-            // up to date once and then left alone.
+            // where a block ends leaves that untouched. So the first question is
+            // what this app remembers sending -- a cheap answer, and right on
+            // every sync after the first.
             //
-            // Nothing is lost by an unnecessary deployment: the archive is in
-            // the script's own storage and outlives its code.
-            deploy(client, device.id)
-            index = client.index(scriptId)
+            // Where the note disagrees, the plug is asked outright rather than
+            // written over. The note is empty on every plug this app did not
+            // deploy to itself, and plugs get deployed to by hand: six of them
+            // were, over RPC, the evening the recorder was fixed. Redeploying
+            // those would cost nothing except a stopped recorder for a second
+            // and a line of untruth in the log saying it had been out of date.
+            val shipped = asset()
+            if (client.code(scriptId) == shipped) {
+                settings.setDeployedScript(device.id, fingerprint(shipped))
+            } else {
+                // Nothing is lost by the deployment: the archive is in the
+                // script's own storage and outlives its code.
+                deploy(client, device.id)
+                index = client.index(scriptId)
+            }
         }
 
         // Which zone the plug keeps is asked for only when the offset it
