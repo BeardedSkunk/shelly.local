@@ -10,10 +10,16 @@
 // Temperatur. obj_id 30 (hell/dunkel) bleibt weg, das Skript sieht es
 // ohnehin nicht an.
 //
-// Der Stecker muss den Sensor dabei hoeren. Eine Adresse, die er noch nie
-// empfangen hat, nimmt er nicht an: der Aufruf bricht ab und es entsteht
-// nichts (am 25.08.2026 auf dem Ersatzstecker geprueft). Der Sensor gehoert
-// also erst an seinen Platz und dann gekoppelt -- nicht umgekehrt.
+// Der Stecker muss den Sensor dabei hoeren. BTHome.AddDevice antwortet nicht
+// sofort, sondern wartet auf ein Funkpaket von der genannten Adresse: bei einem
+// Sensor in Reichweite dauert das eine gute halbe Minute, bei einer erfundenen
+// Adresse kommt gar nichts zurueck und es entsteht auch nichts (beides am
+// 25.08.2026 geprueft). Der Sensor gehoert also erst an seinen Platz und dann
+// gekoppelt -- nicht umgekehrt.
+//
+// Die drei Werte legt der Stecker dabei meist von selbst an, sobald er sie
+// zum ersten Mal hoert. Freigeschaltet wird hier trotzdem, fuer den Fall, dass
+// eines der Pakete waehrend des Anmeldens gefehlt hat.
 
 const WANTED = [
   { obj_id: 1, name: 'Batterie' },
@@ -32,12 +38,12 @@ if (!host || host.startsWith('--')) {
   process.exit(2);
 }
 
-async function rpc(method, params) {
+async function rpc(method, params, patience) {
   const res = await fetch('http://' + host + '/rpc', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 1, method, params: params || {} }),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(patience || 20000),
   });
   const body = await res.json();
   if (body.error) throw new Error(method + ': ' + body.error.message);
@@ -84,7 +90,13 @@ async function pair(addr, name) {
   } else {
     const cfg = { addr };
     if (name) cfg.name = name;
-    await rpc('BTHome.AddDevice', { config: cfg });
+    console.log('Melde ' + addr + ' an -- das dauert, bis der Sensor sendet ...');
+    // Zwei Minuten Geduld: der BLU H&T funkt von allein nur alle paar Minuten.
+    // Wer nicht warten will, drueckt seinen Knopf.
+    await rpc('BTHome.AddDevice', { config: cfg }, 120000)
+      .catch((e) => {
+        if (!/already exists/.test(e.message)) throw e;
+      });
     console.log('Geraet angemeldet: ' + addr);
   }
 

@@ -24,6 +24,12 @@ object ids it wants — battery, humidity, temperature — and takes the first o
 each. Which physical BLU H&T sits behind them is the plug's business, not the
 script's, so a sensor can be replaced without touching a line of code.
 
+That holds across the two models in this household. The one with the display
+(`SBHT-003C`) also broadcasts a light reading and two objects the firmware has
+no name for; the one without (`SBHT-203C`) broadcasts something the object table
+calls a distance in millimetres. None of it is looked at. The three that matter
+are the same on both.
+
 Two tools do the pairing, both over plain RPC because nothing here goes through
 the Shelly app:
 
@@ -36,10 +42,11 @@ the Shelly app:
 exactly the new one. It needs the sensor to broadcast during the scan — a press
 on its button is enough — and `--watch` keeps scanning until it turns up.
 
-The order matters, and it is the opposite of what one expects. A plug refuses an
-address it has never received: the call breaks off and nothing is created. So
-the sensor goes to its place first and is paired afterwards, which is also what
-makes the changeover free of any gap:
+The order matters, and it is the opposite of what one expects. `AddDevice` does
+not answer straight away — it waits for a packet from the address it was given,
+half a minute or so from a sensor in range and forever from one that is not
+there. So the sensor goes to its place first and is paired afterwards, which is
+also what makes the changeover free of any gap:
 
 1. Learn the new sensor's address indoors, next to any plug: `discover.js`.
    Nothing is paired yet, and the station outside keeps sending.

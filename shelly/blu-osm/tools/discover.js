@@ -24,6 +24,7 @@ if (!host) {
 }
 
 const seen = new Map();
+let rounds = 0;
 
 const ws = new WebSocket('ws://' + host + '/rpc');
 let id = 1;
@@ -59,16 +60,18 @@ ws.addEventListener('message', (ev) => {
 });
 
 function report(e) {
-  const list = e.devices || (e.addr ? [e] : []);
+  // Je nach Ereignis steckt der Fund als Liste drin, als einzelnes Geraet
+  // oder gleich als Adresse. device_discovered nutzt die mittlere Form.
+  const list = e.devices || (e.device ? [e.device] : e.addr ? [e] : []);
   for (const d of list) {
     const addr = d.addr;
     if (!addr) continue;
     const line =
       addr +
       '  RSSI ' + String(d.rssi === undefined ? '?' : d.rssi).padStart(4) +
-      (d.model ? '  ' + d.model : '') +
+      (d.local_name ? '  ' + d.local_name : d.model ? '  ' + d.model : '') +
       (d.name ? '  "' + d.name + '"' : '') +
-      (d.encryption || d.key ? '  verschluesselt' : '');
+      (d.encrypted ? '  verschluesselt' : '');
     if (seen.get(addr) !== line) {
       seen.set(addr, line);
       console.log(line);
@@ -82,6 +85,10 @@ function report(e) {
   }
   if (e.event === 'discovery_done') {
     if (watch) {
+      // Jede Runde einzeln melden, sonst sieht man nicht, ob ueberhaupt
+      // gesucht wird -- und ob ein gezaehltes Geraet unterwegs verloren geht.
+      rounds += 1;
+      console.log('Runde ' + rounds + ': ' + (e.device_count || 0) + ' Geraet(e)');
       call('BTHome.StartDeviceDiscovery', {});
     } else {
       if (seen.size === 0) console.log('Nichts gehoert.');
