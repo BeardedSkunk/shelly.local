@@ -38,9 +38,14 @@ the Shelly app:
     node tools/pair.js <plug-ip> --addr <mac> [--name "..."]
     node tools/pair.js <plug-ip> --unpair <mac>
 
-`discover.js` reports only devices that are *not* already paired, which is
-exactly the new one. It needs the sensor to broadcast during the scan — a press
-on its button is enough — and `--watch` keeps scanning until it turns up.
+`discover.js` is only for finding out an address one does not know. It reports a
+sensor while it is in pairing mode and not otherwise: the garden plug heard
+nothing at all from a sensor lying a metre away and broadcasting every sixty
+seconds, and paired with it a minute later without complaint. So four presses on
+the sensor's button first, and `--watch` until it turns up.
+
+Once the address is known, `discover.js` has nothing left to contribute.
+`AddDevice` listens for an ordinary broadcast, no pairing mode involved.
 
 The order matters, and it is the opposite of what one expects. `AddDevice` does
 not answer straight away — it waits for a packet from the address it was given,
@@ -50,17 +55,23 @@ also what makes the changeover free of any gap:
 
 1. Learn the new sensor's address indoors, next to any plug: `discover.js`.
    Nothing is paired yet, and the station outside keeps sending.
-2. Put the new sensor in its place, beside the old one. Still nothing has
-   changed as far as the plug is concerned — it builds its map once, at start.
-3. From the desk: `pair.js --addr <new>`, then `pair.js --unpair <old>`, then
-   restart the script so it maps itself onto the new components:
+2. Put the new sensor in its place, beside the old one, and pair it there as
+   well: `pair.js --addr <new>`. Both are now on the plug and the script has
+   not noticed a thing — it builds its map once, at start, and even a restart
+   would find the older components first.
+3. Leave them side by side until the new one has taken on the temperature
+   outside, and watch what remains: `compare.js`. A sensor carried out of a warm
+   room needs a good while, and until the difference stops moving it says
+   nothing about the two devices.
+4. From the desk: `pair.js --unpair <old>`, then restart the script so it maps
+   itself onto the new components:
 
         curl -s "http://<plug-ip>/rpc/Script.Stop?id=<id>"
         curl -s "http://<plug-ip>/rpc/Script.Start?id=<id>"
 
    The new sensor has been delivering since step 2, so the first reading after
    the restart is a fresh one and openSenseMap sees no interruption at all.
-4. Collect the old sensor whenever it suits. Unpaired, it is simply talking to
+5. Collect the old sensor whenever it suits. Unpaired, it is simply talking to
    nobody.
 
 The five-minute archive survives all of this — `Script.storage` hangs on the
