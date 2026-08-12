@@ -3,7 +3,15 @@
     python blu-gatt.py dump                      alles lesen
     python blu-gatt.py get zigbee                eine Einstellung lesen
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
+    python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
+
+Warum es nie sofort geht: der Sensor funkt einmal pro Minute und schweigt
+dazwischen. Eine Verbindung kann nur zustande kommen, waehrend er funkt -- das
+ist BLE, kein Mangel des Werkzeugs. Ein Direktversuch ueber die Adresse wurde
+am 12.08.2026 nach 133 Sekunden aufgegeben. Wer viel vorhat, nimmt 'shell' und
+zahlt die Wartezeit ein einziges Mal; wer es dauerhaft schneller will,
+verkuerzt das Sendeintervall im Sensor.
 
 Voraussetzungen: bleak (pip install bleak), eine bestehende Bluetooth-Kopplung
 zwischen diesem Rechner und dem Sensor, und ein Knopfdruck pro Verbindung.
@@ -94,7 +102,53 @@ NUR_LESBAR = {
 }
 
 
-async def fassen(minuten=5.0):
+async def fassen(minuten=5.0, weg=1):
+    """Verbindet sich, auf einem von mehreren Wegen.
+
+    weg 1  lauschen und im selben Moment zugreifen. Zuverlaessig, dauert bis
+           zu einer Minute -- so lange schweigt der Sensor zwischen zwei
+           Funkpaketen, und ohne Funkpaket nimmt niemand eine Verbindung an.
+    weg 2  geradeheraus ueber die Adresse. Windows soll selbst warten. Am
+           12.08.2026 gemessen: nach 133 Sekunden aufgegeben, also nutzlos --
+           bleibt drin, weil es auf anderer Hardware anders sein kann.
+    weg 3  beides zugleich: lauschen, und parallel geradeheraus versuchen.
+           Was zuerst durchkommt, gewinnt.
+
+    Schneller als das Funkintervall geht keiner davon. Wer es wirklich schnell
+    braucht, verkuerzt das Intervall im Sensor selbst -- siehe 'intervall' --
+    oder haelt die Verbindung offen, siehe 'shell'.
+    """
+    if weg == 2:
+        try:
+            c = BleakClient(ADDR, timeout=minuten * 60)
+            await c.connect()
+            return c
+        except Exception:
+            return None
+    if weg == 3:
+        direkt = asyncio.create_task(_direkt(minuten))
+        lauschen = asyncio.create_task(_lauschen(minuten))
+        fertig, offen = await asyncio.wait({direkt, lauschen},
+                                           return_when=asyncio.FIRST_COMPLETED)
+        for t in offen:
+            t.cancel()
+        for t in fertig:
+            if t.result() is not None:
+                return t.result()
+        return None
+    return await _lauschen(minuten)
+
+
+async def _direkt(minuten):
+    try:
+        c = BleakClient(ADDR, timeout=minuten * 60)
+        await c.connect()
+        return c
+    except Exception:
+        return None
+
+
+async def _lauschen(minuten=5.0):
     """Verbindet sich mit dem Sensor.
 
     Zuerst geradeheraus ueber die Adresse: ein gekoppelter Sensor laesst sich so
@@ -122,7 +176,6 @@ async def fassen(minuten=5.0):
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
-    print('   direkt ging nicht, warte auf ein Funkpaket ...', flush=True)
     ende = asyncio.get_event_loop().time() + minuten * 60
     try:
         while asyncio.get_event_loop().time() < ende:
@@ -214,7 +267,7 @@ async def rundfunk_abwarten(sekunden=90):
 
 
 async def cmd_dump(args):
-    c = await fassen()
+    c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
         return print('keine Verbindung')
     try:
@@ -234,7 +287,7 @@ async def cmd_dump(args):
 
 async def cmd_get(args):
     uuid, breite = FELDER[args.feld]
-    c = await fassen()
+    c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
         return print('keine Verbindung')
     try:
@@ -247,7 +300,7 @@ async def cmd_set(args):
     if args.feld not in FELDER:
         return print('unbekanntes Feld. Bekannt:', ', '.join(FELDER))
     uuid, breite = FELDER[args.feld]
-    c = await fassen()
+    c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
         return print('keine Verbindung')
     try:
@@ -260,6 +313,64 @@ async def cmd_set(args):
                                   '' if nachher == args.wert else '   NICHT UEBERNOMMEN'))
     finally:
         await c.disconnect()
+
+
+async def cmd_shell(args):
+    """Verbindet einmal und nimmt danach beliebig viele Befehle entgegen.
+
+    Das Warten kostet einmal bis zu einer Minute, danach nichts mehr: die
+    Verbindung bleibt offen und jedes get und set geht in Millisekunden. Fuer
+    ein Durchprobieren aller Schalter ist das der einzige ertraegliche Weg --
+    sonst zahlt man die Wartezeit ein Dutzend Mal.
+
+    Gemessen: eine Verbindung hielt drei Minuten und 64 Zugriffe am Stueck.
+    Bricht sie ab, sagt es das und beendet sich, statt still nichts mehr zu tun.
+    """
+    print('verbinde einmal, danach geht alles sofort ...', flush=True)
+    c = await fassen(weg=args.weg)
+    if not c:
+        return print('keine Verbindung')
+    print('verbunden. Befehle: "get <feld>", "set <feld> <wert>", "dump", "ende"')
+    print('Felder:', ', '.join(sorted(FELDER)), flush=True)
+    try:
+        while True:
+            try:
+                zeile = input('blu> ').strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not zeile:
+                continue
+            teile = zeile.split()
+            befehl = teile[0].lower()
+            try:
+                if befehl in ('ende', 'quit', 'exit'):
+                    break
+                if befehl == 'dump':
+                    for name, (uuid, breite) in FELDER.items():
+                        print('  %-18s %d' % (name, await lesen(c, uuid, breite,
+                                                                name in VORZEICHEN)))
+                elif befehl == 'get' and len(teile) == 2 and teile[1] in FELDER:
+                    uuid, breite = FELDER[teile[1]]
+                    print('  %s = %d' % (teile[1],
+                                         await lesen(c, uuid, breite, teile[1] in VORZEICHEN)))
+                elif befehl == 'set' and len(teile) == 3 and teile[1] in FELDER:
+                    uuid, breite = FELDER[teile[1]]
+                    vz = teile[1] in VORZEICHEN
+                    wert = int(teile[2], 0)
+                    vorher = await lesen(c, uuid, breite, vz)
+                    await schreiben(c, uuid, breite, wert)
+                    await asyncio.sleep(0.3)
+                    nachher = await lesen(c, uuid, breite, vz)
+                    print('  %s: %d -> %d%s' % (teile[1], vorher, nachher,
+                                                '' if nachher == wert else '   NICHT UEBERNOMMEN'))
+                else:
+                    print('  ?  get <feld> | set <feld> <wert> | dump | ende')
+            except Exception as e:
+                print('  Verbindung weg (%s) -- neu starten' % type(e).__name__)
+                break
+    finally:
+        await c.disconnect()
+        print('getrennt')
 
 
 async def cmd_bisect(args):
@@ -285,7 +396,7 @@ async def cmd_bisect(args):
         pruef = (lo + hi) // 2
         print('Schritt %d/%d -- pruefe %d   (Klammer %d .. %d)'
               % (schritt, args.schritte, pruef, lo, hi), flush=True)
-        c = await fassen()
+        c = await fassen(weg=getattr(args, 'weg', 1))
         if not c:
             print('   keine Verbindung, abgebrochen')
             break
@@ -322,7 +433,7 @@ async def cmd_bisect(args):
     print('Ergebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
     if original and args.zuruecksetzen:
         print('\nSetze die urspruenglichen Schwellen zurueck.')
-        c = await fassen()
+        c = await fassen(weg=getattr(args, 'weg', 1))
         if c:
             try:
                 await schreiben(c, dunkel_uuid, breite, original[0])
@@ -337,14 +448,21 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
 
-    sub.add_parser('dump', help='alle Einstellungen lesen')
+    def mit_weg(p):
+        p.add_argument('--weg', type=int, default=1, choices=(1, 2, 3),
+                       help='1 lauschen, 2 geradeheraus, 3 beides zugleich')
+        return p
 
-    g = sub.add_parser('get', help='eine Einstellung lesen')
+    mit_weg(sub.add_parser('dump', help='alle Einstellungen lesen'))
+
+    g = mit_weg(sub.add_parser('get', help='eine Einstellung lesen'))
     g.add_argument('feld', choices=sorted(FELDER))
 
-    s = sub.add_parser('set', help='eine Einstellung schreiben')
+    s = mit_weg(sub.add_parser('set', help='eine Einstellung schreiben'))
     s.add_argument('feld', choices=sorted(FELDER))
     s.add_argument('wert', type=int)
+
+    mit_weg(sub.add_parser('shell', help='einmal verbinden, dann viele Befehle'))
 
     b = sub.add_parser('bisect', help='die Helligkeit einkreisen')
     b.add_argument('--von', type=int, default=0)
@@ -356,8 +474,8 @@ def main():
                    help='am Ende die urspruenglichen Schwellen wiederherstellen')
 
     args = p.parse_args()
-    asyncio.run({'dump': cmd_dump, 'get': cmd_get,
-                 'set': cmd_set, 'bisect': cmd_bisect}[args.cmd](args))
+    asyncio.run({'dump': cmd_dump, 'get': cmd_get, 'set': cmd_set,
+                 'shell': cmd_shell, 'bisect': cmd_bisect}[args.cmd](args))
 
 
 if __name__ == '__main__':
