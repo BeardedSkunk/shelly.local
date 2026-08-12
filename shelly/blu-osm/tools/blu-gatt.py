@@ -17,10 +17,11 @@ schlicht -- gewoehnliches GATT, keine Verschluesselung, keine Signatur, keine
 Cloud. Ein Schreibvorgang ist ein ATT Write Command auf ein festes Merkmal,
 Zahlen little-endian, Ja/Nein als einzelnes Byte.
 
-Der Knopfdruck ist nicht die Erlaubnis, sondern die Voraussetzung: im
-Normalbetrieb funkt der Sensor nicht verbindbar, das spart ihm die Batterie.
-Erst der Druck oeffnet ein kurzes Fenster. Steht die Verbindung einmal, haelt
-sie -- gemessen drei Minuten und 64 Lesevorgaenge am Stueck.
+Vor der Kopplung ist der Knopfdruck die Voraussetzung: ein ungekoppelter BLU
+funkt nicht verbindbar, das spart ihm die Batterie, und erst der Druck oeffnet
+ein Fenster. Danach nicht mehr -- ein gekoppelter Sensor laesst sich auch im
+Normalbetrieb ansprechen, ohne dass "set" im Display steht. Steht die
+Verbindung einmal, haelt sie: drei Minuten und 64 Lesevorgaenge am Stueck.
 
 Was der Sensor nicht hergibt
 ----------------------------
@@ -54,22 +55,34 @@ FELDER = {
     'feuchte_offset':  ('0de178e5-a95d-4988-b042-7145d540a002', 2),  # ganze Prozent
     'schwelle_dunkel': ('c1a32099-32e8-42d8-99bb-b90ce4abe841', 2),
     'schwelle_hell':   ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2),
-    'fahrenheit':      ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
-    'invertieren':     ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
-    'zigbee':          ('611723f5-53dd-4289-888a-7523db56bb59', 1),
     'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
     'intervall':       ('08b83239-6f5e-4412-892d-81e59224716e', 2),
-    # Noch ohne Namen, aber schreibbar -- genau dadurch lassen sie sich
-    # trennen: einen umlegen, nachsehen was das Geraet tut.
-    'schalter_a':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
-    'schalter_b':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
-    'schalter_c':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
+    # Am Geraet beobachtet: schaltet ein Globus-Symbol auf dem Display ein und
+    # aus. Was es bedeutet, ist damit noch nicht gesagt.
+    'globus':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
+    # Fuenf Ja/Nein-Schalter ohne belegten Namen.
+    'schalter_a':      ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
+    'schalter_b':      ('611723f5-53dd-4289-888a-7523db56bb59', 1),
+    'schalter_c':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
+    'schalter_d':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
+    'schalter_e':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
 }
 
-# schalter_a und schalter_b sind Energiesparmodus und Uhr-Synchronisierung --
-# welcher welcher, ist offen. schalter_c wurde im ersten Durchgang umgelegt,
-# bevor jemand aufschrieb, was dabei angefasst wurde. Wer einen davon setzt und
-# danach am Geraet nachsieht, hat die Antwort.
+# Warum die Schalter keine Namen tragen
+# -------------------------------------
+# Sie hatten welche, aus dem Mitschnitt abgeleitet: drei Schreibvorgaenge auf 1
+# und zwei auf 0 in einem Durchgang, in dem drei Einstellungen eingeschaltet
+# und zwei ausgeschaltet wurden. Das teilt die fuenf sauber in zwei Gruppen,
+# und ein Anker aus dem ersten Durchgang schien den Rest zu bestimmen.
+#
+# Am Geraet nachgesehen war der Anker falsch: das Merkmal, das ich fuer
+# Fahrenheit hielt, schaltet ein Globus-Symbol. Damit fiel die ganze Kette, denn
+# jede weitere Zuordnung hing daran. Eine Herleitung, deren erster Schritt nicht
+# geprueft ist, ist keine.
+#
+# Zuordnen laesst sich das in Sekunden, jetzt wo sie schreibbar sind: einen
+# umlegen, aufs Display und in die App schauen, den Namen eintragen. Was dabei
+# herauskommt, ist beobachtet und nicht hergeleitet.
 
 NUR_LESBAR = {
     'firmware':  '00002a26-0000-1000-8000-00805f9b34fb',
@@ -94,7 +107,10 @@ async def fassen(minuten=5.0):
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
-    print('   warte auf den Sensor -- jetzt den Knopf druecken', flush=True)
+    # Kein Muss: ein gekoppelter Sensor nimmt Verbindungen auch im
+    # Normalbetrieb an. Der Knopf hilft nur, wenn nichts hereinkommt -- vor der
+    # Kopplung war er die Voraussetzung, danach ist er die Abkuerzung.
+    print('   warte auf den Sensor (Knopf hilft, ist aber nicht noetig)', flush=True)
     ende = asyncio.get_event_loop().time() + minuten * 60
     try:
         while asyncio.get_event_loop().time() < ende:
