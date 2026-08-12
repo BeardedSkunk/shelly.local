@@ -3,6 +3,7 @@
     python blu-gatt.py dump                      alles lesen
     python blu-gatt.py get zigbee                eine Einstellung lesen
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
+    python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
     python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
 
@@ -100,6 +101,16 @@ FELDER = {
 #   4 mal   invertieren
 #   5 mal   zwoelf / vierundzwanzig Stunden
 #   6 bis 9 kein sichtbarer Unterschied
+
+# Die Sicherheits-Eingabe. Nur beschreibbar, und als einzige Stelle im ganzen
+# Geraet big-endian: die 123456 aus der App standen im Mitschnitt als 0001e240.
+PIN_UUID = '0ffb7104-860c-49ae-8989-1f946d5f6c03'
+
+# Sechzehn Bytes, beim Auslesen alle null. Sehr wahrscheinlich der
+# BTHome-Verschluesselungsschluessel -- der Stecker meldet fuer diesen Sensor
+# key:false, was dazu passt. Ob er sich nach einer PIN anders liest, ist genau
+# die Frage, die 'pin' beantwortet.
+SCHLUESSEL_UUID = 'eb0fb41b-af4b-4724-a6f9-974f55aba81a'
 
 NUR_LESBAR = {
     'firmware':  '00002a26-0000-1000-8000-00805f9b34fb',
@@ -322,6 +333,47 @@ async def cmd_set(args):
         await c.disconnect()
 
 
+async def zeige_schluessel(c, wann):
+    roh = await c.read_gatt_char(SCHLUESSEL_UUID)
+    leer = all(b == 0 for b in roh)
+    print('  Schluessel %s: %s%s' % (wann, roh.hex(), '   (alles null)' if leer else ''))
+    return roh
+
+
+async def cmd_pin(args):
+    """Schickt die PIN und sieht nach, ob der Schluessel danach etwas hergibt.
+
+    Die PIN geht als vier Bytes big-endian hinaus -- so stand sie im Mitschnitt,
+    und es ist die einzige Stelle im Geraet, die nicht little-endian ist. Was
+    sie freischaltet, weiss niemand; deshalb wird vorher und nachher gelesen und
+    der Unterschied gezeigt, statt etwas zu behaupten.
+    """
+    c = await fassen(weg=args.weg)
+    if not c:
+        return print('keine Verbindung')
+    try:
+        vorher = await zeige_schluessel(c, 'vorher ')
+        await c.write_gatt_char(PIN_UUID, args.pin.to_bytes(4, 'big'), response=False)
+        print('  PIN geschickt: %d als %s (big-endian)'
+              % (args.pin, args.pin.to_bytes(4, 'big').hex()))
+        await asyncio.sleep(0.6)
+        nachher = await zeige_schluessel(c, 'nachher')
+        if vorher == nachher:
+            print('  unveraendert -- die PIN aendert am Schluessel nichts,')
+            print('  jedenfalls nichts, was sich lesen laesst.')
+        else:
+            print('  VERAENDERT.')
+        # Und ob sonst irgendwo etwas aufgegangen ist.
+        print('\n  was sonst zu lesen ist:')
+        for name, (uuid, breite) in FELDER.items():
+            try:
+                print('    %-16s %d' % (name, await lesen(c, uuid, breite, name in VORZEICHEN)))
+            except Exception as e:
+                print('    %-16s <%s>' % (name, type(e).__name__))
+    finally:
+        await c.disconnect()
+
+
 async def cmd_shell(args):
     """Verbindet einmal und nimmt danach beliebig viele Befehle entgegen.
 
@@ -337,7 +389,8 @@ async def cmd_shell(args):
     c = await fassen(weg=args.weg)
     if not c:
         return print('keine Verbindung')
-    print('verbunden. Befehle: "get <feld>", "set <feld> <wert>", "dump", "ende"')
+    print('verbunden. Befehle: get <feld> | set <feld> <wert> | dump |'
+          ' pin <zahl> | schluessel | ende')
     print('Felder:', ', '.join(sorted(FELDER)), flush=True)
     try:
         while True:
@@ -352,6 +405,17 @@ async def cmd_shell(args):
             try:
                 if befehl in ('ende', 'quit', 'exit'):
                     break
+                if befehl == 'pin' and len(teile) == 2:
+                    await zeige_schluessel(c, 'vorher ')
+                    wert = int(teile[1], 0)
+                    await c.write_gatt_char(PIN_UUID, wert.to_bytes(4, 'big'), response=False)
+                    print('  PIN geschickt: %d' % wert)
+                    await asyncio.sleep(0.6)
+                    await zeige_schluessel(c, 'nachher')
+                    continue
+                if befehl == 'schluessel':
+                    await zeige_schluessel(c, 'jetzt  ')
+                    continue
                 if befehl == 'dump':
                     for name, (uuid, breite) in FELDER.items():
                         print('  %-18s %d' % (name, await lesen(c, uuid, breite,
@@ -471,6 +535,9 @@ def main():
 
     mit_weg(sub.add_parser('shell', help='einmal verbinden, dann viele Befehle'))
 
+    pn = mit_weg(sub.add_parser('pin', help='PIN schicken und den Schluessel lesen'))
+    pn.add_argument('pin', type=int)
+
     b = sub.add_parser('bisect', help='die Helligkeit einkreisen')
     b.add_argument('--von', type=int, default=0)
     b.add_argument('--bis', type=int, default=1000)
@@ -481,7 +548,7 @@ def main():
                    help='am Ende die urspruenglichen Schwellen wiederherstellen')
 
     args = p.parse_args()
-    asyncio.run({'dump': cmd_dump, 'get': cmd_get, 'set': cmd_set,
+    asyncio.run({'dump': cmd_dump, 'get': cmd_get, 'set': cmd_set, 'pin': cmd_pin,
                  'shell': cmd_shell, 'bisect': cmd_bisect}[args.cmd](args))
 
 
