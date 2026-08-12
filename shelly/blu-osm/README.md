@@ -101,6 +101,52 @@ script id, not on the code or the sensor — except for whatever is still in RAM
 when the script stops, at most half an hour. Those readings are already in
 openSenseMap; the archive only exists for the times when they are not.
 
+## Talking to a BLU H&T without the Shelly app
+
+`tools/blu-gatt.py` reads and writes the sensor's own settings — the ones that
+live in the device rather than in any plug: the offsets, the light thresholds,
+Fahrenheit, the clock. It needs `bleak`, a Bluetooth pairing between the machine
+and the sensor, and a press of the sensor's button per connection.
+
+The protocol came out of a Bluetooth capture on 12.08.2026: developer options,
+HCI snoop log, every setting touched once in the Shelly app with distinctive
+values, then `adb bugreport` and the session decoded. What it does is ordinary
+GATT — no encryption, no signature, no cloud. A write is an ATT Write Command
+to a fixed characteristic, numbers little-endian, booleans a single byte. The
+one oddity is the security key, which goes over as a 32-bit **big-endian**
+integer while everything else is little-endian.
+
+    0de178e5-…a000   temperature offset, tenths of a degree
+    0de178e5-…a002   humidity offset, whole percent
+    c1a32099-…841    darkness threshold
+    c1a32099-…842    brightness threshold
+    68348d04-…49cc   Fahrenheit
+    d56a3410-…66a1   clock
+
+The offsets are applied to what the sensor **broadcasts**, not merely to its
+display: setting the temperature offset to 42.0 moved the reading the plug
+receives by exactly 42.0. Anything reading this sensor sees the corrected value,
+so an offset set here and one set in `blu-osm.js` would both apply.
+
+The button press is not permission, it is the precondition: a BLU does not
+advertise connectably in normal operation — that is what its battery life is
+made of — and only a press opens a short window. Once a connection stands it
+holds; three minutes and sixty-four reads went through one.
+
+What the sensor will not give up is the measured brightness. Only the decision
+comes out, light or dark. Two read-only characteristics looked like the number
+and were not: they sat unmoved at 299 and 297 for three minutes under a torch,
+and fell by one each over an hour while the battery went from 99 to 98 per cent
+— almost certainly the cell voltage in hundredths of a volt.
+
+So brightness can only be bracketed, by moving the threshold and watching which
+side the sensor lands on. `blu-gatt.py bisect` does that, and it moves **both**
+thresholds together to the same value on purpose. The sensor has one for the way
+to dark and one for the way to light, and between them it stays where it was;
+left alone, that hysteresis would have it sitting on "dark" out of inertia and
+the reading would mean nothing. Equal thresholds turn each step into a single
+comparison that does not care what came before.
+
 ## Correcting a sensor
 
 Two BLU H&T lying side by side may not agree, and the temptation is to write
