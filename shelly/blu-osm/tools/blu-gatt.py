@@ -93,12 +93,25 @@ NUR_LESBAR = {
 
 
 async def fassen(minuten=5.0):
-    """Wartet auf das verbindbare Fenster und greift zu.
+    """Verbindet sich mit dem Sensor.
 
-    Der Suchlauf laeuft durchgehend statt in Runden: zwischen zwei Laeufen ist
-    der Adapter blind, und der Sensor funkt nur einmal pro Minute. Mit
-    Start-Stop-Start wurden 24 Versuche gebraucht und ein Paket gehoert.
+    Zuerst geradeheraus ueber die Adresse: ein gekoppelter Sensor laesst sich so
+    ansprechen, ohne auf ein Funkpaket zu warten und ohne dass jemand einen
+    Knopf druecken muss. Das ist der Normalfall und dauert Sekunden.
+
+    Klappt das nicht, wird gewartet, bis er sich von selbst meldet, und in
+    derselben Sekunde zugegriffen. Der Suchlauf laeuft dabei durchgehend statt
+    in Runden: zwischen zwei Laeufen ist der Adapter blind, und der Sensor funkt
+    nur einmal pro Minute. Mit Start-Stop-Start wurden 24 Versuche gebraucht und
+    ein einziges Paket gehoert.
     """
+    try:
+        c = BleakClient(ADDR, timeout=12.0)
+        await c.connect()
+        return c
+    except Exception:
+        pass
+
     q = asyncio.Queue()
 
     def gesehen(dev, adv):
@@ -107,10 +120,7 @@ async def fassen(minuten=5.0):
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
-    # Kein Muss: ein gekoppelter Sensor nimmt Verbindungen auch im
-    # Normalbetrieb an. Der Knopf hilft nur, wenn nichts hereinkommt -- vor der
-    # Kopplung war er die Voraussetzung, danach ist er die Abkuerzung.
-    print('   warte auf den Sensor (Knopf hilft, ist aber nicht noetig)', flush=True)
+    print('   direkt ging nicht, warte auf ein Funkpaket ...', flush=True)
     ende = asyncio.get_event_loop().time() + minuten * 60
     try:
         while asyncio.get_event_loop().time() < ende:
@@ -123,7 +133,6 @@ async def fassen(minuten=5.0):
             try:
                 c = BleakClient(dev, timeout=8.0)
                 await c.connect()
-                print('   verbunden, %d dBm' % rssi, flush=True)
                 return c
             except Exception:
                 pass
