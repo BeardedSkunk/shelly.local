@@ -59,40 +59,47 @@ ADDR = 'FC:4D:6A:38:E2:F2'
 # jede Einstellung einmal in der App geaendert, mit auffaelligen Zahlen, und
 # im Protokoll nachgesehen, welches Merkmal sich bewegt hat.
 FELDER = {
-    'temp_offset':     ('0de178e5-a95d-4988-b042-7145d540a000', 2),  # Zehntelgrad
-    'feuchte_offset':  ('0de178e5-a95d-4988-b042-7145d540a002', 2),  # ganze Prozent
+    # Am Geraet durchprobiert und beobachtet, nicht hergeleitet. Die frueheren
+    # Namen stammten aus einem Bluetooth-Mitschnitt und waren teils vertauscht:
+    # was nach Fahrenheit aussah, schaltet einen Globus, und die beiden
+    # Display-Schalter standen ueber Kreuz.
+    'temp_offset':     ('0de178e5-a95d-4988-b042-7145d540a000', 2),  # Zehntelgrad, mit Vorzeichen
+    'feuchte_offset':  ('0de178e5-a95d-4988-b042-7145d540a002', 2),  # ganze Prozent, mit Vorzeichen
     'schwelle_dunkel': ('c1a32099-32e8-42d8-99bb-b90ce4abe841', 2),
     'schwelle_hell':   ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2),
+    # 0 Celsius, 1 Fahrenheit. In Fahrenheit dreht sich auch das Datum: erst
+    # der Monat, dann der Tag.
+    'fahrenheit':      ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
+    # 0 schwarz auf weiss, 1 invertiert.
+    'invertieren':     ('611723f5-53dd-4289-888a-7523db56bb59', 1),
+    # 0 vierundzwanzig Stunden, 1 zwoelf. Der einzige Wert, der sich auf dem
+    # Display erst zeigt, wenn der Sensor den set-Bildschirm verlaesst -- alle
+    # anderen schlagen sofort durch.
+    'uhrformat':       ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
+    # Schaltet ein Globus-Symbol ein und aus. Wofuer es steht, ist offen.
+    'globus':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
+    # Nicht die Sendefrequenz, sondern ein Zeitversatz: die Zahl wird in
+    # Minuten auf die Uhrzeit aufgeschlagen, 65535 zieht eine Minute ab. In
+    # manchen Betriebsarten ist die Uhrzeit leer und der BLU zaehlt hiermit --
+    # wie sich die Uhrzeit loeschen laesst, damit das nutzbar wird, ist noch
+    # offen.
+    'zeitversatz':     ('08b83239-6f5e-4412-892d-81e59224716e', 2),
+    # Vier Bytes, nimmt grosse Zahlen an, sichtbar aendert sich nichts.
     'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
-    'intervall':       ('08b83239-6f5e-4412-892d-81e59224716e', 2),
-    # ACHTUNG: die drei folgenden Namen sind aus dem Mitschnitt hergeleitet und
-    # nicht am Geraet geprueft. Am 12.08.2026 hat sich gezeigt, dass 'fahrenheit'
-    # in Wahrheit ein Globus-Symbol auf dem Display schaltet -- die uebrigen
-    # Zuordnungen hingen an derselben Kette und sind damit ebenso fraglich. Sie
-    # stehen hier, bis jemand sie am Geraet durchprobiert und richtigstellt.
-    'fahrenheit':      ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
-    'invertieren':     ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
-    'zigbee':          ('611723f5-53dd-4289-888a-7523db56bb59', 1),
+    # Zwei Schalter ohne sichtbare Wirkung. Uebrig sind Energiesparmodus,
+    # Uhr-Synchronisierung, Zigbee und Sicherheit -- alles Dinge, die sich auf
+    # einem Display auch nicht zeigen wuerden.
     'schalter_a':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
     'schalter_b':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
-    'schalter_c':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
 }
 
-# Warum die Schalter keine Namen tragen
-# -------------------------------------
-# Sie hatten welche, aus dem Mitschnitt abgeleitet: drei Schreibvorgaenge auf 1
-# und zwei auf 0 in einem Durchgang, in dem drei Einstellungen eingeschaltet
-# und zwei ausgeschaltet wurden. Das teilt die fuenf sauber in zwei Gruppen,
-# und ein Anker aus dem ersten Durchgang schien den Rest zu bestimmen.
+# Was der Knopf am Sensor selbst tut, unabhaengig von alldem:
 #
-# Am Geraet nachgesehen war der Anker falsch: das Merkmal, das ich fuer
-# Fahrenheit hielt, schaltet ein Globus-Symbol. Damit fiel die ganze Kette, denn
-# jede weitere Zuordnung hing daran. Eine Herleitung, deren erster Schritt nicht
-# geprueft ist, ist keine.
-#
-# Zuordnen laesst sich das in Sekunden, jetzt wo sie schreibbar sind: einen
-# umlegen, aufs Display und in die App schauen, den Namen eintragen. Was dabei
-# herauskommt, ist beobachtet und nicht hergeleitet.
+#   2 mal   Celsius / Fahrenheit
+#   3 mal   Datum statt Uhrzeit
+#   4 mal   invertieren
+#   5 mal   zwoelf / vierundzwanzig Stunden
+#   6 bis 9 kein sichtbarer Unterschied
 
 NUR_LESBAR = {
     'firmware':  '00002a26-0000-1000-8000-00805f9b34fb',
