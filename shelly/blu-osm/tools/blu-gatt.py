@@ -2,7 +2,7 @@
 
     python blu-gatt.py dump                      alles lesen
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
-    python blu-gatt.py bisect --plug 192.168.178.26   Helligkeit einkreisen
+    python blu-gatt.py bisect                    Helligkeit einkreisen
 
 Voraussetzungen: bleak (pip install bleak), eine bestehende Bluetooth-Kopplung
 zwischen diesem Rechner und dem Sensor, und ein Knopfdruck pro Verbindung.
@@ -36,10 +36,7 @@ Schwelle verstellt und zusieht, auf welcher Seite der Sensor landet.
 
 import argparse
 import asyncio
-import json
 import sys
-import time
-import urllib.request
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -57,19 +54,21 @@ FELDER = {
     'schwelle_dunkel': ('c1a32099-32e8-42d8-99bb-b90ce4abe841', 2),
     'schwelle_hell':   ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2),
     'fahrenheit':      ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
+    'invertieren':     ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
+    'zigbee':          ('611723f5-53dd-4289-888a-7523db56bb59', 1),
     'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
     'intervall':       ('08b83239-6f5e-4412-892d-81e59224716e', 2),
 }
 
-# Noch nicht zugeordnet: fuenf Ja/Nein-Schalter. Welcher davon Anzeige
-# invertieren, Energiesparmodus, Uhr-Synchronisierung und Zigbee ist, klaert
-# je ein Mitschnitt, in dem genau einer umgelegt wird.
+# Was noch offen ist. Die ersten beiden sind Energiesparmodus und
+# Uhr-Synchronisierung -- welcher welcher, sagt ein Mitschnitt, in dem genau
+# einer davon umgelegt wird. Beim dritten ist nicht einmal das bekannt: er
+# wurde im ersten Durchgang aus- und wieder eingeschaltet, ohne dass jemand
+# aufschrieb, was dabei angefasst wurde.
 UNBEKANNT = [
-    '611723f5-53dd-4289-888a-7523db56bb59',
-    '8645a7a9-6bb6-41fa-a120-4034629c2519',
-    '317c7868-5889-4572-b6ef-2c436ee5a92a',
-    'ca9d7a88-2ad3-4940-9b8b-75558d08a3b0',
-    'a9e33a3f-0396-41e5-a7c4-30511ffba2ad',
+    ('sparen_oder_uhrsync_a', '317c7868-5889-4572-b6ef-2c436ee5a92a'),
+    ('sparen_oder_uhrsync_b', 'ca9d7a88-2ad3-4940-9b8b-75558d08a3b0'),
+    ('unbenannt',             'a9e33a3f-0396-41e5-a7c4-30511ffba2ad'),
 ]
 
 NUR_LESBAR = {
@@ -126,19 +125,57 @@ async def schreiben(c, uuid, breite, wert):
     await c.write_gatt_char(uuid, wert.to_bytes(breite, 'little'), response=False)
 
 
-def plug_zustand(plug, geraet=200):
-    """Was der Shelly gerade vom Sensor hoert: hell/dunkel und wie alt."""
-    basis = 'http://%s/rpc/' % plug
-    komp = json.load(urllib.request.urlopen(basis + 'Shelly.GetComponents?dynamic_only=true', timeout=10))
-    hell = stufe = None
-    for x in komp['components']:
-        if x['key'].startswith('bthomesensor:'):
-            if x['config']['obj_id'] == 30:
-                hell = x['status'].get('value')
-            if x['config']['obj_id'] == 100:
-                stufe = x['status'].get('value')
-    st = json.load(urllib.request.urlopen(basis + 'BTHomeDevice.GetStatus?id=%d' % geraet, timeout=10))
-    return hell, stufe, st.get('packet_id'), st.get('last_updated_ts')
+BTHOME_UUID = '0000fcd2-0000-1000-8000-00805f9b34fb'
+
+# Wie breit ein BTHome-Objekt ist, soweit dieser Sensor sie sendet. Gebraucht
+# wird nur, ueber die unbekannten hinwegzukommen, um an 0x1e zu gelangen.
+BREITEN = {0x00: 1, 0x01: 1, 0x1e: 1, 0x2e: 1, 0x40: 2, 0x45: 2, 0x64: 1}
+
+
+def bthome_lesen(daten):
+    """Zerlegt die Dienstdaten und gibt zurueck, was drinsteht.
+
+    Aufbau: ein Kopfbyte, dann Objekte aus Kennung und Wert. Was uns
+    interessiert, ist 0x1e -- hell oder dunkel. Der gemessene Helligkeitswert
+    steht nirgends, weder hier noch ueber GATT; der Sensor gibt nur seine
+    Entscheidung her.
+    """
+    aus = {}
+    i = 1  # Kopfbyte ueberspringen
+    while i < len(daten):
+        kennung = daten[i]
+        breite = BREITEN.get(kennung)
+        if breite is None:
+            break  # unbekanntes Objekt: ab hier ist die Laenge nicht mehr bekannt
+        aus[kennung] = int.from_bytes(daten[i + 1:i + 1 + breite], 'little')
+        i += 1 + breite
+    return aus
+
+
+async def rundfunk_abwarten(sekunden=90):
+    """Wartet auf das naechste Funkpaket und liest hell/dunkel daraus.
+
+    Der Sensor funkt nicht, solange eine Verbindung steht -- also erst trennen,
+    dann zuhoeren. Das geht vom selben Rechner aus; ein Shelly als Zuhoerer ist
+    dafuer nicht noetig, auch wenn er es koennte.
+    """
+    ergebnis = asyncio.Queue()
+
+    def gesehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        if daten:
+            ergebnis.put_nowait(bthome_lesen(daten))
+
+    sc = BleakScanner(detection_callback=gesehen)
+    await sc.start()
+    try:
+        return await asyncio.wait_for(ergebnis.get(), timeout=sekunden)
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        await sc.stop()
 
 
 async def cmd_dump(args):
@@ -156,8 +193,8 @@ async def cmd_dump(args):
             print('%-18s %s' % (name, zeig))
         for name, (uuid, breite) in FELDER.items():
             print('%-18s %d' % (name, await lesen(c, uuid, breite)))
-        for i, uuid in enumerate(UNBEKANNT):
-            print('unbekannt_%-8d %d   (%s)' % (i, await lesen(c, uuid, 1), uuid[:8]))
+        for name, uuid in UNBEKANNT:
+            print('%-22s %d   (%s)' % (name, await lesen(c, uuid, 1), uuid[:8]))
     finally:
         await c.disconnect()
 
@@ -220,19 +257,16 @@ async def cmd_bisect(args):
             await c.disconnect()
 
         # Erst getrennt funkt er wieder, und nur sein Funk verraet die
-        # Entscheidung. Auf ein frisches Paket warten, nicht auf das alte.
-        _, _, _, vorher_ts = plug_zustand(args.plug)
-        print('   warte auf ein frisches Funkpaket ...', flush=True)
-        hell = None
-        for _ in range(args.geduld):
-            time.sleep(5)
-            hell, stufe, paket, ts = plug_zustand(args.plug)
-            if ts != vorher_ts:
-                print('   Sensor meldet: %s' % ('HELL' if hell else 'dunkel'), flush=True)
-                break
-        else:
-            print('   kein frisches Paket -- Schritt uebersprungen', flush=True)
+        # Entscheidung -- ueber GATT ist sie nirgends zu lesen.
+        print('   warte auf sein naechstes Funkpaket ...', flush=True)
+        paket = await rundfunk_abwarten(args.geduld)
+        if paket is None or 0x1e not in paket:
+            print('   kein verwertbares Paket -- Schritt uebersprungen\n', flush=True)
             continue
+        hell = bool(paket[0x1e])
+        print('   Sensor meldet: %s   (%.1f C, %d %%)'
+              % ('HELL' if hell else 'dunkel',
+                 paket.get(0x45, 0) / 10.0, paket.get(0x2e, 0)), flush=True)
 
         if hell:
             hi = pruef      # Helligkeit liegt ueber dem Pruefwert
@@ -265,13 +299,11 @@ def main():
     s.add_argument('wert', type=int)
 
     b = sub.add_parser('bisect', help='die Helligkeit einkreisen')
-    b.add_argument('--plug', default='192.168.178.26',
-                   help='Shelly, der den Sensor hoert')
     b.add_argument('--von', type=int, default=0)
     b.add_argument('--bis', type=int, default=1000)
     b.add_argument('--schritte', type=int, default=5)
-    b.add_argument('--geduld', type=int, default=24,
-                   help='wie viele Fuenf-Sekunden-Runden auf ein Funkpaket gewartet wird')
+    b.add_argument('--geduld', type=int, default=90,
+                   help='Sekunden, die auf ein Funkpaket gewartet wird')
     b.add_argument('--zuruecksetzen', action='store_true',
                    help='am Ende die urspruenglichen Schwellen wiederherstellen')
 

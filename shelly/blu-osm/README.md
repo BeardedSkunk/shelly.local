@@ -121,7 +121,22 @@ integer while everything else is little-endian.
     c1a32099-…841    darkness threshold
     c1a32099-…842    brightness threshold
     68348d04-…49cc   Fahrenheit
+    8645a7a9-…2519   invert the display
+    611723f5-…bb59   Zigbee
     d56a3410-…66a1   clock
+
+Two booleans are known to be the energy-saving mode and the clock sync but not
+which is which, and a third was toggled before anybody was writing down what
+they touched. They are named for what is known about them rather than guessed
+at. Working out the rest costs one capture each: change exactly one setting,
+see which characteristic moved.
+
+The mapping did not come from the order things were done in — that turned out
+not to match the order they were written in — but from the values. Three
+booleans went to 1 and two to 0 in a round where three settings were switched on
+and two off, which splits the five into two groups; the first round then
+separates them, because a characteristic that already stood at 1 and was cleared
+cannot be the one that was off to begin with.
 
 The offsets are applied to what the sensor **broadcasts**, not merely to its
 display: setting the temperature offset to 42.0 moved the reading the plug
