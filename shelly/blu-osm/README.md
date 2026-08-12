@@ -61,6 +61,14 @@ The pairing mode also expires while one is busy, quietly and without a sign, so
 a sensor that was ready five minutes ago is not ready now. If nothing has been
 heard within a minute, press again rather than waiting longer.
 
+The sensor with the display says nothing about any of this — no pairing icon,
+nothing that distinguishes searching from connected. It does say one thing, and
+it is reliable: **the clock**. A BLU has no clock of its own and takes the time
+over the air from a Shelly device, which is a setting of its own in the app. So
+a display showing the right time is showing a working link, and a display
+showing nonsense has none. It is a better answer than anything the plug can be
+asked, because it comes from the far end.
+
 The order matters, and it is the opposite of what one expects. `AddDevice` does
 not answer straight away — it waits for a packet from the address it was given,
 half a minute or so from a sensor in range and forever from one that is not
