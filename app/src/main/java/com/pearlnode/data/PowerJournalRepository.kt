@@ -111,6 +111,21 @@ class PowerJournalRepository(
      * back. Nothing is deleted: the code stays, and so does the archive, which
      * lives in storage that would go with the script.
      */
+    /**
+     * Puts the shipped recorder on the plug, because somebody asked for it.
+     *
+     * The archive lives in the script's own storage and outlives its code, so
+     * the history costs nothing -- what it costs is a recorder that stops for a
+     * moment, which is why nothing does this on its own any more.
+     */
+    suspend fun updateScript(device: Device) = withContext(Dispatchers.IO) {
+        deploy(clientFor(device), device.id)
+    }
+
+    /** Whether the plug is running something other than what this app ships. */
+    fun scriptIsCurrent(deviceId: String): Boolean =
+        settings.deployedScript(deviceId) == fingerprint(asset())
+
     suspend fun disable(device: Device) = withContext(Dispatchers.IO) {
         val client = clientFor(device)
         client.installation().scriptId?.let { client.setEnabled(it, false) }
@@ -147,36 +162,35 @@ class PowerJournalRepository(
         val scriptId = client.installation().scriptId ?: error("no journal on this device")
         var index = client.index(scriptId)
 
-        // A plug still serving reads by storage slot gets the current script put
-        // on it before anything is read. The slot names were the flaw -- the
-        // plug recycles them on every append -- and there is no way to read that
-        // endpoint reliably, only more or less luckily. The archive is in the
-        // script's own storage and survives the code being replaced, and the
-        // script id is reused, so this costs the history nothing.
+        // A plug serving an archive format this app cannot read is not something
+        // to work around quietly. It used to be replaced here, before anything
+        // was read; now it is reported, and the person decides. Reading on would
+        // only produce nonsense.
         if (index.api < CLIENT_API) {
-            deploy(client, device.id)
-            index = client.index(scriptId)
-        } else if (settings.deployedScript(device.id) != fingerprint(asset())) {
-            // The recorder itself changed, which the plug has no way of saying:
-            // what it reports is the archive format, and a fix to how it decides
-            // where a block ends leaves that untouched. So the first question is
-            // what this app remembers sending -- a cheap answer, and right on
-            // every sync after the first.
-            //
-            // Where the note disagrees, the plug is asked outright rather than
-            // written over. The note is empty on every plug this app did not
-            // deploy to itself, and plugs get deployed to by hand: six of them
-            // were, over RPC, the evening the recorder was fixed. Redeploying
-            // those would cost nothing except a stopped recorder for a second
-            // and a line of untruth in the log saying it had been out of date.
+            error("this plug runs an older journal than this app can read -- update it")
+        }
+
+        // Whether the recorder itself changed, which the plug has no way of
+        // saying: what it reports is the archive format, and a fix to how it
+        // decides where a block ends leaves that untouched. So the first
+        // question is what this app remembers sending -- a cheap answer, and
+        // right on every sync after the first.
+        //
+        // Where the note disagrees, the plug is asked outright. The note is
+        // empty on every plug this app did not deploy to itself, and plugs do
+        // get deployed to by hand: six of them were, over RPC, the evening the
+        // recorder was fixed.
+        //
+        // Noticing is all that happens here. Replacing a running recorder is a
+        // real act with a real cost -- on 12.08.2026 a script swap on the garden
+        // pump was how a plug came to be running one version out of storage and
+        // another out of memory -- and it does not belong in a routine that was
+        // asked to fetch some numbers. The screen says what it found; the button
+        // does the swap.
+        if (settings.deployedScript(device.id) != fingerprint(asset())) {
             val shipped = asset()
             if (client.code(scriptId) == shipped) {
                 settings.setDeployedScript(device.id, fingerprint(shipped))
-            } else {
-                // Nothing is lost by the deployment: the archive is in the
-                // script's own storage and outlives its code.
-                deploy(client, device.id)
-                index = client.index(scriptId)
             }
         }
 

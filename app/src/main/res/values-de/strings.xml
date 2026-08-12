@@ -272,4 +272,6 @@
     <string name="alarm_sync_status_ok">%1$d Zeitplan/Zeitpläne synchronisiert</string>
     <string name="alarm_sync_no_alarm">Kein aktiver Wecker gefunden</string>
     <string name="alarm_sync_error">Synchronisierung fehlgeschlagen: %1$s</string>
+    <string name="power_script_outdated">Auf diesem Stecker läuft ein älterer Rekorder als der, den die App mitbringt.</string>
+    <string name="power_script_update">Rekorder aktualisieren</string>
 </resources>

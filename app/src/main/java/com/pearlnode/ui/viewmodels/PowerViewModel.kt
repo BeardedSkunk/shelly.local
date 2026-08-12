@@ -151,6 +151,8 @@ data class PowerUiState(
     /** Whether the plug is actually running the script right now. */
     val scriptRunning: Boolean = false,
     val scriptInstalled: Boolean = false,
+    /** False while the plug runs a recorder older than the one this app ships. */
+    val scriptIsCurrent: Boolean = true,
     val scriptError: String? = null,
     val reachable: Boolean = false,
     val checkingDevice: Boolean = true,
@@ -261,6 +263,7 @@ class PowerViewModel(
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
+                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
             priceCentsPerKwh = settings.current.priceCentsPerKwh,
             feedInCentsPerKwh = settings.current.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
@@ -606,6 +609,7 @@ class PowerViewModel(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
+                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
                     scriptInstalled = installation.getOrNull()?.installed ?: false,
                 scriptRunning = running,
                 scriptError = installation.getOrNull()?.error,
@@ -642,6 +646,31 @@ class PowerViewModel(
      * plug, which is why the switch is disabled when it cannot be reached --
      * flipping it would otherwise record a wish the plug never heard.
      */
+    /**
+     * Puts the shipped recorder on the plug, on request and never otherwise.
+     *
+     * It used to happen inside every sync, which is how a plug came to be
+     * running one version out of storage and another out of memory without
+     * anybody knowing. The archive survives the swap -- it lives in the
+     * script's own storage -- but the recorder stops for a moment, and that is
+     * not something a routine fetching numbers should decide.
+     */
+    fun updateScript() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(deploying = true, error = null) }
+            val device = requireDevice() ?: run {
+                _uiState.update { it.copy(deploying = false) }
+                return@launch
+            }
+            val result = runCatching { journal.updateScript(device) }
+            _uiState.update { it.copy(
+                deploying = false,
+                error = result.exceptionOrNull()?.failure(PowerTask.TRACKING),
+            ) }
+            refresh()
+        }
+    }
+
     fun setTracking(enabled: Boolean) {
         viewModelScope.launch {
             _uiState.update { it.copy(deploying = true, error = null) }
@@ -655,6 +684,7 @@ class PowerViewModel(
             _uiState.update { it.copy(
                 deploying = false,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
+                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
                 error = result.exceptionOrNull()?.failure(PowerTask.TRACKING),
             ) }
             refresh()

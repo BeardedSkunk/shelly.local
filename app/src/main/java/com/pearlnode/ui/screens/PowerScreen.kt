@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Card
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Surface
@@ -157,7 +158,11 @@ fun PowerScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            SettingsCard(state = uiState, onTracking = vm::setTracking)
+            SettingsCard(
+                state = uiState,
+                onTracking = vm::setTracking,
+                onUpdateScript = vm::updateScript,
+            )
             ChartCard(
                 state = uiState,
                 formats = formats,
@@ -195,6 +200,7 @@ fun PowerScreen(
 private fun SettingsCard(
     state: PowerUiState,
     onTracking: (Boolean) -> Unit,
+    onUpdateScript: () -> Unit,
 ) {
     // Open only when the device is in reach and has no recorder on it, because
     // that is the one case where the switch is the only thing on the page that
@@ -261,6 +267,24 @@ private fun SettingsCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+            // Said, not done. The app used to put its own recorder on the plug
+            // during a sync, which is a swap nobody asked for at a moment
+            // nobody chose.
+            if (state.scriptInstalled && !state.scriptIsCurrent) {
+                Spacer(Modifier.padding(4.dp))
+                Text(
+                    stringResource(R.string.power_script_outdated),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.padding(4.dp))
+                Button(
+                    onClick = onUpdateScript,
+                    enabled = state.reachable && !state.deploying,
+                ) {
+                    Text(stringResource(R.string.power_script_update))
+                }
             }
             if (state.offline) {
                 Spacer(Modifier.padding(4.dp))
