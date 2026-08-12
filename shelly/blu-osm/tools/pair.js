@@ -90,6 +90,19 @@ async function pair(addr, name) {
   } else {
     const cfg = { addr };
     if (name) cfg.name = name;
+
+    // Erst die Suche anwerfen, dann anmelden. Ein Stecker ohne gekoppeltes BLU
+    // laesst seinen Bluetooth-Empfaenger aus -- BLE.GetStatus zeigt dann keine
+    // flags -- und AddDevice schaltet ihn nicht ein. Es wartet dann bis zum
+    // Abbruch auf ein Paket, das niemand empfaengt, und der Stecker kappt die
+    // Verbindung, was hier als "fetch failed" ankommt und nichts ueber den
+    // Sensor aussagt.
+    //
+    // Am 12.08.2026 hat das eine halbe Stunde gekostet: der Sensor lag mit
+    // -58 dBm daneben und funkte, der Stecker hoerte trotzdem nichts. Mit
+    // vorangestellter Suche griff derselbe Aufruf in 32 Sekunden.
+    await rpc('BTHome.StartDeviceDiscovery', {}, 30000).catch(() => {});
+
     console.log('Melde ' + addr + ' an -- das dauert, bis der Sensor sendet ...');
     // Zwei Minuten Geduld: der BLU H&T funkt von allein nur alle paar Minuten.
     // Wer nicht warten will, drueckt seinen Knopf.

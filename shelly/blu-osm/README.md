@@ -38,14 +38,28 @@ the Shelly app:
     node tools/pair.js <plug-ip> --addr <mac> [--name "..."]
     node tools/pair.js <plug-ip> --unpair <mac>
 
-`discover.js` is only for finding out an address one does not know. It reports a
-sensor while it is in pairing mode and not otherwise: the garden plug heard
-nothing at all from a sensor lying a metre away and broadcasting every sixty
-seconds, and paired with it a minute later without complaint. So four presses on
-the sensor's button first, and `--watch` until it turns up.
+`discover.js` finds out an address one does not know. It reports a sensor while
+it is in pairing mode and not otherwise, so four presses on the sensor's button
+first, and `--watch` until it turns up.
 
-Once the address is known, `discover.js` has nothing left to contribute.
-`AddDevice` listens for an ordinary broadcast, no pairing mode involved.
+But the search does something else as well, and it is the thing that matters:
+**it turns the receiver on**. A plug with no BLU paired to it keeps its
+Bluetooth receiver off — `BLE.GetStatus` shows an address and no `flags`, while
+a plug that has one shows `["advertising","scanning"]` — and `AddDevice` does
+not switch it on by itself. It waits for a packet nobody is listening for,
+until the plug drops the connection; over HTTP that arrives as `fetch failed`,
+over a websocket as a plain connection error, and neither says anything about
+the sensor.
+
+On 12.08.2026 that cost half an hour of looking in the wrong places. The sensor
+was lying next to the plug at −58 dBm and broadcasting; the plug heard nothing.
+With `BTHome.StartDeviceDiscovery` in front of it the same call took 32 seconds.
+`pair.js` now does that first, every time, so this is a footnote rather than a
+trap. Reaching for the RPCs by hand, put the search first.
+
+The pairing mode also expires while one is busy, quietly and without a sign, so
+a sensor that was ready five minutes ago is not ready now. If nothing has been
+heard within a minute, press again rather than waiting longer.
 
 The order matters, and it is the opposite of what one expects. `AddDevice` does
 not answer straight away — it waits for a packet from the address it was given,
