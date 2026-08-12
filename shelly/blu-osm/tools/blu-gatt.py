@@ -76,7 +76,7 @@ FELDER = {
     # 0 vierundzwanzig Stunden, 1 zwoelf. Der einzige Wert, der sich auf dem
     # Display erst zeigt, wenn der Sensor den set-Bildschirm verlaesst -- alle
     # anderen schlagen sofort durch.
-    'uhrformat':       ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
+    'uhr12h':          ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
     # Schaltet ein Globus-Symbol ein und aus. Wofuer es steht, ist offen.
     'globus':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
     # Nicht die Sendefrequenz, sondern ein Zeitversatz: die Zahl wird in
@@ -85,8 +85,15 @@ FELDER = {
     # wie sich die Uhrzeit loeschen laesst, damit das nutzbar wird, ist noch
     # offen.
     'zeitversatz':     ('08b83239-6f5e-4412-892d-81e59224716e', 2),
-    # Vier Bytes, nimmt grosse Zahlen an, sichtbar aendert sich nichts.
-    'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
+    # Unixzeit in Sekunden, vier Bytes little-endian. Millisekunden koennen es
+    # nicht sein: vier Bytes fassen 4.294.967.295, und Millisekunden seit 1970
+    # sind heute rund 1.786.000.000.000. Gelesen wurden b1847c6a, also
+    # 1786545329 -- auf die Sekunde der Zeitpunkt des Lesens.
+    #
+    # Sichtbar aendert sich beim Schreiben nichts, weil eine falsche Zeit auch
+    # eine gueltige ist: der Sensor uebernimmt sie und zeigt sie nur, wenn man
+    # auf die Uhranzeige umschaltet -- drei Mal druecken.
+    'epochSec':        ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
     # Zwei Schalter ohne sichtbare Wirkung. Uebrig sind Energiesparmodus,
     # Uhr-Synchronisierung, Zigbee und Sicherheit -- alles Dinge, die sich auf
     # einem Display auch nicht zeigen wuerden.
