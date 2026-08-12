@@ -526,22 +526,40 @@ class SensorViewModel(
     /**
      * Puts the publishing script on the Shelly this sensor is heard through.
      *
-     * Needs both halves at once: the host, which is where it runs, and the box,
-     * whose token it has to be given. Neither is any use without the other,
-     * which is why this is one button rather than two.
+     * Two jobs behind one button, because from where the user stands they are
+     * the same job. Setting one up for the first time needs both halves at once
+     * -- the host, which is where it runs, and the box, whose token it has to be
+     * given -- and neither is any use without the other.
+     *
+     * Renewing one that is already there needs neither. The box, the sensors and
+     * the token are in the copy on the plug and are read back out of it, so the
+     * button still works months after the last sign-in, which is exactly when an
+     * app update makes it necessary.
+     *
+     * Nothing does this on its own. The app compares and says what it found; the
+     * swap happens when somebody asks for it.
      */
     fun deployScript() {
         val host = _uiState.value.host ?: return
-        val box = _uiState.value.boxes.firstOrNull { it.id == _uiState.value.boxId } ?: return
+        val box = _uiState.value.boxes.firstOrNull { it.id == _uiState.value.boxId }
         viewModelScope.launch {
             _uiState.update { it.copy(deploying = true, error = null) }
-            val result = runCatching { sensors.deployScript(host, box) }
+            val result = runCatching {
+                if (box != null) {
+                    sensors.deployScript(host, box)
+                    true
+                } else {
+                    sensors.updateScript(deviceId)
+                }
+            }
             _uiState.update { it.copy(
                 deploying = false,
-                scriptDeployed = result.isSuccess,
-                scriptIsCurrent = result.isSuccess || it.scriptIsCurrent,
+                scriptDeployed = result.getOrDefault(false),
                 error = result.exceptionOrNull()?.let { e -> e.message ?: e.toString() },
             ) }
+            // Read back what is on the plug rather than assuming it took. A
+            // deployment that half succeeded would otherwise show a tick.
+            inspectScript()
         }
     }
 

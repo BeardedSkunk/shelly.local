@@ -209,20 +209,33 @@ class SensorRepository(
     }
 
     /**
-     * Puts the current script on the plug if what is there is out of date.
+     * Puts the current script on the plug, on request.
      *
-     * The power journal taught this the hard way: a change to a script that
-     * nothing compares is a change that never reaches a device. It sat in the
-     * repository for four days while six plugs went on running last month's
+     * The power journal taught half of this the hard way: a change to a script
+     * that nothing compares is a change that never reaches a device. It sat in
+     * the repository for four days while six plugs went on running last month's
      * code, because the only trigger for a deployment was switching tracking off
      * and on again, and nobody had a reason to.
      *
-     * No account needed. Everything this script has to be told -- which box,
-     * which sensors, which token -- is already in the copy on the plug, so an
-     * update reads it back out and fills the current template with it. A user
+     * The answer to that is the comparison, not the deployment. This used to run
+     * inside every sync, and on 12.08.2026 it showed why that is the wrong half
+     * to automate: the plug had quietly been given a new script hours earlier by
+     * an app that was only meant to be reading, nobody knew, and the running one
+     * was still the old code out of memory -- so the device disagreed with
+     * itself and no screen said so. A station that publishes to the world does
+     * not get its program swapped as a side effect of opening a screen.
+     *
+     * So the app compares and says what it finds; a person presses the button.
+     *
+     * No account needed for it. Everything this script has to be told -- which
+     * box, which sensors, which token -- is already in the copy on the plug, so
+     * an update reads it back out and fills the current template with it. A user
      * who signed in once never has to again for this.
+     *
+     * Returns false when there is nothing to do, so the caller can say so
+     * instead of claiming to have done something.
      */
-    suspend fun updateScriptIfStale(deviceId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun updateScript(deviceId: String): Boolean = withContext(Dispatchers.IO) {
         val host = hostFor(deviceId) ?: return@withContext false
         val installed = installedScript(host) ?: return@withContext false
         if (scriptIsCurrent(installed)) return@withContext false
@@ -254,10 +267,10 @@ class SensorRepository(
      */
     suspend fun sync(deviceId: String, nowUtc: Long): SensorSyncResult = withContext(Dispatchers.IO) {
         val boxId = settings.boxId(deviceId) ?: error("no openSenseMap box chosen for this device")
-        // Before reading anything: is the plug still running the script this app
-        // ships? A recorder that was fixed in the repository and never sent is
-        // no recorder at all.
-        runCatching { updateScriptIfStale(deviceId) }
+        // Reading only. Whether the plug is still running the script this app
+        // ships is shown on the screen and replaced when somebody presses the
+        // button -- see [updateScript]. A sync must not change what is running
+        // out there as a side effect of fetching some numbers.
         var stored = 0
         var through: Long? = null
         var failure: Throwable? = null

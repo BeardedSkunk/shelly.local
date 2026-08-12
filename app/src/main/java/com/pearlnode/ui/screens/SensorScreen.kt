@@ -219,7 +219,13 @@ private fun SensorSettingsCard(state: SensorUiState, email: String?, vm: SensorV
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = vm::deployScript,
-                        enabled = !state.deploying && state.boxes.isNotEmpty(),
+                        // A script that is already there can be renewed without
+                        // an account: what it needs is in the copy on the plug.
+                        // Requiring a sign-in here would have meant the only way
+                        // to pick up a new version was to sign in again months
+                        // later -- which is why this used to happen by itself.
+                        enabled = !state.deploying &&
+                            (state.boxes.isNotEmpty() || state.installedScript != null),
                     ) {
                         Text(stringResource(
                             if (installed == null) R.string.sensor_deploy
