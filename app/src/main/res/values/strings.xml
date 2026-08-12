@@ -278,4 +278,5 @@
     <string name="alarm_sync_error">Sync failed: %1$s</string>
     <string name="power_script_outdated">This plug runs an older recorder than the app carries.</string>
     <string name="power_script_update">Update recorder</string>
+    <string name="power_script_ahead">This plug runs a newer recorder than the app carries -- left alone.</string>
 </resources>

@@ -130,6 +130,21 @@ class PowerTrackingSettings(context: Context) {
         prefs.edit().putString("${deviceId}_script", fingerprint).apply()
     }
 
+    /**
+     * Which version of the recorder was last seen running on this plug.
+     *
+     * Read off the plug itself rather than remembered from what was sent, which
+     * is the difference that matters: a plug flashed by hand -- six of them
+     * were, and the garden pump again on 12.08.2026 -- is described correctly
+     * here, and the app can say which of the two ends is the older instead of
+     * only that they disagree. Zero means a recorder from before it said.
+     */
+    fun seenScriptCode(deviceId: String): Int = prefs.getInt("${deviceId}_script_code", -1)
+
+    fun setSeenScriptCode(deviceId: String, code: Int) {
+        prefs.edit().putInt("${deviceId}_script_code", code).apply()
+    }
+
     /** Unix second of the last successful sync, so a stale view can say so. */
     fun lastSync(deviceId: String): Long = prefs.getLong("${deviceId}_synced", 0L)
 

@@ -21,6 +21,18 @@ import kotlinx.coroutines.withContext
  * wrote itself, and there is nobody to defend against. Two versions differing by
  * one character give different answers, which is all that is asked of it.
  */
+/**
+ * The recorder's own version, read out of the text it is written in.
+ *
+ * Both ends carry it as the same literal -- the script writes `"code":N` into
+ * its index, and the copy this app ships still contains those very characters
+ * after the squeeze -- so one number describes what a plug runs and what the
+ * app has, and neither can drift from a constant kept somewhere else. Zero for
+ * anything from before it existed, which sorts correctly: older than all of it.
+ */
+internal fun scriptCode(text: String): Int =
+    Regex("\"code\":(\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
 internal fun fingerprint(code: String): String {
     var hash = 0
     for (c in code) hash = hash * 31 + c.code
@@ -122,9 +134,23 @@ class PowerJournalRepository(
         deploy(clientFor(device), device.id)
     }
 
-    /** Whether the plug is running something other than what this app ships. */
-    fun scriptIsCurrent(deviceId: String): Boolean =
-        settings.deployedScript(deviceId) == fingerprint(asset())
+    /** The recorder this app carries. */
+    fun shippedScriptCode(): Int = scriptCode(asset())
+
+    /**
+     * How the plug's recorder compares with the one this app carries: negative
+     * when the plug is behind, zero when they match, positive when the plug is
+     * ahead of the app. Null until a sync has actually looked.
+     *
+     * A plug that is ahead is not a plug to update. It happens when a script was
+     * put there by hand from a newer working copy, and writing the app's older
+     * one over it would be a downgrade nobody asked for.
+     */
+    fun scriptAge(deviceId: String): Int? {
+        val seen = settings.seenScriptCode(deviceId)
+        if (seen < 0) return null
+        return seen - shippedScriptCode()
+    }
 
     suspend fun disable(device: Device) = withContext(Dispatchers.IO) {
         val client = clientFor(device)
@@ -187,6 +213,7 @@ class PowerJournalRepository(
         // another out of memory -- and it does not belong in a routine that was
         // asked to fetch some numbers. The screen says what it found; the button
         // does the swap.
+        settings.setSeenScriptCode(device.id, index.code)
         if (settings.deployedScript(device.id) != fingerprint(asset())) {
             val shipped = asset()
             if (client.code(scriptId) == shipped) {

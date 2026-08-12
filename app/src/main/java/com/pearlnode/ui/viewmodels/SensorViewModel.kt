@@ -111,6 +111,8 @@ data class SensorUiState(
     val installedScript: InstalledOsmScript? = null,
     /** False when the app carries a newer one than the device is running. */
     val scriptIsCurrent: Boolean = true,
+    /** Positive while the plug runs a newer script than the app carries. */
+    val scriptAhead: Boolean = false,
     val checkingScript: Boolean = false,
     val lastSyncUtc: Long = 0L,
     val storedBlocks: Int = 0,
@@ -210,6 +212,7 @@ class SensorViewModel(
                     checkingScript = false,
                     installedScript = found,
                     scriptIsCurrent = found?.let { sensors.scriptIsCurrent(it) } ?: true,
+                    scriptAhead = found?.let { sensors.scriptAge(it) > 0 } ?: false,
                     // The station the device is already using wins over an empty
                     // setting, and never overwrites one the user has chosen.
                     boxId = state.boxId ?: found?.boxId,

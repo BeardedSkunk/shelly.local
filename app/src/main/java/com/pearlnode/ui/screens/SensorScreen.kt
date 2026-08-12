@@ -224,7 +224,10 @@ private fun SensorSettingsCard(state: SensorUiState, email: String?, vm: SensorV
                         // Requiring a sign-in here would have meant the only way
                         // to pick up a new version was to sign in again months
                         // later -- which is why this used to happen by itself.
-                        enabled = !state.deploying &&
+                        // Never offered as a way down. A plug running a newer
+                        // script than the app carries was flashed by hand from a
+                        // newer working copy, and overwriting it would undo that.
+                        enabled = !state.deploying && !state.scriptAhead &&
                             (state.boxes.isNotEmpty() || state.installedScript != null),
                     ) {
                         Text(stringResource(

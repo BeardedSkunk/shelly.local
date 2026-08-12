@@ -34,6 +34,16 @@ data class JournalIndex(
      * still running a script from before reads were asked for by time.
      */
     val api: Int,
+    /**
+     * Which version of the recorder itself is running out there.
+     *
+     * Neither [api] nor [version]: those describe how the archive is shaped and
+     * how it is read, and a fix to how the recorder decides where a block ends
+     * leaves both untouched. This one is the file. Zero on any plug from before
+     * it existed, which reads as "older than anything this app ships" and is
+     * exactly right.
+     */
+    val code: Int,
     val version: Int,
     /**
      * Counts every metadata write, and the metadata is written only when a page
@@ -282,6 +292,7 @@ fun parseJournalIndex(body: String): JournalIndex {
         // the honest answer there, and what tells this app to put the current
         // script on the plug before trying to read it.
         api = root["api"]?.jsonPrimitive?.intOrNull ?: 0,
+        code = root["code"]?.jsonPrimitive?.intOrNull ?: 0,
         version = root["version"]?.jsonPrimitive?.intOrNull ?: 0,
         generation = root["generation"]?.jsonPrimitive?.intOrNull ?: 0,
         unixtime = root["unixtime"]?.jsonPrimitive?.longOrNull ?: 0L,

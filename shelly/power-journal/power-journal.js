@@ -1240,7 +1240,20 @@ function httpIndex() {
   // api says which shape of read this endpoint offers, and it is not the
   // archive version: a reader upgrading the script must not be told the stored
   // blocks mean something new, because they do not.
-  let out = '{"api":2,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  //
+  // code is this file, and neither of the other two. Bumped by hand whenever a
+  // change is worth pushing to the plugs. It is written out as a plain number
+  // rather than through a variable so that it survives the squeeze into the
+  // app's asset as a readable literal: the app finds the version it ships by
+  // looking for this very text in its own copy, and finds the version a plug
+  // runs by reading it back from here. One number, one place, and the two ends
+  // cannot drift apart.
+  //
+  // Before this existed the app could only compare a note it had written to
+  // itself about what it last sent, which said nothing at all about a plug
+  // somebody had flashed by hand -- and nothing about which of the two was the
+  // newer.
+  let out = '{"api":2,"code":1,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that

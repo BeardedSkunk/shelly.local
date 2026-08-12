@@ -274,4 +274,5 @@
     <string name="alarm_sync_error">Synchronisierung fehlgeschlagen: %1$s</string>
     <string name="power_script_outdated">Auf diesem Stecker läuft ein älterer Rekorder als der, den die App mitbringt.</string>
     <string name="power_script_update">Rekorder aktualisieren</string>
+    <string name="power_script_ahead">Auf diesem Stecker läuft ein neuerer Rekorder als der der App — unangetastet.</string>
 </resources>

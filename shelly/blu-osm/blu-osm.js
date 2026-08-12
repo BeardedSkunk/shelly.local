@@ -867,7 +867,13 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
     if (kv[0] === 'from') from = JSON.parse(kv[1]);
     if (kv[0] === 'count') count = JSON.parse(kv[1]);
   }
-  let head = '{"api":1,"step_s":' + JSON.stringify(ARC.step_s) +
+  // code is the version of this file, written out as a plain number so it
+  // survives the squeeze into the app's asset as readable text. The app finds
+  // what it ships by looking for this literal in its own copy and what a plug
+  // runs by reading it back from here, so it can say which of the two is the
+  // newer instead of only whether they differ. Bumped by hand when a change is
+  // worth pushing.
+  let head = '{"api":1,"code":1,"step_s":' + JSON.stringify(ARC.step_s) +
     ',"oldest":' + JSON.stringify(arcOldest()) +
     ',"next":' + JSON.stringify(ST.start + arcFilled()) +
     ',"page":' + JSON.stringify(ST.page) +

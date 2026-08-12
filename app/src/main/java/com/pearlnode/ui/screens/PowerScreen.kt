@@ -271,19 +271,28 @@ private fun SettingsCard(
             // Said, not done. The app used to put its own recorder on the plug
             // during a sync, which is a swap nobody asked for at a moment
             // nobody chose.
-            if (state.scriptInstalled && !state.scriptIsCurrent) {
+            val age = state.scriptAge
+            if (state.scriptInstalled && age != null && age != 0) {
                 Spacer(Modifier.padding(4.dp))
                 Text(
-                    stringResource(R.string.power_script_outdated),
+                    // Ahead is not something to fix. It means somebody put a
+                    // newer recorder there by hand, and writing this app's older
+                    // one over it would be a downgrade nobody asked for.
+                    stringResource(
+                        if (age < 0) R.string.power_script_outdated
+                        else R.string.power_script_ahead
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.padding(4.dp))
-                Button(
-                    onClick = onUpdateScript,
-                    enabled = state.reachable && !state.deploying,
-                ) {
-                    Text(stringResource(R.string.power_script_update))
+                if (age < 0) {
+                    Spacer(Modifier.padding(4.dp))
+                    Button(
+                        onClick = onUpdateScript,
+                        enabled = state.reachable && !state.deploying,
+                    ) {
+                        Text(stringResource(R.string.power_script_update))
+                    }
                 }
             }
             if (state.offline) {

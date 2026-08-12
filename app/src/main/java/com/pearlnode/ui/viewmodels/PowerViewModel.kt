@@ -151,8 +151,11 @@ data class PowerUiState(
     /** Whether the plug is actually running the script right now. */
     val scriptRunning: Boolean = false,
     val scriptInstalled: Boolean = false,
-    /** False while the plug runs a recorder older than the one this app ships. */
-    val scriptIsCurrent: Boolean = true,
+    /**
+     * How the plug's recorder compares with the shipped one: negative behind,
+     * zero level, positive ahead. Null until a sync has looked.
+     */
+    val scriptAge: Int? = null,
     val scriptError: String? = null,
     val reachable: Boolean = false,
     val checkingDevice: Boolean = true,
@@ -263,7 +266,7 @@ class PowerViewModel(
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
-                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
+                scriptAge = journal.scriptAge(deviceId),
             priceCentsPerKwh = settings.current.priceCentsPerKwh,
             feedInCentsPerKwh = settings.current.feedInCentsPerKwh,
             lastSyncUtc = journal.settings.lastSync(deviceId),
@@ -609,7 +612,7 @@ class PowerViewModel(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
-                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
+                scriptAge = journal.scriptAge(deviceId),
                     scriptInstalled = installation.getOrNull()?.installed ?: false,
                 scriptRunning = running,
                 scriptError = installation.getOrNull()?.error,
@@ -684,7 +687,7 @@ class PowerViewModel(
             _uiState.update { it.copy(
                 deploying = false,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
-                scriptIsCurrent = journal.scriptIsCurrent(deviceId),
+                scriptAge = journal.scriptAge(deviceId),
                 error = result.exceptionOrNull()?.failure(PowerTask.TRACKING),
             ) }
             refresh()

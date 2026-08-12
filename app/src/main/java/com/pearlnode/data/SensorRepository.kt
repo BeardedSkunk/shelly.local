@@ -176,6 +176,21 @@ class SensorRepository(
      * so a difference means the script itself changed and not merely that it
      * points at a different station.
      */
+    /**
+     * How the plug's script compares with the shipped one: negative when the
+     * plug is behind, zero level, positive when it is ahead.
+     *
+     * Both ends carry the version as the same literal, so this is one number
+     * read out of two texts rather than two constants that can drift. Zero on
+     * anything from before it existed, which sorts correctly as oldest.
+     *
+     * Ahead is not something to fix. It means a script was put there by hand
+     * from a newer working copy, and writing the app's older one over it would
+     * be a downgrade nobody asked for.
+     */
+    fun scriptAge(installed: InstalledOsmScript): Int =
+        scriptCode(installed.code) - scriptCode(context.assets.open(ASSET).bufferedReader().use { it.readText() })
+
     fun scriptIsCurrent(installed: InstalledOsmScript): Boolean {
         val boxId = installed.boxId ?: return false
         val token = installed.token ?: return false
