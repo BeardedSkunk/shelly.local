@@ -82,11 +82,27 @@ class ScriptDeployer(
         var offset = 0
         while (offset < code.length) {
             val end = minOf(offset + CHUNK, code.length)
-            rpc("Script.PutCode", buildJsonObject {
-                put("id", id)
-                put("code", code.substring(offset, end))
-                put("append", offset > 0)
-            })
+            // Each piece gets a second and a third go. The plug drops a request
+            // now and then under load -- on 12.08.2026 an upload of this same
+            // file gave up after eight kilobytes and left a truncated script
+            // behind -- and a piece that never arrives is a script cut in half.
+            // Retrying the same piece is safe: append only moves on when the
+            // call comes back.
+            var attempt = 0
+            while (true) {
+                try {
+                    rpc("Script.PutCode", buildJsonObject {
+                        put("id", id)
+                        put("code", code.substring(offset, end))
+                        put("append", offset > 0)
+                    })
+                    break
+                } catch (e: Exception) {
+                    attempt++
+                    if (attempt >= 3) throw e
+                    Thread.sleep(400)
+                }
+            }
             offset = end
         }
     }
@@ -117,7 +133,15 @@ class ScriptDeployer(
     private fun JsonArray?.orEmpty(): List<kotlinx.serialization.json.JsonElement> = this ?: emptyList()
 
     private companion object {
-        /** What one RPC body carries comfortably. */
-        const val CHUNK = 1024
+        /**
+         * What one RPC body carries comfortably.
+         *
+         * Was a kilobyte, which this hardware does not reliably swallow: an
+         * upload of a twenty kilobyte script over the same link failed twice at
+         * exactly eight kilobytes and went through at once when the pieces were
+         * halved. Forty small requests cost a second or two more than twenty
+         * large ones and are the difference between a deployment and a ruin.
+         */
+        const val CHUNK = 512
     }
 }

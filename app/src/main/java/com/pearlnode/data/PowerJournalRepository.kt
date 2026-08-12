@@ -10,17 +10,10 @@ import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.TIER_NATIVE
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
-/**
- * What a piece of script code fingerprints to.
- *
- * Length and a rolling hash rather than a real digest: this only has to tell one
- * revision of one file from another, it is compared against a string this app
- * wrote itself, and there is nobody to defend against. Two versions differing by
- * one character give different answers, which is all that is asked of it.
- */
 /**
  * The recorder's own version, read out of the text it is written in.
  *
@@ -33,6 +26,14 @@ import kotlinx.coroutines.withContext
 internal fun scriptCode(text: String): Int =
     Regex("\"code\":(\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
+/**
+ * What a piece of script code fingerprints to.
+ *
+ * Length and a rolling hash rather than a real digest: this only has to tell one
+ * revision of one file from another, it is compared against a string this app
+ * wrote itself, and there is nobody to defend against. Two versions differing by
+ * one character give different answers, which is all that is asked of it.
+ */
 internal fun fingerprint(code: String): String {
     var hash = 0
     for (c in code) hash = hash * 31 + c.code
@@ -119,11 +120,6 @@ class PowerJournalRepository(
     }
 
     /**
-     * Stops the script and clears its enable flag so a reboot does not bring it
-     * back. Nothing is deleted: the code stays, and so does the archive, which
-     * lives in storage that would go with the script.
-     */
-    /**
      * Puts the shipped recorder on the plug, because somebody asked for it.
      *
      * The archive lives in the script's own storage and outlives its code, so
@@ -131,7 +127,27 @@ class PowerJournalRepository(
      * moment, which is why nothing does this on its own any more.
      */
     suspend fun updateScript(device: Device) = withContext(Dispatchers.IO) {
-        deploy(clientFor(device), device.id)
+        val client = clientFor(device)
+        deploy(client, device.id)
+        // And then look at what is actually running out there, rather than
+        // assuming the deployment took. Without this the screen went on saying
+        // the plug was behind after a successful update, because the only place
+        // that ever wrote down the observed version was the data sync.
+        //
+        // A freshly written script needs a moment before it serves its endpoint,
+        // hence the few attempts. If it still cannot be reached the note is left
+        // alone: the next sync reads it properly, and a wrong note is worse than
+        // a missing one.
+        repeat(5) { attempt ->
+            if (attempt > 0) delay(1500)
+            val seen = runCatching {
+                client.installation().scriptId?.let { client.index(it).code }
+            }.getOrNull()
+            if (seen != null) {
+                settings.setSeenScriptCode(device.id, seen)
+                return@withContext
+            }
+        }
     }
 
     /** The recorder this app carries. */
@@ -152,6 +168,11 @@ class PowerJournalRepository(
         return seen - shippedScriptCode()
     }
 
+    /**
+     * Stops the script and clears its enable flag so a reboot does not bring it
+     * back. Nothing is deleted: the code stays, and so does the archive, which
+     * lives in storage that would go with the script.
+     */
     suspend fun disable(device: Device) = withContext(Dispatchers.IO) {
         val client = clientFor(device)
         client.installation().scriptId?.let { client.setEnabled(it, false) }
