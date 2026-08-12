@@ -57,15 +57,17 @@ FELDER = {
     'schwelle_hell':   ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2),
     'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
     'intervall':       ('08b83239-6f5e-4412-892d-81e59224716e', 2),
-    # Am Geraet beobachtet: schaltet ein Globus-Symbol auf dem Display ein und
-    # aus. Was es bedeutet, ist damit noch nicht gesagt.
-    'globus':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
-    # Fuenf Ja/Nein-Schalter ohne belegten Namen.
-    'schalter_a':      ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
-    'schalter_b':      ('611723f5-53dd-4289-888a-7523db56bb59', 1),
-    'schalter_c':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
-    'schalter_d':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
-    'schalter_e':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
+    # ACHTUNG: die drei folgenden Namen sind aus dem Mitschnitt hergeleitet und
+    # nicht am Geraet geprueft. Am 12.08.2026 hat sich gezeigt, dass 'fahrenheit'
+    # in Wahrheit ein Globus-Symbol auf dem Display schaltet -- die uebrigen
+    # Zuordnungen hingen an derselben Kette und sind damit ebenso fraglich. Sie
+    # stehen hier, bis jemand sie am Geraet durchprobiert und richtigstellt.
+    'fahrenheit':      ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
+    'invertieren':     ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
+    'zigbee':          ('611723f5-53dd-4289-888a-7523db56bb59', 1),
+    'schalter_a':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
+    'schalter_b':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
+    'schalter_c':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
 }
 
 # Warum die Schalter keine Namen tragen
