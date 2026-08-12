@@ -56,6 +56,25 @@ let CFG = {
   low_mw: 1500,
   // 2024-01-01. Anything earlier means the clock has not been set yet.
   min_valid_unix: 1704067200,
+  // The longest stretch archived in one go.
+  //
+  // Archiving is not free: feedTier walks a block one grid step at a time in
+  // every tier, so a week costs 838 steps where ten minutes costs six. On
+  // 12.08.2026 that killed the plug at the garden pump. It had stood at zero
+  // for 6.9 days -- one single open block, because nothing changes when
+  // nothing happens -- and the moment the pump was switched on that block
+  // closed and went into the archive in one burst. The task watchdog restarted
+  // the device (reset_reason 6) about thirty seconds in, which is exactly
+  // confirm_samples times sample_ms, and the firmware disabled this script
+  // afterwards. So the crash cost the recording as well.
+  //
+  // A day at a time, one piece per sample: what an idle stretch costs no longer
+  // depends on how long it was. A week is archived over the following minute
+  // rather than all at once, and the tiers cannot tell the difference -- within
+  // a block the power is constant, so a piece carries exactly the energy of the
+  // stretch it covers and every bucket ends up with what it would have had.
+  // Only tier 0 sees it, as one row per idle day rather than one per idle week.
+  max_piece_s: 86400,
   // A storage value holds 1022 bytes; pages close early to leave room for the
   // longest block that could still arrive.
   page_limit: 1010,
@@ -640,18 +659,31 @@ function queueBlock(start, durationSec, mwh) {
     log(1, 'block at ' + start + ' had no duration and was not archived');
     return;
   }
-  ST.q.push({ s: start, d: durationSec, e: mwh });
-  ST.archiveEnd = start + durationSec;
+  let at = start;
+  let end = start + durationSec;
+  let piece;
+  while (at < end) {
+    piece = mn(CFG.max_piece_s, end - at);
+    ST.q.push({ s: at, d: piece, e: mwh * piece / durationSec });
+    at = at + piece;
+  }
+  ST.archiveEnd = end;
 }
 
 function drainBlocks() {
   if (ST.q.length === 0) return;
-  let queued = ST.q;
-  // Swapped out first: archiving can close a bucket, and nothing may append to
-  // the list being walked.
-  ST.q = [];
+  // One piece per sample, and the rest waits ten seconds. Taking the whole
+  // queue is what turned a week of standing still into a single burst of work.
+  // Rebuilt by hand rather than with shift or splice: mJS is not a whole
+  // JavaScript and nothing else in here has ever asked it for those. Taken off
+  // the queue before it is archived, because archiving can close a bucket and
+  // nothing may append to the list being walked.
+  let head = ST.q[0];
+  let rest = [];
   let i;
-  for (i = 0; i < queued.length; i++) emitBlock(queued[i].s, queued[i].d, queued[i].e);
+  for (i = 1; i < ST.q.length; i++) rest.push(ST.q[i]);
+  ST.q = rest;
+  emitBlock(head.s, head.d, head.e);
 }
 
 // ---------------------------------------------------------------------- KVS
