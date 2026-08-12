@@ -116,13 +116,21 @@ async def fassen(minuten=5.0):
     return None
 
 
-async def lesen(c, uuid, breite):
+# Die Offsets duerfen negativ sein -- ein Sensor, der zu warm liest, braucht
+# genau das. Auf dem Draht sind es zwei Bytes im Zweierkomplement, und weil ein
+# Offset nie in die Naehe von 32767 Zehntelgrad kommt, ist die Grenze zwischen
+# "grosse Zahl" und "negative Zahl" hier ungefaehrlich zu ziehen.
+VORZEICHEN = {'temp_offset', 'feuchte_offset'}
+
+
+async def lesen(c, uuid, breite, mit_vorzeichen=False):
     raw = await c.read_gatt_char(uuid)
-    return int.from_bytes(raw[:breite], 'little')
+    return int.from_bytes(raw[:breite], 'little', signed=mit_vorzeichen)
 
 
 async def schreiben(c, uuid, breite, wert):
-    await c.write_gatt_char(uuid, wert.to_bytes(breite, 'little'), response=False)
+    roh = wert.to_bytes(breite, 'little', signed=wert < 0)
+    await c.write_gatt_char(uuid, roh, response=False)
 
 
 BTHOME_UUID = '0000fcd2-0000-1000-8000-00805f9b34fb'
@@ -192,7 +200,7 @@ async def cmd_dump(args):
                 zeig = '%s  = %d' % (raw.hex(), int.from_bytes(raw, 'little'))
             print('%-18s %s' % (name, zeig))
         for name, (uuid, breite) in FELDER.items():
-            print('%-18s %d' % (name, await lesen(c, uuid, breite)))
+            print('%-18s %d' % (name, await lesen(c, uuid, breite, name in VORZEICHEN)))
     finally:
         await c.disconnect()
 
@@ -203,7 +211,7 @@ async def cmd_get(args):
     if not c:
         return print('keine Verbindung')
     try:
-        print('%s = %d' % (args.feld, await lesen(c, uuid, breite)))
+        print('%s = %d' % (args.feld, await lesen(c, uuid, breite, args.feld in VORZEICHEN)))
     finally:
         await c.disconnect()
 
@@ -216,10 +224,11 @@ async def cmd_set(args):
     if not c:
         return print('keine Verbindung')
     try:
-        vorher = await lesen(c, uuid, breite)
+        vz = args.feld in VORZEICHEN
+        vorher = await lesen(c, uuid, breite, vz)
         await schreiben(c, uuid, breite, args.wert)
         await asyncio.sleep(0.4)
-        nachher = await lesen(c, uuid, breite)
+        nachher = await lesen(c, uuid, breite, vz)
         print('%s: %d -> %d%s' % (args.feld, vorher, nachher,
                                   '' if nachher == args.wert else '   NICHT UEBERNOMMEN'))
     finally:
