@@ -36,6 +36,7 @@ import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /** Blue for what the grid supplied, green for what came back out. */
@@ -152,6 +153,16 @@ fun SeriesChart(
     /** A bar was scrubbed to, or null when the finger left the chart. */
     onScrub: ((Int?) -> Unit)? = null,
     axisColor: Color = MaterialTheme.colorScheme.outlineVariant,
+    /**
+     * The stripe behind every other step of the axis, so a bar's height can be
+     * read without walking the eye across to the figures.
+     *
+     * Four percent of the foreground over the card. It has to be weak enough to
+     * disappear the moment one stops looking for it -- a bar chart is about the
+     * bars -- and taken from onSurface rather than written as a grey, so it
+     * darkens the card in a light theme instead of lightening it.
+     */
+    stripeColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
 ) {
     // Energy's own reading of the colour, which is direction rather than scale.
     val drawnDefault = PowerDrawnColor
@@ -198,6 +209,29 @@ fun SeriesChart(
                     // Where nothing is negative the zero line is the floor, so
                     // an ordinary chart is unchanged by any of this.
                     val baseline = size.height * (scale.top / scale.span).toFloat()
+
+                    // The stripes go down first, so everything else -- the zero
+                    // line, the bars, the faint projection over them -- sits on
+                    // top of them rather than under a veil.
+                    //
+                    // Which step gets one is counted from zero and not from the
+                    // top of the axis: the axis grows a step whenever the day
+                    // does, and a pattern counted from the top would then swap
+                    // over, so that the stripe under yesterday's four hundred
+                    // watts is gone today. Counted from zero, a given band keeps
+                    // its stripe whatever the chart does around it.
+                    val ticks = scale.values
+                    for (i in 0 until ticks.size - 1) {
+                        val step = (ticks[i + 1] / scale.step).roundToInt()
+                        if (step % 2 != 0) continue
+                        val top = baseline - (ticks[i] / scale.span).toFloat() * size.height
+                        val bottom = baseline - (ticks[i + 1] / scale.span).toFloat() * size.height
+                        drawRect(
+                            color = stripeColor,
+                            topLeft = Offset(0f, top),
+                            size = Size(size.width, bottom - top),
+                        )
+                    }
 
                     drawLine(
                         color = axisColor,
