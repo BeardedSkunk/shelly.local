@@ -81,13 +81,25 @@ openSenseMap; the archive only exists for the times when they are not.
 
 ## Correcting a sensor
 
-Two BLU H&T lying side by side do not agree. On 12.08.2026 two of them spent a
-morning a hand's width apart in the garden and stayed several tenths of a
-degree apart the whole time, and the gap moved with the weather — a warming
-morning pulls them apart, a calm night brings them together. So the honest
-number comes from the quiet hours, not from a single reading, and it wants a
-third opinion: a device of a different make, in the same place, read at a
-moment when nothing is changing fast.
+Two BLU H&T lying side by side may not agree, and the temptation is to write
+the difference down as an offset and correct it away. On 12.08.2026 that would
+have been wrong, and the day is worth keeping as a warning.
+
+Overnight the newer sensor read 0.8 K above the older one and 4 points of
+humidity below it, and it held that for hours — long enough to look like a
+property of the device rather than a leftover from the warm room it came out
+of. By the next midday both differences were gone: the same two sensors, the
+same spot, agreeing to within 0.2 K and reading the same humidity to the
+percent. In between the newer one had gone up to the flat for a firmware update
+(v1.1.4 to v1.2.12) and come back. Whether the reading moved with the firmware
+or with the hand that put it back down cannot be told apart afterwards, which is
+the point: a difference is only worth correcting once it has survived being
+disturbed.
+
+So: measure in the quiet hours, on both sides of an interruption, and against a
+third device of a different make in the same place. A difference that comes and
+goes is not an offset. Correcting the 0.8 K on the evening it was measured would
+have put a whole degree of error into the record the next morning.
 
 Where the correction goes is decided by the hardware. The model with the
 display carries `Temperatur-Offset` and `Feuchtigkeits-Offset` in the sensor
