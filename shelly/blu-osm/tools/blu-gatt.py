@@ -1,6 +1,7 @@
 """Redet mit einem Shelly BLU H&T direkt, ohne die Shelly-App.
 
     python blu-gatt.py dump                      alles lesen
+    python blu-gatt.py get zigbee                eine Einstellung lesen
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
     python blu-gatt.py bisect                    Helligkeit einkreisen
 
@@ -58,18 +59,17 @@ FELDER = {
     'zigbee':          ('611723f5-53dd-4289-888a-7523db56bb59', 1),
     'uhrzeit':         ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
     'intervall':       ('08b83239-6f5e-4412-892d-81e59224716e', 2),
+    # Noch ohne Namen, aber schreibbar -- genau dadurch lassen sie sich
+    # trennen: einen umlegen, nachsehen was das Geraet tut.
+    'schalter_a':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
+    'schalter_b':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
+    'schalter_c':      ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
 }
 
-# Was noch offen ist. Die ersten beiden sind Energiesparmodus und
-# Uhr-Synchronisierung -- welcher welcher, sagt ein Mitschnitt, in dem genau
-# einer davon umgelegt wird. Beim dritten ist nicht einmal das bekannt: er
-# wurde im ersten Durchgang aus- und wieder eingeschaltet, ohne dass jemand
-# aufschrieb, was dabei angefasst wurde.
-UNBEKANNT = [
-    ('sparen_oder_uhrsync_a', '317c7868-5889-4572-b6ef-2c436ee5a92a'),
-    ('sparen_oder_uhrsync_b', 'ca9d7a88-2ad3-4940-9b8b-75558d08a3b0'),
-    ('unbenannt',             'a9e33a3f-0396-41e5-a7c4-30511ffba2ad'),
-]
+# schalter_a und schalter_b sind Energiesparmodus und Uhr-Synchronisierung --
+# welcher welcher, ist offen. schalter_c wurde im ersten Durchgang umgelegt,
+# bevor jemand aufschrieb, was dabei angefasst wurde. Wer einen davon setzt und
+# danach am Geraet nachsieht, hat die Antwort.
 
 NUR_LESBAR = {
     'firmware':  '00002a26-0000-1000-8000-00805f9b34fb',
@@ -193,8 +193,17 @@ async def cmd_dump(args):
             print('%-18s %s' % (name, zeig))
         for name, (uuid, breite) in FELDER.items():
             print('%-18s %d' % (name, await lesen(c, uuid, breite)))
-        for name, uuid in UNBEKANNT:
-            print('%-22s %d   (%s)' % (name, await lesen(c, uuid, 1), uuid[:8]))
+    finally:
+        await c.disconnect()
+
+
+async def cmd_get(args):
+    uuid, breite = FELDER[args.feld]
+    c = await fassen()
+    if not c:
+        return print('keine Verbindung')
+    try:
+        print('%s = %d' % (args.feld, await lesen(c, uuid, breite)))
     finally:
         await c.disconnect()
 
@@ -294,6 +303,9 @@ def main():
 
     sub.add_parser('dump', help='alle Einstellungen lesen')
 
+    g = sub.add_parser('get', help='eine Einstellung lesen')
+    g.add_argument('feld', choices=sorted(FELDER))
+
     s = sub.add_parser('set', help='eine Einstellung schreiben')
     s.add_argument('feld', choices=sorted(FELDER))
     s.add_argument('wert', type=int)
@@ -308,7 +320,8 @@ def main():
                    help='am Ende die urspruenglichen Schwellen wiederherstellen')
 
     args = p.parse_args()
-    asyncio.run({'dump': cmd_dump, 'set': cmd_set, 'bisect': cmd_bisect}[args.cmd](args))
+    asyncio.run({'dump': cmd_dump, 'get': cmd_get,
+                 'set': cmd_set, 'bisect': cmd_bisect}[args.cmd](args))
 
 
 if __name__ == '__main__':
