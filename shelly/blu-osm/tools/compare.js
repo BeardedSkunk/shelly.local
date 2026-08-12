@@ -48,7 +48,7 @@ async function devices() {
   const devs = new Map();
   for (const c of comps) {
     if (c.key.startsWith('bthomedevice:')) {
-      devs.set(c.config.addr, { addr: c.config.addr, name: c.config.name || c.config.addr, t: null, h: null });
+      devs.set(c.config.addr, { addr: c.config.addr, name: c.config.name || c.config.addr, t: null, h: null, age: null });
     }
   }
   for (const c of comps) {
@@ -56,7 +56,14 @@ async function devices() {
     const d = devs.get(c.config.addr);
     if (!d) continue;
     const value = c.status && c.status.value !== undefined ? c.status.value : null;
-    if (c.config.obj_id === 69) d.t = value;
+    if (c.config.obj_id === 69) {
+      d.t = value;
+      // Wie alt der Messwert ist, entscheidet, ob das Paar taugt: jeder Sensor
+      // funkt fuer sich alle sechzig Sekunden, und wenn einer der beiden
+      // haengengeblieben ist, vergleicht man zwei verschiedene Zeitpunkte.
+      const ts = c.status && c.status.last_updated_ts;
+      d.age = ts ? Math.round(Date.now() / 1000 - ts) : null;
+    }
     if (c.config.obj_id === 46) d.h = value;
   }
   return [...devs.values()];
@@ -66,25 +73,70 @@ function pad(v, w) {
   return String(v).padStart(w);
 }
 
+// Ein Zehntelgrad Aufloesung heisst, dass ein einzelnes Wertepaar den Versatz
+// nur auf ein Zehntel genau kennt -- und die Rundung faellt mal so, mal so aus.
+// Ueber viele Paare mittelt sie sich heraus, und dann steht da eine Zahl, die
+// mehr Stellen hat als jede einzelne Messung. Deshalb wird gesammelt.
+const samples = [];
+
+function summary(label, from) {
+  const take = samples.slice(from);
+  if (take.length === 0) return;
+  const ds = take.map((s) => s.d).sort((a, b) => a - b);
+  const mean = ds.reduce((a, b) => a + b, 0) / ds.length;
+  console.log(
+    '          ' + label + ': n=' + pad(ds.length, 3) +
+    '   Mittel ' + (mean >= 0 ? '+' : '') + mean.toFixed(2) + ' K' +
+    '   Spanne ' + ds[0].toFixed(1) + ' .. ' + ds[ds.length - 1].toFixed(1) + ' K'
+  );
+}
+
+let sinceHour = 0;
+let hour = new Date().getHours();
+
 async function round() {
   const out = await devices();
-  const stamp = new Date().toTimeString().slice(0, 8);
+  const now = new Date();
+  const stamp = now.toTimeString().slice(0, 8);
   const cells = out.map((o) =>
     o.name + ' ' + (o.t === null ? '  --  ' : pad(o.t.toFixed(1), 5) + ' C') +
-    (o.h === null ? '' : ' ' + pad(o.h, 3) + '%')
+    (o.h === null ? '' : ' ' + pad(o.h, 3) + '%') +
+    (o.age === null ? '' : ' ' + pad(o.age, 3) + 's')
   );
+
   let diff = '';
   if (out.length === 2 && out[0].t !== null && out[1].t !== null) {
     const d = out[1].t - out[0].t;
     diff = '   Unterschied ' + (d > 0 ? '+' : '') + d.toFixed(1) + ' K';
+    // Nur frische Paare zaehlen. Drei Minuten sind grosszuegig -- der Sensor
+    // sendet jede Minute, also ist alles darueber ein verpasstes Paket.
+    const stale = out.some((o) => o.age !== null && o.age > 180);
+    if (stale) diff += '  (alt, zaehlt nicht)';
+    else samples.push({ at: now, d });
   }
   console.log(stamp + '  ' + cells.join('   |   ') + diff);
+
+  // Zum Stundenwechsel eine Zwischenrechnung. So laesst sich hinterher am Log
+  // ablesen, welche Stunden ruhig waren -- nachts, ohne Sonne auf den
+  // Gehaeusen, steht der ehrlichste Versatz.
+  if (now.getHours() !== hour) {
+    summary('letzte Stunde', sinceHour);
+    summary('seit Beginn  ', 0);
+    sinceHour = samples.length;
+    hour = now.getHours();
+  }
 }
 
 const devs = await devices();
 if (devs.length < 2) console.log('Nur ' + devs.length + ' Geraet(e) gekoppelt -- es gibt nichts zu vergleichen.');
 for (const d of devs) console.log('  ' + d.name + ' = ' + d.addr);
 console.log('');
+
+process.on('SIGINT', () => {
+  console.log('');
+  summary('Gesamt       ', 0);
+  process.exit(0);
+});
 
 await round();
 setInterval(() => round().catch((e) => console.error(e.message)), every * 1000);

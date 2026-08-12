@@ -25,6 +25,11 @@
 // spaetestens alle CFG.refresh_s -- dann wird der Zeitstempel aufgefrischt und
 // erneut nach openSenseMap gepusht.
 //
+// Temperatur und Feuchte lassen sich um einen festen Betrag korrigieren, falls
+// der Sensor gegen eine Referenz danebenliegt. Der Betrag steht in je einer
+// virtuellen Zahl, die das Script selbst anlegt und die in der Weboberflaeche
+// des Steckers auftaucht -- siehe OFFSETS weiter unten.
+//
 // Auslesen von aussen:
 //   curl -s "http://<plug-ip>/rpc/KVS.Get?key=blu/sensor"
 
@@ -55,13 +60,45 @@ let OSM = {
 // BTHome-Objekt-IDs, wie sie dieser Sensor sendet (per BTHome.GetObjectInfos
 // am Geraet verifiziert). obj_id 30 (light, binary_sensor) lassen wir bewusst
 // weg -- der Sensor funkt dort nur hell/dunkel, keinen Lux-Wert.
+//
+// offset nennt die virtuelle Zahl, deren Wert vor dem Veroeffentlichen
+// aufgeschlagen wird. Die Batterie bekommt keine -- an einem Ladestand ist
+// nichts zu justieren.
 let WANTED = [
-  { obj_id: 69, name: 'temperature', unit: 'Grad C' },
-  { obj_id: 46, name: 'humidity', unit: '%' },
-  { obj_id: 1, name: 'battery', unit: '%' },
+  { obj_id: 69, name: 'temperature', unit: 'Grad C', offset: 'Temperatur-Offset' },
+  { obj_id: 46, name: 'humidity', unit: '%', offset: 'Feuchte-Offset' },
+  { obj_id: 1, name: 'battery', unit: '%', offset: null },
 ];
 
 let SENSOR_PREFIX = 'bthomesensor:';
+let NUMBER_PREFIX = 'number:';
+
+// ------------------------------------------------------------------- Abgleich
+//
+// Zwei BLU H&T am selben Ort sind sich nicht einig -- am 12.08.2026 lagen zwei
+// Geraete nebeneinander im Garten stundenlang um mehrere Zehntel auseinander.
+// Welches naeher an der Wahrheit liegt, sagt kein Geraet von selbst; das
+// entscheidet ein Vergleich mit anderen Thermometern.
+//
+// Beim Modell ohne Anzeige (SBHT-203C) ist im Sensor kein Platz dafuer: seine
+// Firmware kennt kein Offset-Feld, auch v1.2.12 nicht. Das mit Anzeige hat
+// eines, aber wer die Korrektur dort versteckt, findet sie in zwei Jahren
+// nicht wieder. Also korrigiert das Script, und zwar an genau einer Stelle --
+// in update(), bevor der Wert sowohl in die openSenseMap-Meldung als auch ins
+// Archiv geht. Ein Wert, eine Wahrheit.
+//
+// Verstellbar ist es ohne Code-Aenderung: das Script legt beim ersten Start je
+// eine virtuelle Zahl an, die in der Weboberflaeche des Steckers unter den
+// Komponenten auftaucht. Voreinstellung 0 -- ohne Zutun aendert sich nichts.
+//
+//   curl -s "http://<plug-ip>/rpc/Number.Set?id=<id>&value=-0.8"
+//
+// Was schon im Archiv steht, bleibt unkorrigiert: dort liegen fertige Saetze,
+// keine Rohwerte. Eine Aenderung wirkt also ab jetzt und nicht rueckwirkend.
+let OFFSETS = [
+  { name: 'Temperatur-Offset', unit: 'K', min: -10, max: 10 },
+  { name: 'Feuchte-Offset', unit: '%', min: -20, max: 20 },
+];
 
 // ------------------------------------------------------- Viertelstunden-Archiv
 //
@@ -135,8 +172,14 @@ let ST = {
   ready: false,
 };
 
-// Zur Laufzeit gefuellt: je ein Eintrag { ckey, name, unit, last }
+// Zur Laufzeit gefuellt: je ein Eintrag { ckey, name, unit, last, okey }.
+// okey ist die virtuelle Zahl mit dem Offset oder null, wenn es fuer diesen
+// Wert keine gibt.
 let MAP = [];
+
+// Waehrend des Komponenten-Durchlaufs gesammelt: die virtuellen Zahlen, die es
+// auf diesem Stecker schon gibt, als { name, ckey }.
+let FOUND = [];
 
 let lastWriteAt = 0; // Systemzeit des letzten Schreibvorgangs
 
@@ -160,6 +203,34 @@ function entryByName(name) {
     if (MAP[i].name === name) return MAP[i];
   }
   return null;
+}
+
+function foundOffset(name) {
+  for (let i = 0; i < FOUND.length; i++) {
+    if (FOUND[i].name === name) return FOUND[i].ckey;
+  }
+  return null;
+}
+
+// Der Offset wird bei jedem Durchlauf frisch gelesen und nicht gemerkt. Das
+// kostet nichts -- eine lokale Komponente, kein Funk, kein Netz -- und eine
+// Aenderung in der Oberflaeche wirkt dadurch beim naechsten Poll, ohne dass
+// jemand das Script neu starten muss.
+function offsetOf(entry) {
+  if (entry.okey === null) return 0;
+  let st = Shelly.getComponentStatus(entry.okey);
+  if (st === null || typeof st.value !== 'number') return 0;
+  return st.value;
+}
+
+// Ohne Runden schleppt jeder Offset seine Fliesskomma-Reste mit: 11.9 + -0.8
+// ergibt 11.100000000000001, und genau so stuende es in der Meldung an
+// openSenseMap. Ein Zehntel ist ohnehin die Aufloesung des Sensors.
+//
+// Math.round und Math.floor gibt es in mJS (am 12.08.2026 auf dem Geraet
+// geprueft), den Bit-Operator |0 nicht -- der beendet das Script.
+function round1(v) {
+  return Math.round(v * 10) / 10;
 }
 
 // ----------------------------------------------------------- openSenseMap
@@ -409,9 +480,17 @@ function update() {
     if (typeof st.last_updated_ts === 'number' && st.last_updated_ts > newest) {
       newest = st.last_updated_ts;
     }
-    if (typeof st.value !== 'undefined' && st.value !== null && st.value !== MAP[i].last) {
-      MAP[i].last = st.value;
-      changed = true;
+    if (typeof st.value !== 'undefined' && st.value !== null) {
+      // Hier und nur hier wird korrigiert. Alles weiter unten -- KVS, Archiv,
+      // openSenseMap -- sieht ausschliesslich den fertigen Wert.
+      let v = st.value;
+      let off = offsetOf(MAP[i]);
+      if (off !== 0) v = round1(v + off);
+
+      if (v !== MAP[i].last) {
+        MAP[i].last = v;
+        changed = true;
+      }
     }
   }
   if (newest === 0) newest = sysTime();
@@ -465,12 +544,20 @@ function buildMap(offset) {
     let comps = res.components;
     for (let i = 0; i < comps.length; i++) {
       let c = comps[i];
+
+      // Die virtuellen Zahlen laufen im selben Durchlauf mit -- sie sind
+      // ebenfalls dynamische Komponenten und stehen in derselben Liste.
+      if (c.key.slice(0, NUMBER_PREFIX.length) === NUMBER_PREFIX) {
+        FOUND.push({ name: c.config.name, ckey: c.key });
+        continue;
+      }
+
       if (c.key.slice(0, SENSOR_PREFIX.length) !== SENSOR_PREFIX) continue;
 
       let w = wantedFor(c.config.obj_id);
       if (w === null) continue;
 
-      MAP.push({ ckey: c.key, name: w.name, unit: w.unit, last: null });
+      MAP.push({ ckey: c.key, name: w.name, unit: w.unit, last: null, okey: null });
     }
 
     if (offset + comps.length < res.total) {
@@ -483,19 +570,70 @@ function buildMap(offset) {
       return;
     }
 
-    // MAP in der Reihenfolge von WANTED sortieren, damit der KVS-Eintrag
-    // unabhaengig von den Komponenten-IDs immer gleich aufgebaut ist.
-    let ordered = [];
-    for (let i = 0; i < WANTED.length; i++) {
-      let e = entryByName(WANTED[i].name);
-      if (e !== null) ordered.push(e);
-    }
-    MAP = ordered;
-
-    print('Ueberwache ' + JSON.stringify(MAP.length) + ' Sensorwerte.');
-    update();
-    Timer.set(CFG.poll_ms, true, update);
+    ensureOffsets(0);
   });
+}
+
+// Legt an, was noch fehlt, und zwar einzeln nacheinander -- jeder Aufruf muss
+// seine Antwort abwarten, weil erst sie die Komponenten-ID nennt. Beim zweiten
+// Start ist alles vorhanden und die Kette laeuft ohne einen einzigen Aufruf
+// durch. Gefunden wird ueber den Namen: Komponenten-IDs vergibt der Stecker,
+// der Name steht hier im Code.
+function ensureOffsets(i) {
+  if (i >= OFFSETS.length) {
+    finishInit();
+    return;
+  }
+
+  let o = OFFSETS[i];
+  if (foundOffset(o.name) !== null) {
+    ensureOffsets(i + 1);
+    return;
+  }
+
+  Shelly.call(
+    'Virtual.Add',
+    {
+      type: 'number',
+      config: {
+        name: o.name,
+        min: o.min,
+        max: o.max,
+        default_value: 0,
+        persisted: true,
+        meta: { ui: { view: 'field', unit: o.unit, step: 0.1 } },
+      },
+    },
+    function (res, ec, em) {
+      if (ec !== 0) {
+        // Kein Grund aufzugeben: ohne die Komponente bleibt der Offset bei 0,
+        // und das Script tut, was es vorher auch getan hat.
+        print('Konnte ' + o.name + ' nicht anlegen: ' + em);
+      } else {
+        FOUND.push({ name: o.name, ckey: NUMBER_PREFIX + JSON.stringify(res.id) });
+        print(o.name + ' angelegt als ' + NUMBER_PREFIX + JSON.stringify(res.id));
+      }
+      ensureOffsets(i + 1);
+    }
+  );
+}
+
+function finishInit() {
+  // MAP in der Reihenfolge von WANTED sortieren, damit der KVS-Eintrag
+  // unabhaengig von den Komponenten-IDs immer gleich aufgebaut ist. Dabei
+  // bekommt jeder Wert seine virtuelle Zahl zugewiesen.
+  let ordered = [];
+  for (let i = 0; i < WANTED.length; i++) {
+    let e = entryByName(WANTED[i].name);
+    if (e === null) continue;
+    if (WANTED[i].offset !== null) e.okey = foundOffset(WANTED[i].offset);
+    ordered.push(e);
+  }
+  MAP = ordered;
+
+  print('Ueberwache ' + JSON.stringify(MAP.length) + ' Sensorwerte.');
+  update();
+  Timer.set(CFG.poll_ms, true, update);
 }
 
 // ------------------------------------------------------------- Nachreichen

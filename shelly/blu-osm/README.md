@@ -78,3 +78,39 @@ The five-minute archive survives all of this — `Script.storage` hangs on the
 script id, not on the code or the sensor — except for whatever is still in RAM
 when the script stops, at most half an hour. Those readings are already in
 openSenseMap; the archive only exists for the times when they are not.
+
+## Correcting a sensor
+
+Two BLU H&T lying side by side do not agree. On 12.08.2026 two of them spent a
+morning a hand's width apart in the garden and stayed several tenths of a
+degree apart the whole time, and the gap moved with the weather — a warming
+morning pulls them apart, a calm night brings them together. So the honest
+number comes from the quiet hours, not from a single reading, and it wants a
+third opinion: a device of a different make, in the same place, read at a
+moment when nothing is changing fast.
+
+Where the correction goes is decided by the hardware. The model with the
+display carries `Temperatur-Offset` and `Feuchtigkeits-Offset` in the sensor
+itself, reachable over Bluetooth from the Shelly app — that is the right place
+for a sensor no script ever reads. The model without a display has no such
+field, not even on firmware v1.2.12, so for anything feeding this script the
+correction lives here instead.
+
+The script keeps it out of the code. On its first start it creates two virtual
+numbers, which appear among the plug's components in its web interface:
+
+    Temperatur-Offset   K   default 0
+    Feuchte-Offset      %   default 0
+
+    curl -s "http://<plug-ip>/rpc/Number.Set?id=<id>&value=-0.8"
+
+They are found by name, not by id, so a restart binds to the existing pair
+rather than making a second one. A value takes effect at the next poll, within
+a minute, without restarting anything.
+
+The offset is applied in `update()`, at the single point where a reading enters
+the script — so the KVS entry, the five-minute archive and openSenseMap all see
+the same corrected number and cannot drift apart. What is already in the
+archive stays as it was: those are finished records, not raw readings. A
+correction therefore works from now on and not backwards, which also means the
+series has a step in it on the day it is set.
