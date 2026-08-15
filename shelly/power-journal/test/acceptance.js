@@ -307,11 +307,14 @@ test('9  the tiers agree about how much energy there was', () => {
   ok(total(1) <= native * 1.01, 'and none of them claims more energy than actually flowed');
 });
 
-test('9b  brief tiny loads join the null run and are not thrown away', () => {
+test('9b  brief tiny loads join the low run and are not thrown away', () => {
   const plug = running();
   // Thirty seconds of three watts, once per quarter hour, all night. Each is
-  // 25 mWh against a unit of 100, so on its own every one of them rounds away
-  // to nothing -- yet natively each is a block of its own.
+  // 25 mWh -- an eighth of the 206 mWh packet the meter counts in, so the plug
+  // cannot actually resolve a single one of them. They used to cut a native
+  // block apiece, which is how a week of them turned F101's quiet nights into
+  // 24 W spikes: whichever fragment was open when the counter finally ticked
+  // was handed the whole packet. Now they stay inside the low run.
   const blips = 40;
   for (let quarter = 0; quarter < blips; quarter++) {
     plug.feedFor(0, 870);
@@ -324,9 +327,15 @@ test('9b  brief tiny loads join the null run and are not thrown away', () => {
   plug.feedFor(0, 1800);
 
   const native = plug.tierBlocks(0);
-  ok(native.length >= blips, 'natively the night is ' + native.length + ' blocks');
+  ok(native.length < blips / 4,
+    'natively the night stays ' + native.length + ' blocks rather than forty');
 
-  const night = plug.tierBlocks(1).filter((b) => b.start < native[native.length - 3].start);
+  // The load that is genuinely there still gets its own block: 900 W moves the
+  // counter by far more than a packet, so nothing about it waits.
+  const loud = native.find((b) => b.duration > 0 && b.energy * 3600 / b.duration > 100000);
+  ok(loud, 'the real 900 W load is still a block of its own');
+
+  const night = plug.tierBlocks(1).filter((b) => b.start < loud.start);
   ok(night.length <= 3, 'the quarter hour tier keeps ' + night.length + ' of them, not forty');
   ok(night.some((b) => b.duration > 8 * 900),
     'because the near-empty buckets merged into one long run');

@@ -54,6 +54,11 @@ let CFG = {
   // energy is unaffected -- it comes from the meter, not from apower -- so a
   // low block records what really flowed without inventing the changes.
   low_mw: 1500,
+  // The energy counter does not move continuously either: it advances in whole
+  // packets of about 206 mWh (measured on a Plug M Gen3). Nothing smaller
+  // exists, so a stretch carrying one packet or less says nothing at all about
+  // when inside itself that energy flowed. See carriesRealEnergy.
+  quantum_mwh: 206,
   // 2024-01-01. Anything earlier means the clock has not been set yet.
   min_valid_unix: 1704067200,
   // The longest stretch archived in one go.
@@ -827,6 +832,28 @@ function onSample(now, power, meter) {
   // energy of these samples is still unassigned. Whichever side wins gets it.
   ST.cand.push({ t: now, p: power, m: meter });
   if (ST.cand.length < CFG.confirm_samples) return;
+  // Confirmed by apower -- but out of a low block apower alone must not be
+  // believed. The note on CFG.low_mw has it reading 0 to 1.3 W at rest; it does
+  // reach past 1.5 W, and three such samples in a row were all it took to cut a
+  // low block in two. Worse than the cut was what the counter then did: it
+  // advanced by a single packet during those thirty seconds, so the fragment
+  // was archived as 206 mWh in 30 s and read back as 24 W, out of a charger
+  // drawing milliwatts. Nine such fragments appeared in the week F101 sat
+  // plugged in without charging, every one holding exactly one packet -- their
+  // heights differing only by how long each happened to last, which is the
+  // tell: the same packet reads 3.9 W in a 190 s fragment and 24.8 W in a 30 s
+  // one.
+  //
+  // So the counter gets the casting vote, being the meter itself rather than
+  // apower's opinion of it: a change that does not move it by more than one
+  // packet is not a change this plug can see, and the candidates stay pending
+  // for the block they interrupted to pick up -- which is where that energy
+  // accumulated in the first place. Above the threshold apower is worth
+  // believing and nothing waits. The sample cap bounds the pending run, so a
+  // level that really does stand there still earns its block.
+  let moved = meter - ST.cand[0].m;
+  if (moved < 0) moved = -moved;
+  if (ST.blk.low && moved <= CFG.quantum_mwh && ST.cand.length < 60) return;
   switchBlock(now, meter);
 }
 
@@ -1253,7 +1280,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":1,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":2,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
