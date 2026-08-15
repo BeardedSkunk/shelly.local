@@ -1316,7 +1316,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":2,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":3,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
