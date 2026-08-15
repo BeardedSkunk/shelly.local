@@ -137,12 +137,14 @@ let A64 = '#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abc';
 
 // -------------------------------------------------------------------- state
 
-// A block is { start, ref, energy, meter, zero }:
+// A block is { start, ref, energy, meter, low, pt, pm }:
 //   start   unix second the block began
 //   ref     reference power in mW the tolerance is measured against, signed
 //   energy  net mWh through the plug since the block began, signed
 //   meter   where the net counter stood at the last accounted sample
-//   zero    true while nothing at all is flowing
+//   low     true while nothing above low_mw is flowing
+//   pt/pm   when the counter first moved inside this block, and to what; zero
+//           until it has. A second move makes the pair a real measurement.
 let ST = {
   blk: null,        // the running block, null while bootstrapping
   debt: 0,          // energy blocks above the threshold claimed, not yet counted
@@ -847,6 +849,15 @@ function onSample(now, power, meter) {
       log(3, 'candidate run of ' + ST.cand.length + ' dropped');
       ST.cand = [];
     }
+    // When the counter first moves inside a block, note where and when. That
+    // first move is ambiguous -- the packet may have been filling long before
+    // the block opened -- but everything after it accrued in here, so a second
+    // move turns the pair into a measurement rather than an estimate. See
+    // closeBlock.
+    if (!ST.blk.low && ST.blk.pt === 0 && meter !== ST.blk.meter) {
+      ST.blk.pt = now;
+      ST.blk.pm = meter;
+    }
     accumulate(ST.blk, meter);
     maybeCheckpoint(now);
     return;
@@ -883,7 +894,7 @@ function switchBlock(now, meter) {
   // is where the level actually changed. Its reference comes from the last
   // one: the first sample is often still half inside the old level, or a spike
   // that happens to be what started the run.
-  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, low: isLow(last.p) };
+  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, low: isLow(last.p), pt: 0, pm: 0 };
   ST.cand = [];
   accumulate(ST.blk, meter);
   log(2, 'new block at ' + first.t + ', reference ' + last.p + ' mW');
@@ -906,7 +917,16 @@ function closeBlock(endTime) {
   // A shortfall becomes debt for that same next quiet stretch to settle.
   // Export (a negative reference) keeps the counter, honest there.
   if (!block.low && span > 0 && block.ref > 0) {
-    let claim = block.ref * span / 3600;
+    // Once the counter has moved twice in here, the energy between those two
+    // moves accrued wholly inside this block -- the one exact reading this plug
+    // can give at all. It replaces apower's opinion, which is only ever the
+    // single sample the block opened on and may sit a tenth away from the truth
+    // without the tolerance ever noticing.
+    let rate = block.ref;
+    if (block.pm > 0 && block.meter > block.pm && endTime > block.pt) {
+      rate = (block.meter - block.pm) * 3600 / (endTime - block.pt);
+    }
+    let claim = rate * span / 3600;
     if (energy < claim) {
       ST.debt = ST.debt + claim - energy;
       energy = claim;
@@ -944,7 +964,7 @@ function bootstrap(now, power, meter) {
   let i;
   for (i = 0; i < ST.boot.length; i++) sum = sum + ST.boot[i].p;
   let ref = Math.round(sum / ST.boot.length);
-  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, low: isLow(ref) };
+  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, low: isLow(ref), pt: 0, pm: 0 };
   ST.boot = [];
   accumulate(ST.blk, meter);
   fillGap(ST.blk.start);
@@ -1316,7 +1336,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":3,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":4,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
