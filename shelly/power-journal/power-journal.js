@@ -146,6 +146,8 @@ let A64 = '#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abc';
 let ST = {
   blk: null,        // the running block, null while bootstrapping
   debt: 0,          // energy blocks above the threshold claimed, not yet counted
+  credit: 0,        // counted energy that accrued under an earlier quiet stretch
+  dropped: 0,       // credit no quiet stretch had room for, kept only as a tally
   cand: [],         // samples that disagree with the running block
   boot: [],         // samples collected before the first block exists
   meta: null,       // see metaParse
@@ -448,7 +450,7 @@ function tierWrite(tier, start, durationSec, units) {
   let field = enc(steps) + encZ(units);
 
   if (CFG.test_mode) {
-    log(2, 'test: tier ' + tier + ' ' + start + ' +' + durationSec + 's ' + units);
+    log(2, 'test mode: tier ' + tier + ' would take ' + start + ' +' + durationSec + 's ' + units);
     return true;
   }
 
@@ -508,7 +510,7 @@ function retirePage(tier, key) {
 // a comment is the only shape that space can safely take.
 function atticStore(text) {
   if (ST.meta.attic >= CFG.attic_limit) {
-    log(1, 'attic full at ' + ST.meta.attic + ' b, page dropped');
+    log(1, 'attic is full at ' + ST.meta.attic + ' bytes, day page dropped');
     atticDone();
     return;
   }
@@ -524,7 +526,7 @@ function atticStore(text) {
       if (result.scripts[i].name === CFG.attic_name) id = result.scripts[i].id;
     }
     if (id === null) {
-      log(1, 'attic: no ' + CFG.attic_name + ', page dropped');
+      log(1, 'attic: no script named ' + CFG.attic_name + ', day page dropped');
       atticDone();
       return;
     }
@@ -730,6 +732,10 @@ function drainBlocks() {
 function kvsPayload(now) {
   let block = ST.blk;
   let payload = { start_time: block.start };
+  // Energy the counter did report but that no block could honestly hold. It is
+  // the one figure here that says how far the record is from the meter, so it
+  // rides along even on a null block, and only when there is something to say.
+  if (ST.dropped > 0) payload.dropped_mwh = Math.round(ST.dropped);
   if (block.low && block.energy === 0) {
     payload.watt = 0;
     return payload;
@@ -894,20 +900,34 @@ function closeBlock(endTime) {
   // would have ended. Inside the slack the counter corrects the claim; beyond
   // it the surplus accrued under quiet stretches already written and is carried
   // to the next one rather than credited here, where it would read as tens of
-  // watts. That surplus is let go rather than moved: it belongs to quiet
-  // stretches already archived, usually several of them, and there is no honest
-  // way to say which. A shortfall becomes debt for the next quiet stretch to
-  // settle. Export (a negative reference) keeps the counter, honest there.
+  // watts. The surplus is handed to the next quiet stretch instead: it belongs
+  // to an earlier one, already archived, so the next is the nearest home there
+  // is -- and the whole of it stays in the record, which discarding would not.
+  // A shortfall becomes debt for that same next quiet stretch to settle.
+  // Export (a negative reference) keeps the counter, honest there.
   if (!block.low && span > 0 && block.ref > 0) {
     let claim = block.ref * span / 3600;
     if (energy < claim) {
       ST.debt = ST.debt + claim - energy;
       energy = claim;
     } else if (energy > claim * CFG.claim_slack) {
+      ST.credit = ST.credit + energy - claim;
       energy = claim;
     }
+  } else if (block.low && span > 0 && ST.credit > 0) {
+    // Only as much as leaves this stretch a quiet one. A whole packet is worth
+    // 1.5 W across eight minutes, so a low block shorter than that could be
+    // lifted out of its own category by the gift -- which would make it a lie
+    // twice over. What will not fit is counted in ST.dropped and let go; there
+    // is no third place to put it.
+    let room = CFG.low_mw * span / 3600 - energy;
+    let take = ST.credit < room ? ST.credit : room;
+    if (take < 0) take = 0;
+    energy = energy + take;
+    ST.dropped = ST.dropped + ST.credit - take;
+    ST.credit = 0;
   }
-  log(2, 'block ' + block.start + ' closed, ' + span + ' s, ' + energy + ' mWh');
+  log(2, 'block ' + block.start + ' closed after ' + span + ' s with ' + energy + ' mWh');
   queueBlock(block.start, span, energy);
 }
 
@@ -952,7 +972,7 @@ function maybeCheckpoint(now) {
 function fillGap(untilTime) {
   if (ST.archiveEnd === null) return;
   if (untilTime <= ST.archiveEnd) return;
-  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s with a null block');
+  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s of unrecorded time with a null block');
   queueBlock(ST.archiveEnd, untilTime - ST.archiveEnd, 0);
 }
 
@@ -1062,7 +1082,7 @@ function begin() {
   // which is worse than starting again.
   let i;
   if (raw !== null && toInt(raw.split('|')[0]) !== VERSION) {
-    log(1, 'archive v' + raw.split('|')[0] + ' vs v' + VERSION + ', restarting');
+    log(1, 'the archive is version ' + raw.split('|')[0] + ' and this is ' + VERSION + ', starting a new one');
     for (i = 0; i < SLOTS.length; i++) stDel(SLOTS[i]);
     stDel(META_KEY);
     raw = null;
@@ -1085,7 +1105,8 @@ function begin() {
   // difference between plus and minus the whole lifetime total as the energy of
   // one ten second interval.
   ST.flip = ST.meta.rev !== was;
-  log(2, 'meter ' + (ST.meta.rev === 1 ? 'reversed' : 'normal') + (ST.flip ? ', turned' : ''));
+  log(2, 'meter orientation ' + (ST.meta.rev === 1 ? 'reversed' : 'normal') +
+    (ST.flip ? ', turned since the last run' : ''));
   ST.archiveEnd = archiveEndTime();
   let counts = [];
   for (i = 0; i < ST.meta.tiers.length; i++) counts.push(ST.meta.tiers[i].pages.length);
@@ -1377,7 +1398,7 @@ function httpTier(tier, from, max) {
 // --------------------------------------------------------------------- main
 
 function main() {
-  log(1, 'power journal v' + VERSION + (CFG.test_mode ? ' test' : ''));
+  log(1, 'power journal v' + VERSION + ' starting' + (CFG.test_mode ? ' in test mode' : ''));
   HTTPServer.registerEndpoint(CFG.endpoint, onRequest);
   begin();
 }

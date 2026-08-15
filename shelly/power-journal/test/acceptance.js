@@ -428,7 +428,7 @@ test('13  a missing or full attic loses the page but not the script', () => {
     full.pj.tierWrite(3, 1785870000 + i * 86400, 86400, 400);
     full.drain();
   }
-  ok(full.logsMatching('attic full').length > 0, 'a full attic says so');
+  ok(full.logsMatching('attic is full').length > 0, 'a full attic says so');
   eq(full.atticWrites.length, 0, 'and nothing more is written to it');
 });
 
@@ -772,7 +772,7 @@ test('24  an archive from an older version is dropped rather than mixed in', () 
   plug.boot();
   plug.settle(4);
   eq(Object.keys(plug.storage).filter((k) => k !== 'm').length, 0, 'every page is gone');
-  ok(plug.logsMatching('restarting').length > 0, 'and it says what it did');
+  ok(plug.logsMatching('starting a new one').length > 0, 'and it says what it did');
 });
 
 // The Android app deploys the journal from a bundled copy rather than from
