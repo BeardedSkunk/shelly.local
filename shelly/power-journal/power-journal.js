@@ -934,18 +934,30 @@ function closeBlock(endTime) {
       ST.credit = ST.credit + energy - claim;
       energy = claim;
     }
-  } else if (block.low && span > 0 && ST.credit > 0) {
-    // Only as much as leaves this stretch a quiet one. A whole packet is worth
-    // 1.5 W across eight minutes, so a low block shorter than that could be
-    // lifted out of its own category by the gift -- which would make it a lie
-    // twice over. What will not fit is counted in ST.dropped and let go; there
-    // is no third place to put it.
-    let room = CFG.low_mw * span / 3600 - energy;
-    let take = ST.credit < room ? ST.credit : room;
-    if (take < 0) take = 0;
-    energy = energy + take;
-    ST.dropped = ST.dropped + ST.credit - take;
-    ST.credit = 0;
+  } else if (block.low && span > 0) {
+    // The same misattribution seen from below. apower says nothing above the
+    // threshold was flowing in here, so a low block cannot honestly report more
+    // than the threshold either -- and a packet landing in a short one made it
+    // read 18 W, which is the very fault this all began with. What is over the
+    // ceiling accrued somewhere else and goes looking for a home like any other
+    // surplus.
+    let ceiling = CFG.low_mw * span / 3600;
+    if (energy > ceiling) {
+      ST.credit = ST.credit + energy - ceiling;
+      energy = ceiling;
+    } else if (ST.credit > 0) {
+      // Only as much as leaves this stretch a quiet one. A whole packet is
+      // worth 1.5 W across eight minutes, so a low block shorter than that
+      // could be lifted out of its own category by the gift -- which would make
+      // it a lie twice over. What will not fit is counted in ST.dropped and let
+      // go; there is no third place to put it.
+      let room = ceiling - energy;
+      let take = ST.credit < room ? ST.credit : room;
+      if (take < 0) take = 0;
+      energy = energy + take;
+      ST.dropped = ST.dropped + ST.credit - take;
+      ST.credit = 0;
+    }
   }
   log(2, 'block ' + block.start + ' closed after ' + span + ' s with ' + energy + ' mWh');
   queueBlock(block.start, span, energy);
@@ -1336,7 +1348,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":4,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":5,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that

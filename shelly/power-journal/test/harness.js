@@ -52,6 +52,12 @@ function createPlug(options) {
     // seven seconds at a hundred watts. Zero means a counter of infinite
     // resolution, which is what every test that does not care assumes.
     meterQuantumMwh: opt.meterQuantumMwh || 0,
+    // Splits the two instruments apart. apower is reported as the fed power
+    // times this, while the counter goes on accruing the real thing -- so 1.2
+    // is a meter that talks up every load by a fifth and 0.8 one that talks it
+    // down. The script believes apower above low_mw and the counter below it,
+    // so a bias is the only way to ask which of the two it ends up trusting.
+    wattBias: opt.wattBias === undefined ? 1 : opt.wattBias,
     lastStepAt: opt.unixtime || 1785870000,
     watt: opt.watt === undefined ? 0 : opt.watt,
     // Reverse metering: with it on the plug reports a plant's generation as
@@ -117,7 +123,7 @@ function createPlug(options) {
       if (name === 'switch:0') {
         return {
           output: plug.output,
-          apower: plug.output ? plug.watt : 0,
+          apower: plug.output ? plug.watt * plug.wattBias : 0,
           aenergy: { total: Math.floor(plug.grossVisible) / 1000 },
           ret_aenergy: { total: Math.floor(plug.returnedVisible) / 1000 },
         };
