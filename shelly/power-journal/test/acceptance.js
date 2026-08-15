@@ -652,6 +652,13 @@ test('19a a page rewritten mid read costs the reader nothing', () => {
 
 test('20  test mode writes nothing at all', () => {
   const plug = running();
+  // The stripped build has no test mode: strip.js drops those branches, because
+  // the plug never enters them and its 20480 bytes are better spent elsewhere.
+  // Its absence is the feature, so there is nothing here to check.
+  if (plug.pj.CFG.test_mode === undefined) {
+    ok(true, 'the stripped build carries no test mode at all, as intended');
+    return;
+  }
   plug.pj.CFG.test_mode = true;
   const storageBefore = JSON.stringify(plug.storage);
   const kvsBefore = JSON.stringify(plug.kvs);

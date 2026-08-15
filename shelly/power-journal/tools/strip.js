@@ -119,6 +119,100 @@ function buildRenames(source, codeOnly) {
   return map;
 }
 
+// Branches only the tests ever enter. The plug has 20480 bytes and every one of
+// them is better spent on the journal; the suite still exercises these paths
+// against the commented source, where they are untouched. A stripped build
+// simply has no test mode, which is what CFG.test_mode being gone says.
+const DEV_FLAGS = new Set(['CFG.test_mode']);
+
+function dropDevCode(source) {
+  const lines = source.split('\n');
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = /^(\s*)if \((CFG\.[A-Za-z0-9_$]+)\) \{\s*$/.exec(lines[i]);
+    if (open !== null && DEV_FLAGS.has(open[2])) {
+      // Trailing whitespace included: the source may arrive with CRLF endings,
+      // and a comparison that missed the close would swallow the rest of the file.
+      const close = open[1] + '}';
+      i++;
+      while (i < lines.length && lines[i].replace(/\s+$/, '') !== close) i++;
+      continue;
+    }
+    kept.push(lines[i]);
+  }
+  let out = kept.join('\n');
+  // [^\n]* rather than .*, because a dot stops at the carriage return of a CRLF
+  // source and the entry would survive -- leaving the flag defined but every
+  // branch behind it gone, which is worse than either.
+  out = out.replace(/^[ \t]*test_mode:[^\n]*\n/m, '');
+  // Whatever still mentions the flag can only be a test that is now decided.
+  return out.replace(/CFG\.test_mode/g, 'false');
+}
+
+// Names that live inside one top-level function: its parameters, whatever
+// let/const/var introduces in its body, and the parameters of the callbacks
+// nested in it. Each function is renamed on its own, so the short names are
+// handed out again in every one of them -- which is where the saving is, since
+// the bodies are where the long names are.
+//
+// A name is left alone when it is also an object key or a property anywhere in
+// the function: renaming would rewrite the key and not the access, or the other
+// way about. It is left alone too when the top level already declares it, since
+// then it is a deliberate shadow and both halves have to keep their own meaning.
+function localRenames(lines, topMap) {
+  const maps = new Array(lines.length).fill(null);
+  const codeOf = (i) => lines[i].map((p) => p.code).join(' ');
+  const collect = (re, text, into) => {
+    let m;
+    while ((m = re.exec(text)) !== null) into.add(m[1]);
+  };
+
+  for (let start = 0; start < lines.length; start++) {
+    const head = /^function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\(([^)]*)\)\s*\{/.exec(codeOf(start));
+    if (head === null) continue;
+    // The brace that closes the function sits in the first column; a nested one
+    // is always indented. Trimming before the comparison would end the span at
+    // the first inner block and leave the rest of the body renamed by nobody.
+    let end = start + 1;
+    while (end < lines.length && !/^\}/.test(codeOf(end))) end++;
+    if (end >= lines.length) continue;
+
+    let body = '';
+    for (let i = start; i <= end; i++) body += codeOf(i) + '\n';
+
+    const declared = new Set();
+    for (const p of head[1].split(',')) if (p.trim() !== '') declared.add(p.trim());
+    collect(/\b(?:let|const|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g, body, declared);
+    let m;
+    const inner = /function\s*\(([^)]*)\)/g;
+    while ((m = inner.exec(body)) !== null) {
+      for (const p of m[1].split(',')) if (p.trim() !== '') declared.add(p.trim());
+    }
+
+    const unsafe = new Set();
+    collect(/([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, body, unsafe);
+    collect(/\.\s*([A-Za-z_$][A-Za-z0-9_$]*)/g, body, unsafe);
+
+    const names = [...declared].filter(
+      (n) => n.length > 1 && !unsafe.has(n) && !topMap.has(n) && !KEEP.has(n)
+    );
+    if (names.length === 0) continue;
+
+    // Everything else the body says has to go on meaning what it means --
+    // including the short names the top level is about to become.
+    const seen = new Set(body.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) || []);
+    const used = new Set(seen);
+    for (const n of names) used.delete(n);
+    for (const [long, short] of topMap) if (seen.has(long)) used.add(short);
+
+    const shorts = shortNames(names.length, used);
+    const map = new Map();
+    names.forEach((n, i) => map.set(n, shorts[i]));
+    for (let i = start; i <= end; i++) maps[i] = map;
+  }
+  return maps;
+}
+
 function rename(code, map) {
   return code.replace(/[A-Za-z_$][A-Za-z0-9_$]*/g, (word, at, whole) => {
     // Leave property names alone: only "a.b" reaches here with a dot before it.
@@ -152,6 +246,7 @@ function needsSpace(before, after, word) {
 
 function strip(source, options) {
   if (/\\\s*$/m.test(source)) throw new Error('a line ends in a backslash; strip cannot join lines');
+  if (!(options && options.keepNames)) source = dropDevCode(source);
 
   const lines = source.split('\n').map((line) => {
     const parts = pieces(line);
@@ -160,16 +255,23 @@ function strip(source, options) {
   });
 
   let map = null;
+  let locals = null;
   if (!(options && options.keepNames)) {
     const codeOnly = lines.map((parts) => parts.map((p) => p.code).join(' ')).join('\n');
     map = buildRenames(source, codeOnly);
+    locals = localRenames(lines, map);
   }
 
   const kept = [];
-  for (const parts of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const parts = lines[index];
+    // Inside a function both maps apply. They never disagree: a local that the
+    // top level also declares was refused a short name above.
+    const active = map === null ? null
+      : (locals[index] === null ? map : new Map([...map, ...locals[index]]));
     let line = '';
     for (const part of parts) {
-      const code = map === null ? part.code : rename(part.code, map);
+      const code = active === null ? part.code : rename(part.code, active);
       line += squeeze(code, line.length > 0 ? line[line.length - 1] : undefined);
       line += part.text;
     }
