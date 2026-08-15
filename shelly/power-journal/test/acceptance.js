@@ -353,6 +353,54 @@ test('9b  brief tiny loads keep their block but not a whole packet', () => {
     'and not a milliwatt hour of the whole night went missing');
 });
 
+test('9c  a counter that moves in packets does not invent spikes', () => {
+  // The F101 night, reproduced. A charger idling at forty milliwatts while the
+  // phone stirs briefly every hour, on a meter that only ever advances in whole
+  // 206 mWh packets. Whichever short block happened to be open when the counter
+  // finally ticked used to be handed the entire packet, and read back as tens
+  // of watts out of something drawing almost nothing. Nine of those appeared in
+  // the week the phone sat there without charging.
+  const plug = running({ meterQuantumMwh: 206 });
+  for (let hour = 0; hour < 12; hour++) {
+    plug.feedFor(0.04, 3560);
+    plug.feed(3, 4);
+  }
+  plug.feedFor(0.04, 3600);
+
+  const native = plug.tierBlocks(0);
+  ok(native.length > 5, 'the night produced blocks to judge  (' + native.length + ')');
+  let loudest = 0;
+  for (const b of native) {
+    if (b.duration > 0) loudest = Math.max(loudest, b.energy * 3600 / b.duration);
+  }
+  ok(loudest < 10000,
+    'and none of them reads above ten watts  (' + Math.round(loudest) + ' mW)');
+
+  // Whatever could not be placed is admitted to rather than quietly lost.
+  const dropped = plug.kvs['current_power'].dropped_mwh || 0;
+  const booked = sum(native, (b) => b.energy) + dropped;
+  near(booked / plug.grossExact, 1, 0.25,
+    'and the night is accounted for, dropped included  (' + Math.round(dropped) + ' mWh dropped)');
+});
+
+test('9d  a block the counter measured twice trusts the measurement', () => {
+  // The reference is fixed from the one sample a block opens on, and the
+  // tolerance then lets the level drift a tenth away without ever splitting. So
+  // a block that opened at 100 W can be running at 91 for half an hour, and
+  // charging it for 100 would overstate it every time. Once the counter has
+  // ticked twice inside the block, that is no longer a matter of opinion.
+  const plug = running({ meterQuantumMwh: 206 });
+  plug.feed(100, 4);
+  plug.feedFor(91, 1800);
+  plug.feed(0, 4);
+  plug.feedFor(0, 600);
+
+  const loud = plug.tierBlocks(0).find((b) => b.duration > 600);
+  ok(loud, 'the block reached the archive');
+  const watt = loud.energy * 3600 / loud.duration / 1000;
+  near(watt, 91, 3, 'and it reads back at what flowed, not at the reference it opened on');
+});
+
 test('10  a page never exceeds what the device accepts', () => {
   const plug = running();
   for (let i = 0; i < 400; i++) {

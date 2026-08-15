@@ -46,6 +46,12 @@ function createPlug(options) {
     // reported value back until that long has passed. Zero means a counter
     // that keeps up.
     meterStepSec: opt.meterStepSec || 0,
+    // The truer model of the two, and the one a Plug M Gen3 actually follows:
+    // the counter does not step on a clock, it steps when a whole packet of
+    // energy has accrued. About 206 mWh, so five hours at forty milliwatts and
+    // seven seconds at a hundred watts. Zero means a counter of infinite
+    // resolution, which is what every test that does not care assumes.
+    meterQuantumMwh: opt.meterQuantumMwh || 0,
     lastStepAt: opt.unixtime || 1785870000,
     watt: opt.watt === undefined ? 0 : opt.watt,
     // Reverse metering: with it on the plug reports a plant's generation as
@@ -193,7 +199,11 @@ function createPlug(options) {
     const mwh = (Math.abs(drawn) * 1000 * seconds) / 3600;
     plug.grossExact += mwh;
     if (drawn < 0) plug.returnedExact += mwh;
-    if (!plug.meterStepSec || plug.unixtime - plug.lastStepAt >= plug.meterStepSec) {
+    if (plug.meterQuantumMwh) {
+      const q = plug.meterQuantumMwh;
+      plug.grossVisible = Math.floor(plug.grossExact / q) * q;
+      plug.returnedVisible = Math.floor(plug.returnedExact / q) * q;
+    } else if (!plug.meterStepSec || plug.unixtime - plug.lastStepAt >= plug.meterStepSec) {
       plug.lastStepAt = plug.unixtime;
       plug.grossVisible = plug.grossExact;
       plug.returnedVisible = plug.returnedExact;
