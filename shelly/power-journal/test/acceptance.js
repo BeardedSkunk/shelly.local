@@ -307,14 +307,14 @@ test('9  the tiers agree about how much energy there was', () => {
   ok(total(1) <= native * 1.01, 'and none of them claims more energy than actually flowed');
 });
 
-test('9b  brief tiny loads join the low run and are not thrown away', () => {
+test('9b  brief tiny loads keep their block but not a whole packet', () => {
   const plug = running();
   // Thirty seconds of three watts, once per quarter hour, all night. Each is
-  // 25 mWh -- an eighth of the 206 mWh packet the meter counts in, so the plug
-  // cannot actually resolve a single one of them. They used to cut a native
-  // block apiece, which is how a week of them turned F101's quiet nights into
-  // 24 W spikes: whichever fragment was open when the counter finally ticked
-  // was handed the whole packet. Now they stay inside the low run.
+  // 25 mWh against a unit of 100, so on its own every one of them rounds away
+  // to nothing -- yet natively each is a block of its own, and stays one.
+  // What it must never be is a block carrying a whole 206 mWh packet that
+  // accrued under the quiet stretch before it. That is how F101's nights came
+  // to read as 24 W spikes out of a charger drawing milliwatts.
   const blips = 40;
   for (let quarter = 0; quarter < blips; quarter++) {
     plug.feedFor(0, 870);
@@ -327,15 +327,17 @@ test('9b  brief tiny loads join the low run and are not thrown away', () => {
   plug.feedFor(0, 1800);
 
   const native = plug.tierBlocks(0);
-  ok(native.length < blips / 4,
-    'natively the night stays ' + native.length + ' blocks rather than forty');
+  ok(native.length >= blips, 'natively the night is ' + native.length + ' blocks');
 
-  // The load that is genuinely there still gets its own block: 900 W moves the
-  // counter by far more than a packet, so nothing about it waits.
-  const loud = native.find((b) => b.duration > 0 && b.energy * 3600 / b.duration > 100000);
-  ok(loud, 'the real 900 W load is still a block of its own');
+  // None of them may claim more than the three watts it actually stood at. A
+  // block that were handed a packet would sit near 206 mWh instead of 25.
+  const brief = native.filter((b) => b.duration > 0 && b.duration <= 40 && b.energy > 0);
+  ok(brief.length > 0, 'the blips are there to check  (' + brief.length + ')');
+  ok(brief.every((b) => b.energy < 100),
+    'and none claims more than its own three watts  (hoechstens ' +
+    Math.max.apply(null, brief.map((b) => b.energy)) + ' mWh)');
 
-  const night = plug.tierBlocks(1).filter((b) => b.start < loud.start);
+  const night = plug.tierBlocks(1).filter((b) => b.start < native[native.length - 3].start);
   ok(night.length <= 3, 'the quarter hour tier keeps ' + night.length + ' of them, not forty');
   ok(night.some((b) => b.duration > 8 * 900),
     'because the near-empty buckets merged into one long run');
@@ -426,7 +428,7 @@ test('13  a missing or full attic loses the page but not the script', () => {
     full.pj.tierWrite(3, 1785870000 + i * 86400, 86400, 400);
     full.drain();
   }
-  ok(full.logsMatching('attic is full').length > 0, 'a full attic says so');
+  ok(full.logsMatching('attic full').length > 0, 'a full attic says so');
   eq(full.atticWrites.length, 0, 'and nothing more is written to it');
 });
 
@@ -763,7 +765,7 @@ test('24  an archive from an older version is dropped rather than mixed in', () 
   plug.boot();
   plug.settle(4);
   eq(Object.keys(plug.storage).filter((k) => k !== 'm').length, 0, 'every page is gone');
-  ok(plug.logsMatching('starting a new one').length > 0, 'and it says what it did');
+  ok(plug.logsMatching('restarting').length > 0, 'and it says what it did');
 });
 
 // The Android app deploys the journal from a bundled copy rather than from

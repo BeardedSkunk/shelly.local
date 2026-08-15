@@ -56,9 +56,14 @@ let CFG = {
   low_mw: 1500,
   // The energy counter does not move continuously either: it advances in whole
   // packets of about 206 mWh (measured on a Plug M Gen3). Nothing smaller
-  // exists, so a stretch carrying one packet or less says nothing at all about
-  // when inside itself that energy flowed. See carriesRealEnergy.
-  quantum_mwh: 206,
+  // exists, so a short block is credited either nothing at all or a whole
+  // packet that spent hours accruing under the quiet stretch before it.
+  // closeBlock is where that is put right.
+  //
+  // What a block may be credited, as a multiple of its own claim, before the
+  // surplus is taken to be somebody else's. Ten seconds between samples leaves
+  // the claim coarse, so a fifth over corrects it rather than being refused.
+  claim_slack: 1.2,
   // 2024-01-01. Anything earlier means the clock has not been set yet.
   min_valid_unix: 1704067200,
   // The longest stretch archived in one go.
@@ -140,6 +145,7 @@ let A64 = '#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abc';
 //   zero    true while nothing at all is flowing
 let ST = {
   blk: null,        // the running block, null while bootstrapping
+  debt: 0,          // energy blocks above the threshold claimed, not yet counted
   cand: [],         // samples that disagree with the running block
   boot: [],         // samples collected before the first block exists
   meta: null,       // see metaParse
@@ -442,7 +448,7 @@ function tierWrite(tier, start, durationSec, units) {
   let field = enc(steps) + encZ(units);
 
   if (CFG.test_mode) {
-    log(2, 'test mode: tier ' + tier + ' would take ' + start + ' +' + durationSec + 's ' + units);
+    log(2, 'test: tier ' + tier + ' ' + start + ' +' + durationSec + 's ' + units);
     return true;
   }
 
@@ -502,7 +508,7 @@ function retirePage(tier, key) {
 // a comment is the only shape that space can safely take.
 function atticStore(text) {
   if (ST.meta.attic >= CFG.attic_limit) {
-    log(1, 'attic is full at ' + ST.meta.attic + ' bytes, day page dropped');
+    log(1, 'attic full at ' + ST.meta.attic + ' b, page dropped');
     atticDone();
     return;
   }
@@ -518,7 +524,7 @@ function atticStore(text) {
       if (result.scripts[i].name === CFG.attic_name) id = result.scripts[i].id;
     }
     if (id === null) {
-      log(1, 'attic: no script named ' + CFG.attic_name + ', day page dropped');
+      log(1, 'attic: no ' + CFG.attic_name + ', page dropped');
       atticDone();
       return;
     }
@@ -807,8 +813,19 @@ function deviates(block, power) {
 // is not detected here but on the gross counter, which is the only one that
 // cannot legitimately fall.
 function accumulate(block, meter) {
-  block.energy = block.energy + (meter - block.meter);
+  let d = meter - block.meter;
   block.meter = meter;
+  // A quiet stretch settles what the blocks above the threshold claimed before
+  // the counter had confirmed it, and keeps the remainder. The debt is cleared
+  // by the first packet either way: if a whole packet vanishes into it and
+  // nothing reaches this block, the debt was wrong rather than merely early,
+  // and a meter that keeps over-reporting must not starve the quiet stretches
+  // for ever.
+  if (block.low && ST.debt > 0 && d > 0) {
+    d = d > ST.debt ? d - ST.debt : 0;
+    ST.debt = 0;
+  }
+  block.energy = block.energy + d;
 }
 
 function onSample(now, power, meter) {
@@ -832,28 +849,6 @@ function onSample(now, power, meter) {
   // energy of these samples is still unassigned. Whichever side wins gets it.
   ST.cand.push({ t: now, p: power, m: meter });
   if (ST.cand.length < CFG.confirm_samples) return;
-  // Confirmed by apower -- but out of a low block apower alone must not be
-  // believed. The note on CFG.low_mw has it reading 0 to 1.3 W at rest; it does
-  // reach past 1.5 W, and three such samples in a row were all it took to cut a
-  // low block in two. Worse than the cut was what the counter then did: it
-  // advanced by a single packet during those thirty seconds, so the fragment
-  // was archived as 206 mWh in 30 s and read back as 24 W, out of a charger
-  // drawing milliwatts. Nine such fragments appeared in the week F101 sat
-  // plugged in without charging, every one holding exactly one packet -- their
-  // heights differing only by how long each happened to last, which is the
-  // tell: the same packet reads 3.9 W in a 190 s fragment and 24.8 W in a 30 s
-  // one.
-  //
-  // So the counter gets the casting vote, being the meter itself rather than
-  // apower's opinion of it: a change that does not move it by more than one
-  // packet is not a change this plug can see, and the candidates stay pending
-  // for the block they interrupted to pick up -- which is where that energy
-  // accumulated in the first place. Above the threshold apower is worth
-  // believing and nothing waits. The sample cap bounds the pending run, so a
-  // level that really does stand there still earns its block.
-  let moved = meter - ST.cand[0].m;
-  if (moved < 0) moved = -moved;
-  if (ST.blk.low && moved <= CFG.quantum_mwh && ST.cand.length < 60) return;
   switchBlock(now, meter);
 }
 
@@ -891,8 +886,29 @@ function switchBlock(now, meter) {
 
 function closeBlock(endTime) {
   let block = ST.blk;
-  log(2, 'block ' + block.start + ' closed after ' + (endTime - block.start) + ' s with ' + block.energy + ' mWh');
-  queueBlock(block.start, endTime - block.start, block.energy);
+  let span = endTime - block.start;
+  let energy = block.energy;
+  // Above the threshold the meter is the wrong witness and apower is the right
+  // one. What the block claims is its reference over its own span -- and every
+  // sample in it sits within CFG.change_ratio of that reference, or the block
+  // would have ended. Inside the slack the counter corrects the claim; beyond
+  // it the surplus accrued under quiet stretches already written and is carried
+  // to the next one rather than credited here, where it would read as tens of
+  // watts. That surplus is let go rather than moved: it belongs to quiet
+  // stretches already archived, usually several of them, and there is no honest
+  // way to say which. A shortfall becomes debt for the next quiet stretch to
+  // settle. Export (a negative reference) keeps the counter, honest there.
+  if (!block.low && span > 0 && block.ref > 0) {
+    let claim = block.ref * span / 3600;
+    if (energy < claim) {
+      ST.debt = ST.debt + claim - energy;
+      energy = claim;
+    } else if (energy > claim * CFG.claim_slack) {
+      energy = claim;
+    }
+  }
+  log(2, 'block ' + block.start + ' closed, ' + span + ' s, ' + energy + ' mWh');
+  queueBlock(block.start, span, energy);
 }
 
 // No block yet: take a few samples before committing to one, so a single odd
@@ -936,7 +952,7 @@ function maybeCheckpoint(now) {
 function fillGap(untilTime) {
   if (ST.archiveEnd === null) return;
   if (untilTime <= ST.archiveEnd) return;
-  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s of unrecorded time with a null block');
+  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s with a null block');
   queueBlock(ST.archiveEnd, untilTime - ST.archiveEnd, 0);
 }
 
@@ -1046,7 +1062,7 @@ function begin() {
   // which is worse than starting again.
   let i;
   if (raw !== null && toInt(raw.split('|')[0]) !== VERSION) {
-    log(1, 'the archive is version ' + raw.split('|')[0] + ' and this is ' + VERSION + ', starting a new one');
+    log(1, 'archive v' + raw.split('|')[0] + ' vs v' + VERSION + ', restarting');
     for (i = 0; i < SLOTS.length; i++) stDel(SLOTS[i]);
     stDel(META_KEY);
     raw = null;
@@ -1069,8 +1085,7 @@ function begin() {
   // difference between plus and minus the whole lifetime total as the energy of
   // one ten second interval.
   ST.flip = ST.meta.rev !== was;
-  log(2, 'meter orientation ' + (ST.meta.rev === 1 ? 'reversed' : 'normal') +
-    (ST.flip ? ', turned since the last run' : ''));
+  log(2, 'meter ' + (ST.meta.rev === 1 ? 'reversed' : 'normal') + (ST.flip ? ', turned' : ''));
   ST.archiveEnd = archiveEndTime();
   let counts = [];
   for (i = 0; i < ST.meta.tiers.length; i++) counts.push(ST.meta.tiers[i].pages.length);
@@ -1362,7 +1377,7 @@ function httpTier(tier, from, max) {
 // --------------------------------------------------------------------- main
 
 function main() {
-  log(1, 'power journal v' + VERSION + ' starting' + (CFG.test_mode ? ' in test mode' : ''));
+  log(1, 'power journal v' + VERSION + (CFG.test_mode ? ' test' : ''));
   HTTPServer.registerEndpoint(CFG.endpoint, onRequest);
   begin();
 }
