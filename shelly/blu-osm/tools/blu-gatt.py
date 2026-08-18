@@ -665,11 +665,22 @@ async def schwellen_setzen(c, wert):
     Nachlesen ist nicht Zierde: ein stillschweigend verworfener Schreibvorgang
     wuerde die naechste Messung zur Antwort auf die vorige machen, und die
     Einkreisung liefe in die falsche Richtung, ohne dass es auffiele.
+
+    Die Reihenfolge ist nicht beliebig. Ab Werk steht dunkel unter hell (50 und
+    500), und zwischen den beiden Schreibvorgaengen steht die Ordnung kurz auf
+    dem Kopf, wenn man in die falsche Richtung anfaengt: nach oben zuerst die
+    dunkle Schwelle zu schreiben hiesse dunkel > hell fuer einen Wimpernschlag.
+    Ob die Firmware das hinnimmt, weiss niemand -- also erst die, die den Weg
+    frei macht. Nach unten ist das die dunkle, nach oben die helle.
     """
     dunkel_uuid, breite = FELDER['schwelle_dunkel']
     hell_uuid, _ = FELDER['schwelle_hell']
-    await schreiben(c, dunkel_uuid, breite, wert)
-    await schreiben(c, hell_uuid, breite, wert)
+    if await lesen(c, dunkel_uuid, breite) > wert:
+        reihe = [(dunkel_uuid, wert), (hell_uuid, wert)]
+    else:
+        reihe = [(hell_uuid, wert), (dunkel_uuid, wert)]
+    for uuid, w in reihe:
+        await schreiben(c, uuid, breite, w)
     await asyncio.sleep(0.4)
     return (await lesen(c, dunkel_uuid, breite),
             await lesen(c, hell_uuid, breite))
