@@ -8,6 +8,7 @@
     python blu-gatt.py gatt                      alle Merkmale auflisten
     python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
     python blu-gatt.py shell                     einmal verbinden, viele Befehle
+    python blu-gatt.py probe 40                  eine Schwelle, viele Pakete
     python blu-gatt.py bisect                    Helligkeit einkreisen
 
 Die Feldnamen folgen der Merkmalstabelle des Herstellers und sind deshalb
@@ -46,25 +47,35 @@ ein Fenster. Danach nicht mehr -- ein gekoppelter Sensor laesst sich auch im
 Normalbetrieb ansprechen, ohne dass "set" im Display steht. Steht die
 Verbindung einmal, haelt sie: drei Minuten und 64 Lesevorgaenge am Stueck.
 
-Zwei Skalen fuer dasselbe Licht
--------------------------------
+Das Licht, und was daran offen ist
+----------------------------------
 Ueber GATT gibt der Sensor die Helligkeit nicht her. Zwei nur lesbare Merkmale
 sahen danach aus und waren es nicht -- es sind die beiden Zellen in Hundertstel
 Volt, was die Tabelle bestaetigt hat.
 
-Im Funk steht sie sehr wohl, als Objekt 0x64, und 'listen' druckt sie. Aber sie
-zaehlt anders als die Schwellen: am 18.08.2026 meldete der Sensor 0x64 = 126
-und blieb dabei bei "dunkel", waehrend die Schwelle von 32767 bis 31 wanderte.
-Beides zugleich geht nur, wenn 126 in der Einheit der Schwellen weniger als 31
-bedeutet. Was 0x64 misst, ist also nicht Lux; die Schwellen sind es (ungefaehr,
-sagt der Hersteller), und ab Werk stehen sie auf 50 und 500.
+Im Funk steht sie sehr wohl, als Objekt 0x64, und 'listen' druckt sie. Womit
+sie zusammenhaengt, ist aber noch nicht geklaert. Am 18.08.2026 meldete der
+Sensor 0x64 = 126 und blieb dabei bei "dunkel", waehrend die Schwelle Schritt
+fuer Schritt von 32767 auf 63 fiel. Erklaerbar ist das durch dreierlei, und
+welches zutrifft, weiss niemand:
 
-Deshalb gibt es 'bisect' weiterhin. Es verstellt die Schwelle und sieht zu, auf
-welcher Seite der Sensor landet, protokolliert dabei 0x64 mit und zeigt am Ende
-beide Spalten nebeneinander -- der Umschlagpunkt ist der Umrechnungsfaktor
-zwischen den Skalen. Ein Knopfdruck zu Beginn, danach laeuft es allein; jeder
-Schritt kostet ein Funkintervall, weil Zuhoeren und Zugreifen dasselbe Fenster
-benutzen.
+  * es ist dort tatsaechlich dunkler als 63 -- ab Werk gilt schon alles unter
+    50 als dunkel, das ist Zimmerdaemmerung und kein finsterer Keller;
+  * geschriebene Schwellen werden gespeichert, aber nicht sofort angewendet;
+  * die Entscheidung wird selten neu gefaellt, nicht einmal je Paket.
+
+Eine vierte Moeglichkeit ist ausgeschlossen, und zwar durch den ersten Schritt
+selbst: bei Schwelle 32767 muss das Geraet "dunkel" entscheiden, wie hell es
+auch sei, und es meldete Bit 0. Also ist 0 = dunkel und das Bit nicht
+verdreht.
+
+Zwei Werkzeuge fuer den Rest. 'probe' setzt eine Schwelle und sieht ihr mehrere
+Pakete lang zu -- aendert sich das Urteil erst beim dritten, lag es an der Zeit
+und bisect misst zu frueh. Und 'bisect' fuehrt Protokoll ueber Schwelle, 0x64
+und Urteil und zeigt am Ende beide Spalten nebeneinander; wo es umschlaegt,
+steht das Verhaeltnis der beiden Skalen. Ein Knopfdruck zu Beginn, danach
+laeuft es allein; jeder Schritt kostet ein Funkintervall, weil Zuhoeren und
+Zugreifen dasselbe Fenster benutzen.
 """
 
 import argparse
@@ -481,6 +492,109 @@ async def cmd_horchen(args):
               ' anderes BLE-Programm?')
     else:
         print('\n%d Pakete.' % gesehen_zahl[0])
+
+
+async def cmd_probe(args):
+    """Setzt beide Schwellen auf einen Wert und sieht mehrere Pakete lang zu.
+
+    bisect fragt nach jedem Schritt genau ein Paket ab und geht weiter. Das
+    setzt voraus, dass der Sensor seine Entscheidung sofort neu faellt --
+    was niemand geprueft hat. Faellt er sie nur alle paar Minuten neu, oder
+    erst nach irgendeinem inneren Anlass, dann antwortet das eine Paket auf
+    eine Frage von vorhin, und die ganze Einkreisung misst nichts.
+
+    Also eine Schwelle, viele Pakete. Aendert sich das Urteil beim dritten
+    oder fuenften, wissen wir, dass es an der Zeit lag und nicht am Wert.
+    Aendert es sich nie, obwohl die Schwelle weit unter der gemeldeten
+    Helligkeit liegt, dann gehorcht das Bit diesen Schwellen nicht.
+    """
+    dunkel_uuid, breite = FELDER['dark_threshold']
+    hell_uuid, _ = FELDER['bright_threshold']
+
+    print('Setze beide Schwellen auf %d und hoere dann %d Pakete lang zu.'
+          % (args.wert, args.pakete))
+    print('Ein Mal den Knopf am Sensor druecken.\n', flush=True)
+
+    c = await fassen(minuten=args.warten, weg=args.weg)
+    if not c:
+        return print('keine Verbindung.')
+    original = (await lesen(c, dunkel_uuid, breite),
+                await lesen(c, hell_uuid, breite))
+    print('vorher: dunkel %d, hell %d' % original, flush=True)
+    zurueck = await schwellen_setzen(c, args.wert)
+    print('jetzt:  dunkel %d, hell %d%s'
+          % (zurueck[0], zurueck[1],
+             '' if zurueck == (args.wert, args.wert)
+             else '   NICHT UEBERNOMMEN'), flush=True)
+    await c.disconnect()
+    await asyncio.sleep(1.0)
+
+    print('\nhoere zu. Jetzt ist der Moment fuer die Taschenlampe.\n',
+          flush=True)
+    urteile = set()
+    gesehen = [0]
+    angefangen = time.monotonic()
+
+    def sehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        if not daten:
+            return
+        paket = bthome_lesen(daten)
+        gesehen[0] += 1
+        if 0x1e in paket:
+            urteile.add(paket[0x1e])
+        print('  %5.0f s   %s' % (time.monotonic() - angefangen,
+                                  paket_text(paket)), flush=True)
+
+    sc = BleakScanner(detection_callback=sehen)
+    await sc.start()
+    try:
+        ende = time.monotonic() + args.pakete * 70
+        while gesehen[0] < args.pakete and time.monotonic() < ende:
+            await asyncio.sleep(1.0)
+    finally:
+        await sc.stop()
+
+    print('')
+    if not gesehen[0]:
+        print('nichts gehoert.')
+    elif len(urteile) > 1:
+        print('Das Urteil hat sich waehrend der Beobachtung geaendert. Es'
+              ' haengt also an')
+        print('der Zeit oder am Licht, nicht nur am geschriebenen Wert -- und'
+              ' bisect,')
+        print('das nach jedem Schritt ein einziges Paket abfragt, misst zu'
+              ' frueh.')
+    else:
+        print('%d Pakete, ein einziges Urteil (%s) bei Schwelle %d.'
+              % (gesehen[0], 'hell' if urteile.pop() else 'dunkel',
+                 args.wert))
+        print('Keine Traegheit zu sehen -- das eine Paket, das bisect'
+              ' abfragt, genuegt.')
+
+    if args.behalten:
+        print('\nDie Schwellen bleiben auf %d.' % args.wert)
+        return
+    print('\nSetze zurueck auf dunkel %d, hell %d.' % original, flush=True)
+    _, c = await messen_und_fassen(args.geduld)
+    if c is None:
+        c = await fassen(minuten=args.warten, weg=args.weg)
+    if c is None:
+        print('   keine Verbindung. Bitte nachholen:')
+        print('     python blu-gatt.py set bt %d' % original[1])
+        print('     python blu-gatt.py set dt %d' % original[0])
+        return
+    try:
+        await schreiben(c, hell_uuid, breite, original[1])
+        await schreiben(c, dunkel_uuid, breite, original[0])
+        await asyncio.sleep(0.4)
+        print('   jetzt: dunkel %d, hell %d'
+              % (await lesen(c, dunkel_uuid, breite),
+                 await lesen(c, hell_uuid, breite)))
+    finally:
+        await c.disconnect()
 
 
 async def cmd_fields(args):
@@ -933,6 +1047,15 @@ def main():
     sub.add_parser('fields', aliases=['f'],
                    help='die Feldnamen und ihre Kuerzel zeigen')
 
+    pr = mit_weg(sub.add_parser('probe', aliases=['p'],
+                                help='eine Schwelle setzen und mehrere'
+                                     ' Pakete lang zusehen'))
+    pr.add_argument('wert', type=int)
+    pr.add_argument('--pakete', type=int, default=5)
+    pr.add_argument('--geduld', type=int, default=120)
+    pr.add_argument('--warten', type=float, default=5.0)
+    pr.add_argument('--behalten', action='store_true')
+
     h = sub.add_parser('listen', aliases=['l', 'horchen'],
                        help='nur zuhoeren, ohne den Sensor anzufassen')
     h.add_argument('--dauer', type=int, default=180,
@@ -982,6 +1105,7 @@ def main():
     befehle = {'dump': cmd_dump, 'd': cmd_dump,
                'gatt': cmd_gatt,
                'fields': cmd_fields, 'f': cmd_fields,
+               'probe': cmd_probe, 'p': cmd_probe,
                'get': cmd_get, 'g': cmd_get,
                'listen': cmd_horchen, 'l': cmd_horchen, 'horchen': cmd_horchen,
                'set': cmd_set, 's': cmd_set,
