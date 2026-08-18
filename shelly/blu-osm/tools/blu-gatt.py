@@ -1,24 +1,31 @@
 """Redet mit einem Shelly BLU H&T direkt, ohne die Shelly-App.
 
+    python blu-gatt.py fields                    Feldnamen und Kuerzel zeigen
+    python blu-gatt.py listen                    nur zuhoeren, nichts anfassen
     python blu-gatt.py dump                      alles lesen
-    python blu-gatt.py get zigbee                eine Einstellung lesen
-    python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
-    python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
+    python blu-gatt.py get bt                    eine Einstellung lesen
+    python blu-gatt.py set to 0                  eine Einstellung schreiben
     python blu-gatt.py gatt                      alle Merkmale auflisten
-    python blu-gatt.py horchen                   nur zuhoeren, nichts anfassen
-    python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
+    python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
+    python blu-gatt.py shell                     einmal verbinden, viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
-                                                 (ein Knopfdruck am Anfang)
+
+Die Feldnamen folgen der Merkmalstabelle des Herstellers und sind deshalb
+englisch; jedes hat ein Kuerzel aus zwei Buchstaben, damit man in der shell
+etwas ausprobieren kann, ohne zu tippen. Die frueheren deutschen Namen gelten
+weiter. 'fields' zeigt beides und braucht dafuer kein Bluetooth.
 
 Warum es nie sofort geht: der Sensor funkt einmal pro Minute und schweigt
 dazwischen. Eine Verbindung kann nur zustande kommen, waehrend er funkt -- das
 ist BLE, kein Mangel des Werkzeugs. Ein Direktversuch ueber die Adresse wurde
 am 12.08.2026 nach 133 Sekunden aufgegeben. Wer viel vorhat, nimmt 'shell' und
-zahlt die Wartezeit ein einziges Mal; wer es dauerhaft schneller will,
-verkuerzt das Sendeintervall im Sensor.
+zahlt die Wartezeit ein einziges Mal. Kuerzer als eine Minute geht nicht: der
+Takt liegt fest, und die einzigen Ereignisse, die ihn ueberholen, sind ein
+Knopfdruck und eine Batterie unter 15 Prozent.
 
 Voraussetzungen: bleak (pip install bleak), eine bestehende Bluetooth-Kopplung
 zwischen diesem Rechner und dem Sensor, und ein Knopfdruck pro Verbindung.
+'listen' braucht nichts davon -- Empfangen merkt die Gegenseite nicht.
 
 Woher das Wissen stammt
 -----------------------
@@ -29,31 +36,41 @@ schlicht -- gewoehnliches GATT, keine Verschluesselung, keine Signatur, keine
 Cloud. Ein Schreibvorgang ist ein ATT Write Command auf ein festes Merkmal,
 Zahlen little-endian, Ja/Nein als einzelnes Byte.
 
+Am 18.08.2026 kam die Merkmalstabelle des Herstellers dazu und bestaetigte
+jede UUID:
+<https://shelly-api-docs.shelly.cloud/docs-ble/Devices/BLU_ZB/ht_display/>
+
 Vor der Kopplung ist der Knopfdruck die Voraussetzung: ein ungekoppelter BLU
 funkt nicht verbindbar, das spart ihm die Batterie, und erst der Druck oeffnet
 ein Fenster. Danach nicht mehr -- ein gekoppelter Sensor laesst sich auch im
 Normalbetrieb ansprechen, ohne dass "set" im Display steht. Steht die
 Verbindung einmal, haelt sie: drei Minuten und 64 Lesevorgaenge am Stueck.
 
-Was der Sensor nicht hergibt
-----------------------------
-Den gemessenen Helligkeitswert. Nach aussen kommt nur die Entscheidung, hell
-oder dunkel. Zwei nur lesbare Merkmale sahen danach aus und waren es nicht: sie
-standen ueber drei Minuten unbeweglich auf 299 und 297, auch unter einer
-Taschenlampe, und sanken im Lauf einer Stunde um je eins, waehrend die Batterie
-von 99 auf 98 Prozent ging. Das ist mit hoher Wahrscheinlichkeit die
-Batteriespannung in Hundertstel Volt.
+Zwei Skalen fuer dasselbe Licht
+-------------------------------
+Ueber GATT gibt der Sensor die Helligkeit nicht her. Zwei nur lesbare Merkmale
+sahen danach aus und waren es nicht -- es sind die beiden Zellen in Hundertstel
+Volt, was die Tabelle bestaetigt hat.
 
-Deshalb bisect: die Helligkeit laesst sich nur einkreisen, indem man die
-Schwelle verstellt und zusieht, auf welcher Seite der Sensor landet. Ein
-Knopfdruck zu Beginn, danach laeuft es allein -- jeder Schritt hoert ein
-Funkpaket ab und greift im selben Fenster fuer den naechsten Schreibvorgang zu,
-sodass ein Schritt ein Funkintervall kostet und nicht zwei.
+Im Funk steht sie sehr wohl, als Objekt 0x64, und 'listen' druckt sie. Aber sie
+zaehlt anders als die Schwellen: am 18.08.2026 meldete der Sensor 0x64 = 126
+und blieb dabei bei "dunkel", waehrend die Schwelle von 32767 bis 31 wanderte.
+Beides zugleich geht nur, wenn 126 in der Einheit der Schwellen weniger als 31
+bedeutet. Was 0x64 misst, ist also nicht Lux; die Schwellen sind es (ungefaehr,
+sagt der Hersteller), und ab Werk stehen sie auf 50 und 500.
+
+Deshalb gibt es 'bisect' weiterhin. Es verstellt die Schwelle und sieht zu, auf
+welcher Seite der Sensor landet, protokolliert dabei 0x64 mit und zeigt am Ende
+beide Spalten nebeneinander -- der Umschlagpunkt ist der Umrechnungsfaktor
+zwischen den Skalen. Ein Knopfdruck zu Beginn, danach laeuft es allein; jeder
+Schritt kostet ein Funkintervall, weil Zuhoeren und Zugreifen dasselbe Fenster
+benutzen.
 """
 
 import argparse
 import asyncio
 import sys
+import time
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -65,62 +82,95 @@ ADDR = 'FC:4D:6A:38:E2:F2'
 # Name -> (UUID, Breite in Bytes). Die Zuordnung stammt aus dem Mitschnitt:
 # jede Einstellung einmal in der App geaendert, mit auffaelligen Zahlen, und
 # im Protokoll nachgesehen, welches Merkmal sich bewegt hat.
-FELDER = {
-    # Am Geraet durchprobiert und beobachtet, nicht hergeleitet. Die frueheren
-    # Namen stammten aus einem Bluetooth-Mitschnitt und waren teils vertauscht:
-    # was nach Fahrenheit aussah, schaltet einen Globus, und die beiden
-    # Display-Schalter standen ueber Kreuz.
-    'temp_offset':     ('0de178e5-a95d-4988-b042-7145d540a000', 2),  # Zehntelgrad, mit Vorzeichen
-    'feuchte_offset':  ('0de178e5-a95d-4988-b042-7145d540a002', 2),  # ganze Prozent, mit Vorzeichen
-    'schwelle_dunkel': ('c1a32099-32e8-42d8-99bb-b90ce4abe841', 2),
-    'schwelle_hell':   ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2),
-    # 0 Celsius, 1 Fahrenheit. In Fahrenheit dreht sich auch das Datum: erst
-    # der Monat, dann der Tag.
-    'fahrenheit':      ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1),
-    # 0 schwarz auf weiss, 1 invertiert.
-    'invertieren':     ('611723f5-53dd-4289-888a-7523db56bb59', 1),
-    # 0 vierundzwanzig Stunden, 1 zwoelf. Der einzige Wert, der sich auf dem
-    # Display erst zeigt, wenn der Sensor den set-Bildschirm verlaesst -- alle
-    # anderen schlagen sofort durch.
-    'uhr12h':          ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
-    # Zigbee. Der Globus im Display ist seine Anzeige -- was am Geraet als
-    # unerklaerliches Symbol auffiel, ist schlicht die Funkart.
-    'zigbee':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
-    # Nicht die Sendefrequenz, sondern ein Zeitversatz: die Zahl wird in
-    # Minuten auf die Uhrzeit aufgeschlagen, 65535 zieht eine Minute ab. In
-    # manchen Betriebsarten ist die Uhrzeit leer und der BLU zaehlt hiermit --
-    # wie sich die Uhrzeit loeschen laesst, damit das nutzbar wird, ist noch
-    # offen.
-    'zeitversatz':     ('08b83239-6f5e-4412-892d-81e59224716e', 2),
-    # Unixzeit in Sekunden, vier Bytes little-endian. Millisekunden koennen es
-    # nicht sein: vier Bytes fassen 4.294.967.295, und Millisekunden seit 1970
-    # sind heute rund 1.786.000.000.000. Gelesen wurden b1847c6a, also
-    # 1786545329 -- auf die Sekunde der Zeitpunkt des Lesens.
-    #
-    # Sichtbar aendert sich beim Schreiben nichts, weil eine falsche Zeit auch
-    # eine gueltige ist: der Sensor uebernimmt sie und zeigt sie nur, wenn man
-    # auf die Uhranzeige umschaltet -- drei Mal druecken.
-    'epochSec':        ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
-    # Beide zeigen am Geraet nichts, und beide sind jetzt benannt -- nicht
-    # geraten, sondern aus der Merkmalstabelle des Herstellers.
-    'zeitsync':        ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),   # ab Werk 1
-    'energiesparen':   ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),   # ab Werk 0
+FIELDS = {
+    # name: (uuid, bytes, signed, note). The names follow the manufacturer's
+    # own characteristic table; the short forms are for typing at the shell.
+    'temp_offset':      ('0de178e5-a95d-4988-b042-7145d540a000', 2, True,
+                         '0.1 C steps, default 0'),
+    'humidity_offset':  ('0de178e5-a95d-4988-b042-7145d540a002', 2, True,
+                         '1 % steps, default 0'),
+    'dark_threshold':   ('c1a32099-32e8-42d8-99bb-b90ce4abe841', 2, False,
+                         'default 50, roughly lux'),
+    'bright_threshold': ('c1a32099-32e8-42d8-99bb-b90ce4abe842', 2, False,
+                         'default 500, roughly lux'),
+    'temp_unit':        ('8645a7a9-6bb6-41fa-a120-4034629c2519', 1, False,
+                         '0 Celsius, 1 Fahrenheit -- and the date flips too'),
+    'invert_display':   ('611723f5-53dd-4289-888a-7523db56bb59', 1, False,
+                         '0 black on white, 1 inverted'),
+    'clock_12h':        ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1, False,
+                         '0 is 24 hours. Shows only after leaving set mode'),
+    'zigbee':           ('68348d04-f62c-435d-b075-cc54b9f049cc', 1, False,
+                         'the globe on the display is its indicator'),
+    'time_sync':        ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1, False,
+                         'default 1. Invisible on the device'),
+    'power_saver':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1, False,
+                         'default 0. Invisible on the device'),
+    # Minutes added to the clock, and it is the time zone, not a send
+    # interval: 65535 reads as -1 and takes a minute off.
+    'utc_offset':       ('08b83239-6f5e-4412-892d-81e59224716e', 2, True,
+                         'time zone in minutes'),
+    # Seconds since 1970, four bytes little-endian. Milliseconds it cannot be:
+    # four bytes hold 4,294,967,295 and milliseconds since 1970 are around
+    # 1,786,000,000,000 today. Writing shows nothing, because a wrong time is
+    # still a valid one -- press three times to see the clock at all.
+    'unix_time':        ('d56a3410-115e-41d1-945b-3a7f189966a1', 4, False,
+                         'UTC seconds'),
 }
 
-# Die Namen, unter denen dieselben Merkmale hier frueher liefen. Sie bleiben
-# gueltig, damit aufgeschriebene Befehle nicht ins Leere laufen.
-ALIASSE = {
-    'globus': 'zigbee',
-    'fahrenheit': 'fahrenheit',
-    'schalter_a': 'zeitsync',
-    'schalter_b': 'energiesparen',
-    'schalter_c': 'uhr12h',
-    'intervall': 'zeitversatz',
+# Two letters per field, for trying things out at the shell without typing.
+SHORT = {
+    'to': 'temp_offset',      'ho': 'humidity_offset',
+    'dt': 'dark_threshold',   'bt': 'bright_threshold',
+    'tu': 'temp_unit',        'iv': 'invert_display',
+    'c12': 'clock_12h',       'zb': 'zigbee',
+    'ts': 'time_sync',        'ps': 'power_saver',
+    'uo': 'utc_offset',       'ut': 'unix_time',
 }
+
+# What these fields were called here before. Three of the old names were also
+# wrong, not merely German: the globe turned out to be the Zigbee indicator,
+# and the two nameless switches are the clock sync and the power saver. The
+# old names keep working so that anything written down still runs.
+OLD = {
+    'feuchte_offset': 'humidity_offset',
+    'schwelle_dunkel': 'dark_threshold',
+    'schwelle_hell': 'bright_threshold',
+    'fahrenheit': 'temp_unit',
+    'invertieren': 'invert_display',
+    'uhr12h': 'clock_12h',
+    'globus': 'zigbee',
+    'zeitsync': 'time_sync',
+    'energiesparen': 'power_saver',
+    'schalter_a': 'time_sync',
+    'schalter_b': 'power_saver',
+    'schalter_c': 'clock_12h',
+    'zeitversatz': 'utc_offset',
+    'intervall': 'utc_offset',
+    'epochSec': 'unix_time',
+}
+
+NAMEN = dict(SHORT)
+NAMEN.update(OLD)
+
+# Was hier frueher stand, damit alter Code nicht bricht.
+FELDER = dict([(n, (u, b)) for n, (u, b, _, _) in FIELDS.items()])
+VORZEICHEN = set([n for n, (_, _, vz, _) in FIELDS.items() if vz])
 
 
 def feld(name):
-    return ALIASSE.get(name, name)
+    """Loest Kuerzel und alte Namen auf einen heutigen Feldnamen auf."""
+    return NAMEN.get(name, name)
+
+
+def feld_liste():
+    zeilen = []
+    kurz = dict([(v, k) for k, v in SHORT.items()])
+    for name, (uuid, breite, vz, note) in FIELDS.items():
+        zeilen.append('  %-4s %-17s %s%s  %s'
+                      % (kurz.get(name, ''), name, breite,
+                         ' signed' if vz else '       ', note))
+    return '\n'.join(zeilen)
+
 
 # Was der Knopf am Sensor selbst tut. Am Geraet durchprobiert und spaeter in
 # der Herstellerdoku Zeile fuer Zeile wiedergefunden -- beides stimmt ueberein:
@@ -257,11 +307,9 @@ async def _lauschen(minuten=5.0):
     return None
 
 
-# Die Offsets duerfen negativ sein -- ein Sensor, der zu warm liest, braucht
-# genau das. Auf dem Draht sind es zwei Bytes im Zweierkomplement, und weil ein
-# Offset nie in die Naehe von 32767 Zehntelgrad kommt, ist die Grenze zwischen
-# "grosse Zahl" und "negative Zahl" hier ungefaehrlich zu ziehen.
-VORZEICHEN = {'temp_offset', 'feuchte_offset'}
+# Welche Felder mit Vorzeichen gelesen werden, steht oben in FIELDS. Die
+# Offsets duerfen negativ sein -- ein Sensor, der zu warm liest, braucht genau
+# das -- und die Zeitzone westlich von Greenwich ebenso.
 
 
 async def lesen(c, uuid, breite, mit_vorzeichen=False):
@@ -435,6 +483,14 @@ async def cmd_horchen(args):
         print('\n%d Pakete.' % gesehen_zahl[0])
 
 
+async def cmd_fields(args):
+    """Zeigt die Feldnamen. Braucht kein Bluetooth und keinen Sensor."""
+    print('kurz name              bytes            was es ist')
+    print(feld_liste())
+    print('\nAlte Namen gelten weiter: %s'
+          % ', '.join(sorted(OLD)))
+
+
 async def cmd_gatt(args):
     c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
@@ -552,9 +608,12 @@ async def cmd_shell(args):
     c = await fassen(weg=args.weg)
     if not c:
         return print('keine Verbindung')
-    print('verbunden. Befehle: get <feld> | set <feld> <wert> | dump | gatt |'
-          ' pin <zahl> | schluessel | ende')
-    print('Felder:', ', '.join(sorted(FELDER)), flush=True)
+    print('verbunden. Befehle:')
+    print('  g|get <feld>          s|set <feld> <wert>     d|dump')
+    print('  f|fields              gatt                    k|key')
+    print('  pin <zahl>            q|quit')
+    print('Felder (kurz lang):')
+    print(feld_liste(), flush=True)
     try:
         while True:
             try:
@@ -566,8 +625,11 @@ async def cmd_shell(args):
             teile = zeile.split()
             befehl = teile[0].lower()
             try:
-                if befehl in ('ende', 'quit', 'exit'):
+                if befehl in ('ende', 'quit', 'exit', 'q'):
                     break
+                if befehl in ('fields', 'f'):
+                    print(feld_liste())
+                    continue
                 if befehl == 'pin' and len(teile) == 2:
                     await zeige_schluessel(c, 'vorher ')
                     wert = int(teile[1], 0)
@@ -579,20 +641,20 @@ async def cmd_shell(args):
                 if befehl == 'gatt':
                     await merkmale_zeigen(c)
                     continue
-                if befehl == 'schluessel':
+                if befehl in ('schluessel', 'key', 'k'):
                     await zeige_schluessel(c, 'jetzt  ')
                     continue
-                if befehl == 'dump':
+                if befehl in ('dump', 'd'):
                     for name, (uuid, breite) in FELDER.items():
                         print('  %-18s %d' % (name, await lesen(c, uuid, breite,
                                                                 name in VORZEICHEN)))
                 if len(teile) >= 2:
                     teile[1] = feld(teile[1])
-                if befehl == 'get' and len(teile) == 2 and teile[1] in FELDER:
+                if befehl in ('get', 'g') and len(teile) == 2 and teile[1] in FELDER:
                     uuid, breite = FELDER[teile[1]]
                     print('  %s = %d' % (teile[1],
                                          await lesen(c, uuid, breite, teile[1] in VORZEICHEN)))
-                elif befehl == 'set' and len(teile) == 3 and teile[1] in FELDER:
+                elif befehl in ('set', 's') and len(teile) == 3 and teile[1] in FELDER:
                     uuid, breite = FELDER[teile[1]]
                     vz = teile[1] in VORZEICHEN
                     wert = int(teile[2], 0)
@@ -603,7 +665,8 @@ async def cmd_shell(args):
                     print('  %s: %d -> %d%s' % (teile[1], vorher, nachher,
                                                 '' if nachher == wert else '   NICHT UEBERNOMMEN'))
                 else:
-                    print('  ?  get <feld> | set <feld> <wert> | dump | ende')
+                    print('  ?  g <feld> | s <feld> <wert> | d | f | gatt |'
+                          ' k | pin <zahl> | q')
             except Exception as e:
                 print('  Verbindung weg (%s) -- neu starten' % type(e).__name__)
                 break
@@ -634,7 +697,10 @@ async def messen_und_fassen(sekunden=120):
             return
         daten = adv.service_data.get(BTHOME_UUID)
         if daten:
-            q.put_nowait((bthome_lesen(daten), dev))
+            paket = bthome_lesen(daten)
+            paket['roh'] = daten.hex()
+            paket['rssi'] = adv.rssi
+            q.put_nowait((paket, dev))
 
     erstes = None
     sc = BleakScanner(detection_callback=gesehen)
@@ -673,8 +739,8 @@ async def schwellen_setzen(c, wert):
     Ob die Firmware das hinnimmt, weiss niemand -- also erst die, die den Weg
     frei macht. Nach unten ist das die dunkle, nach oben die helle.
     """
-    dunkel_uuid, breite = FELDER['schwelle_dunkel']
-    hell_uuid, _ = FELDER['schwelle_hell']
+    dunkel_uuid, breite = FELDER['dark_threshold']
+    hell_uuid, _ = FELDER['bright_threshold']
     if await lesen(c, dunkel_uuid, breite) > wert:
         reihe = [(dunkel_uuid, wert), (hell_uuid, wert)]
     else:
@@ -718,8 +784,8 @@ async def cmd_bisect(args):
         return print('keine Verbindung. Knopf gedrueckt? Laeuft sonst noch'
                      ' etwas ueber Bluetooth gegen diesen Sensor?')
 
-    dunkel_uuid, breite = FELDER['schwelle_dunkel']
-    hell_uuid, _ = FELDER['schwelle_hell']
+    dunkel_uuid, breite = FELDER['dark_threshold']
+    hell_uuid, _ = FELDER['bright_threshold']
     original = (await lesen(c, dunkel_uuid, breite),
                 await lesen(c, hell_uuid, breite))
     print('verbunden. Schwellen vorher: dunkel %d, hell %d\n' % original,
@@ -727,6 +793,7 @@ async def cmd_bisect(args):
 
     schritt = 0
     versuche = 0
+    protokoll = []   # (Schwelle, Helligkeit aus 0x64, Entscheidung)
     try:
         while schritt < args.schritte and hi - lo > args.genau:
             schritt += 1
@@ -762,22 +829,27 @@ async def cmd_bisect(args):
             c = None
             await asyncio.sleep(1.0)  # der Funk kommt erst nach dem Trennen
 
-            print('   gesetzt. warte auf sein naechstes Funkpaket ...',
-                  flush=True)
+            print('   gesetzt (dunkel %d, hell %d). warte auf sein naechstes'
+                  ' Funkpaket ...' % zurueck, flush=True)
+            angefangen = time.monotonic()
             paket, c = await messen_und_fassen(args.geduld)
+            gedauert = time.monotonic() - angefangen
             if paket is None or 0x1e not in paket:
-                print('   kein verwertbares Paket -- Schritt wiederholt\n',
-                      flush=True)
+                print('   kein verwertbares Paket nach %.0f s -- Schritt'
+                      ' wiederholt\n' % gedauert, flush=True)
                 schritt -= 1
                 continue
 
             hell = bool(paket[0x1e])
             print('   %s' % paket_text(paket), flush=True)
-            if 0x64 in paket:
-                print('   -- er sendet die Helligkeit selbst mit (%d). Dann'
-                      ' braucht es dieses' % paket[0x64])
-                print('      Einkreisen gar nicht:  python blu-gatt.py'
-                      ' horchen', flush=True)
+            if args.debug:
+                print('      [debug] nach %.0f s, %d dBm, Verbindung %s'
+                      % (gedauert, paket.get('rssi', 0),
+                         'gehalten' if c else 'verloren'))
+                print('      [debug] roh %s' % paket.get('roh', ''))
+                print('      [debug] Schwelle %d, 0x64 %s, 0x1e %d'
+                      % (pruef, paket.get(0x64, '-'), paket[0x1e]), flush=True)
+            protokoll.append((pruef, paket.get(0x64), hell))
 
             # Hell heisst: die Helligkeit liegt ueber dem Pruefwert. Dann ist
             # der Pruefwert die neue Untergrenze, nicht die neue Obergrenze.
@@ -787,7 +859,29 @@ async def cmd_bisect(args):
                 hi = pruef
             print('   Klammer jetzt %d .. %d\n' % (lo, hi), flush=True)
 
-        print('Ergebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
+        if protokoll:
+            print('\nWas gemessen wurde:\n')
+            print('   Schwelle   0x64   Urteil')
+            for schwelle, stufe, war_hell in protokoll:
+                print('   %8d   %4s   %s'
+                      % (schwelle, '-' if stufe is None else stufe,
+                         'hell' if war_hell else 'dunkel'))
+            stufen = [x for _, x, _ in protokoll if x is not None]
+            if stufen and len(set(w for _, _, w in protokoll)) == 1:
+                print('\n   Das Urteil hat sich kein einziges Mal geaendert,'
+                      ' obwohl die Schwelle')
+                print('   von %d bis %d gewandert ist. Dann misst 0x64 nicht'
+                      ' in derselben' % (protokoll[0][0], protokoll[-1][0]))
+                print('   Einheit wie die Schwellen -- 0x64 lag bei %d bis %d.'
+                      % (min(stufen), max(stufen)))
+            elif stufen:
+                print('\n   0x64 lag waehrenddessen bei %d bis %d. Der'
+                      ' Umschlagpunkt in' % (min(stufen), max(stufen)))
+                print('   Schwellen-Einheiten liegt zwischen %d und %d --'
+                      ' das ist der' % (lo, hi))
+                print('   Umrechnungsfaktor zwischen beiden Skalen.')
+
+        print('\nErgebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
         if lo == args.von:
             print('   Sie kann auch darunter liegen -- nach unten wurde die')
             print('   Klammer nie verlassen. Mit --von tiefer ansetzen.')
@@ -808,10 +902,8 @@ async def cmd_bisect(args):
             if c is None:
                 print('   KEINE VERBINDUNG -- die Schwellen stehen noch auf')
                 print('   dem letzten Pruefwert. Bitte nachholen:')
-                print('     python blu-gatt.py set schwelle_dunkel %d'
-                      % original[0])
-                print('     python blu-gatt.py set schwelle_hell %d'
-                      % original[1])
+                print('     python blu-gatt.py set bt %d' % original[1])
+                print('     python blu-gatt.py set dt %d' % original[0])
             else:
                 await schreiben(c, dunkel_uuid, breite, original[0])
                 await schreiben(c, hell_uuid, breite, original[1])
@@ -835,29 +927,39 @@ def main():
                        help='1 lauschen, 2 geradeheraus, 3 beides zugleich')
         return p
 
-    mit_weg(sub.add_parser('dump', help='alle Einstellungen lesen'))
+    mit_weg(sub.add_parser('dump', aliases=['d'],
+                           help='alle Einstellungen lesen'))
     mit_weg(sub.add_parser('gatt', help='alle Merkmale des Geraets auflisten'))
+    sub.add_parser('fields', aliases=['f'],
+                   help='die Feldnamen und ihre Kuerzel zeigen')
 
-    h = sub.add_parser('horchen', help='nur zuhoeren, ohne den Sensor'
-                                       ' anzufassen')
+    h = sub.add_parser('listen', aliases=['l', 'horchen'],
+                       help='nur zuhoeren, ohne den Sensor anzufassen')
     h.add_argument('--dauer', type=int, default=180,
                    help='Sekunden')
     h.add_argument('--roh', action='store_true',
                    help='die Dienstdaten zusaetzlich als Hex')
 
-    g = mit_weg(sub.add_parser('get', help='eine Einstellung lesen'))
-    g.add_argument('feld', choices=sorted(FELDER) + sorted(ALIASSE))
+    erlaubt = sorted(FIELDS) + sorted(NAMEN)
 
-    s = mit_weg(sub.add_parser('set', help='eine Einstellung schreiben'))
-    s.add_argument('feld', choices=sorted(FELDER) + sorted(ALIASSE))
-    s.add_argument('wert', type=int)
+    g = mit_weg(sub.add_parser('get', aliases=['g'],
+                               help='eine Einstellung lesen'))
+    g.add_argument('feld', choices=erlaubt, metavar='feld')
 
-    mit_weg(sub.add_parser('shell', help='einmal verbinden, dann viele Befehle'))
+    st = mit_weg(sub.add_parser('set', aliases=['s'],
+                                help='eine Einstellung schreiben'))
+    st.add_argument('feld', choices=erlaubt, metavar='feld')
+    st.add_argument('wert', type=int)
 
-    pn = mit_weg(sub.add_parser('pin', help='PIN schicken und den Schluessel lesen'))
+    mit_weg(sub.add_parser('shell', aliases=['sh'],
+                           help='einmal verbinden, dann viele Befehle'))
+
+    pn = mit_weg(sub.add_parser('pin',
+                                help='PIN schicken und den Schluessel lesen'))
     pn.add_argument('pin', type=int)
 
-    b = mit_weg(sub.add_parser('bisect', help='die Helligkeit einkreisen'))
+    b = mit_weg(sub.add_parser('bisect', aliases=['b'],
+                               help='die Helligkeit einkreisen'))
     b.add_argument('--von', type=int, default=0)
     b.add_argument('--bis', type=int, default=65535,
                    help='zwei Bytes fasst das Feld, mehr geht nicht')
@@ -872,11 +974,21 @@ def main():
     b.add_argument('--behalten', action='store_true',
                    help='die gefundenen Schwellen stehen lassen statt die'
                         ' urspruenglichen zurueckzuschreiben')
+    b.add_argument('--debug', action='store_true',
+                   help='jeden Schreibvorgang, jedes Paket und jede Sekunde'
+                        ' mitschreiben')
 
     args = p.parse_args()
-    asyncio.run({'dump': cmd_dump, 'gatt': cmd_gatt, 'get': cmd_get,
-                 'horchen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
-                 'shell': cmd_shell, 'bisect': cmd_bisect}[args.cmd](args))
+    befehle = {'dump': cmd_dump, 'd': cmd_dump,
+               'gatt': cmd_gatt,
+               'fields': cmd_fields, 'f': cmd_fields,
+               'get': cmd_get, 'g': cmd_get,
+               'listen': cmd_horchen, 'l': cmd_horchen, 'horchen': cmd_horchen,
+               'set': cmd_set, 's': cmd_set,
+               'pin': cmd_pin,
+               'shell': cmd_shell, 'sh': cmd_shell,
+               'bisect': cmd_bisect, 'b': cmd_bisect}
+    asyncio.run(befehle[args.cmd](args))
 
 
 if __name__ == '__main__':
