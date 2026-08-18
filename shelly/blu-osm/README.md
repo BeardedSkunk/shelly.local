@@ -194,11 +194,20 @@ carries seven objects and the last of them, 0x64, is the light level:
 `blu-gatt.py horchen` prints them, and it does so without touching the sensor at
 all — no connection, no button, no write. Receiving is invisible to the far end.
 
-Which makes `bisect` a detour around something that was in every packet all
-along. It stays, because bracketing is the only way to learn what the threshold
-numbers mean in the sensor's own units, and because it is the pattern for any
-setting that has an effect but no readout. But for the question "how light is
-it right now", listening is the answer.
+What is not settled is how that number relates to the thresholds. On
+18.08.2026 the sensor reported 0x64 = 126 and stayed on "dark" while the
+threshold was walked down from 32767 to 63. Three things would explain it — the
+spot really is darker than 63, since the factory calls anything under 50 dark;
+or written thresholds are stored but not applied at once; or the decision is
+re-made rarely rather than once a packet — and nothing yet says which.
+
+One explanation is ruled out, by the first step itself. At a threshold of 32767
+the device must decide "dark" however bright it is, and it reported bit 0. So 0
+is dark and the bit is not inverted.
+
+`probe` is for the timing question: one threshold, several packets in a row. If
+the verdict changes on the third, it was time and not the value, and `bisect` —
+which asks one packet per step — has been measuring too early.
 
 That the light level was missed for a week has a cause worth writing down. The
 decoder walks the objects in order and stops at the first id it does not know,
