@@ -142,6 +142,11 @@ indicator, which is why it moved with the Zigbee characteristic.
 It also names the second of the two write-only characteristics: the factory
 reset. It is kept here as a constant and deliberately without a command.
 
+The table lives at
+<https://shelly-api-docs.shelly.cloud/docs-ble/Devices/BLU_ZB/ht_display/>.
+It is the page for the Zigbee variant; the display model here answers to
+every UUID on it, so the two share their firmware.
+
 The offsets are applied to what the sensor **broadcasts**, not merely to its
 display: setting the temperature offset to 42.0 moved the reading the plug
 receives by exactly 42.0. Anything reading this sensor sees the corrected value,
