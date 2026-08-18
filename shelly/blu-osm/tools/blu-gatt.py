@@ -86,8 +86,19 @@ Zugreifen dasselbe Fenster benutzen.
 
 import argparse
 import asyncio
+import logging
 import sys
 import time
+
+# Wohin die Spur geschrieben wird, wenn --log gesetzt ist. Solange sie None
+# ist, kostet spur() einen Vergleich und sonst nichts.
+SPUR = None
+
+
+def spur(text):
+    if SPUR is not None:
+        SPUR.write('%s  %s\n' % (time.strftime('%H:%M:%S'), text))
+        SPUR.flush()
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -211,53 +222,70 @@ NUR_LESBAR = {
 }
 
 
-def hat_merkmale(c):
-    """Steht die Verbindung wirklich, oder nur der Anschein davon?
+async def merkmale_abwarten(c, sekunden=10.0):
+    """Wartet, bis die Merkmalstabelle da ist. Wirft die Verbindung nicht weg.
 
-    Ein connect() kann durchkommen, bevor die Merkmalstabelle geholt ist. Der
-    Client sieht verbunden aus, der erste Zugriff faellt mit
-    BleakCharacteristicNotFoundError um, und das sieht aus wie ein
-    abgebrochener Funkkontakt, obwohl nur zu frueh gefragt wurde.
+    bleak 3.0.2 laesst connect() zurueckkommen, bevor die Merkmale ermittelt
+    sind, und client.services wirft dann BleakError("Service Discovery has not
+    been performed yet"). Ein get_services() zum Erzwingen gibt es nicht mehr;
+    die Tabelle kommt von selbst, kurz danach.
+
+    Am 19.08.2026 habe ich daraus geschlossen, die Verbindung sei unbrauchbar,
+    und sie verworfen -- dreimal hintereinander, und jedes Mal ein neuer
+    Verbindungsversuch. Das war doppelt falsch. Erstens war die Verbindung
+    gut und brauchte nur einen Moment. Zweitens verstummt der Sensor, solange
+    jemand an ihm haengt, und der Zaehler bis zum naechsten Funkpaket faengt
+    nach dem Trennen von vorn an -- jeder verworfene Versuch hat also nicht
+    nur nichts gebracht, sondern die naechste Messung um eine Minute
+    verschoben. Aus einem Wettlauf von Sekundenbruchteilen wurden Minuten.
+
+    Also warten statt wegwerfen. Zehn Sekunden sind grosszuegig; gebraucht
+    wird ein Bruchteil davon.
     """
-    try:
-        return c.services.get_characteristic(FELDER['dark_threshold'][0]) \
-            is not None
-    except Exception:
-        return False
+    uuid = FELDER['dark_threshold'][0]
+    ende = time.monotonic() + sekunden
+    while time.monotonic() < ende:
+        try:
+            if c.services.get_characteristic(uuid) is not None:
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+    return False
 
 
-async def verbinde(ziel, versuche=3):
+async def verbinde(ziel, versuche=2):
     """Verbindet sich mit einem Geraet oder einer Adresse -- oder sagt warum.
 
-    Das Zeitfenster nach einem Knopfdruck ist kurz. Was hier schiefgeht, muss
-    deshalb sofort sichtbar sein und sofort noch einmal versucht werden, statt
-    still in die naechste Wartschleife zu fallen. Eine Verbindung ohne
-    Merkmalstabelle war frueher eine laute Fehlermeldung und ein neuer Anlauf
-    binnen Sekunden; dass sie am 18.08.2026 stumm verworfen wurde und in 120
-    Sekunden Warten muendete, war eine Verschlechterung und ist der Grund fuer
-    diese Funktion.
+    Das Zeitfenster nach einem Knopfdruck ist kurz, und ein Fehlschlag muss
+    deshalb sofort sichtbar sein. Aber ein Fehlschlag ist erst einer, wenn
+    auch das Warten auf die Merkmalstabelle nichts gebracht hat -- siehe
+    merkmale_abwarten.
     """
     for versuch in range(1, versuche + 1):
         try:
-            c = BleakClient(ziel, timeout=8.0)
+            c = BleakClient(ziel, timeout=10.0)
             await c.connect()
         except Exception as e:
+            spur('connect fehlgeschlagen: %s' % type(e).__name__)
             if versuch == versuche:
                 print('   Verbindung abgelehnt (%s)' % type(e).__name__,
                       flush=True)
                 return None
             continue
-        if hat_merkmale(c):
+        spur('verbunden, warte auf Merkmale')
+        if await merkmale_abwarten(c):
+            spur('Merkmale da')
             return c
-        print('   verbunden, aber ohne Merkmalstabelle -- Versuch %d von %d'
-              % (versuch, versuche), flush=True)
+        print('   verbunden, aber die Merkmale kamen nicht (Versuch %d von'
+              ' %d)' % (versuch, versuche), flush=True)
+        spur('Merkmale blieben aus, trenne')
         try:
             await c.disconnect()
         except Exception:
             pass
-    print('   dreimal ohne Merkmalstabelle -- der Sensor laesst uns nicht'
-          ' heran.', flush=True)
-    print('   Knopf am Sensor druecken.', flush=True)
+    print('   Der Sensor laesst uns nicht heran. Knopf am Sensor druecken.',
+          flush=True)
     return None
 
 
@@ -355,6 +383,7 @@ async def lesen(c, uuid, breite, mit_vorzeichen=False):
 
 async def schreiben(c, uuid, breite, wert):
     roh = wert.to_bytes(breite, 'little', signed=wert < 0)
+    spur('schreibe %s = %d (%s)' % (uuid[:8], wert, roh.hex()))
     await c.write_gatt_char(uuid, roh, response=False)
 
 
@@ -366,11 +395,15 @@ def mahnen(vergangen, gemahnt):
     Minuten Stille bedeuten, dass das Fenster zu ist und niemand es merkt.
     Stumm zu warten heisst, den Unterschied zu verschweigen.
     """
-    marken = [(20, '   ... 20 s, noch nichts gehoert. Er funkt einmal pro'
-                   ' Minute, das ist normal.'),
-              (50, '   ... 50 s. Jetzt haette eines kommen muessen.'),
-              (80, '   ... 80 s. Knopf am Sensor druecken.'),
-              (140, '   ... 140 s. Ohne Knopfdruck wird das nichts.')]
+    # Der Takt sind sechzig Sekunden, und er faengt nach jedem Trennen von
+    # vorn an. Bis neunzig Sekunden ist also nichts geschehen, was der Rede
+    # wert waere -- eine Mahnung nach fuenfzig hat am 19.08.2026 nur dazu
+    # gefuehrt, dass jemand voellig zu Recht genervt auf den Knopf drueckte.
+    marken = [(35, '   ... 35 s. Er funkt einmal pro Minute, und der Takt'
+                   ' faengt nach dem Trennen von vorn an.'),
+              (95, '   ... 95 s. Jetzt haette eines kommen muessen.'),
+              (150, '   ... 150 s. Knopf am Sensor druecken.'),
+              (240, '   ... 240 s. Ohne Knopfdruck wird das nichts.')]
     for i, (sekunde, text) in enumerate(marken, start=1):
         if vergangen >= sekunde and gemahnt < i:
             print(text, flush=True)
@@ -892,6 +925,7 @@ async def messen_und_fassen(sekunden=120):
                 continue
             if erstes is None:
                 erstes = paket
+                spur('Paket %s' % paket.get('roh', ''))
             c = await verbinde(dev)
             if c is not None:
                 return erstes, c
@@ -1248,6 +1282,9 @@ async def cmd_bisect(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--log', metavar='DATEI',
+                   help='alles mitschreiben, auch was bleak selbst meldet.'
+                        ' Vor dem Befehl angeben.')
     sub = p.add_subparsers(dest='cmd', required=True)
 
     def mit_weg(p):
@@ -1326,6 +1363,15 @@ def main():
                         ' mitschreiben')
 
     args = p.parse_args()
+    if getattr(args, 'log', None):
+        global SPUR
+        SPUR = open(args.log, 'a', encoding='utf-8')
+        spur('--- %s %s ---' % (time.strftime('%d.%m.%Y %H:%M:%S'), args.cmd))
+        # bleak schreibt selbst mit, und das ist der eigentliche Gewinn: was
+        # der Bluetooth-Stapel tut, sieht man sonst nirgends.
+        logging.basicConfig(filename=args.log, level=logging.DEBUG,
+                            format='%(asctime)s  %(name)s  %(message)s')
+        print('Spur laeuft mit in %s' % args.log)
     befehle = {'dump': cmd_dump, 'gatt': cmd_gatt, 'key': cmd_key,
                'fields': cmd_fields, 'probe': cmd_probe, 'get': cmd_get,
                'listen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
