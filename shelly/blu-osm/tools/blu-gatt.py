@@ -107,6 +107,15 @@ except ImportError:
 
 ADDR = 'FC:4D:6A:38:E2:F2'
 
+# Der Knopf und das Display, in einem Satz -- weil ein falscher Rat hier
+# teurer ist als gar keiner. Am 19.08.2026 stand in jeder Fehlermeldung
+# "Knopf am Sensor druecken", und das ist genau verkehrt, wenn "set" schon im
+# Display steht: der naechste Druck fuehrt tiefer hinein statt hinaus.
+KNOPF = ('Steht "set" im Display, nimmt er keine Verbindung an -- warten, bis'
+         ' es\n   von selbst verschwindet. Steht es nicht da: ein Mal'
+         ' druecken, dann\n   warten, bis "set" wieder weg ist. Erst dann ist'
+         ' er ansprechbar.')
+
 # Name -> (UUID, Breite in Bytes). Die Zuordnung stammt aus dem Mitschnitt:
 # jede Einstellung einmal in der App geaendert, mit auffaelligen Zahlen, und
 # im Protokoll nachgesehen, welches Merkmal sich bewegt hat.
@@ -284,8 +293,8 @@ async def verbinde(ziel, versuche=2):
             await c.disconnect()
         except Exception:
             pass
-    print('   Der Sensor laesst uns nicht heran. Knopf am Sensor druecken.',
-          flush=True)
+    print('   Der Sensor laesst uns nicht heran.', flush=True)
+    print('   %s' % KNOPF, flush=True)
     return None
 
 
@@ -402,8 +411,8 @@ def mahnen(vergangen, gemahnt):
     marken = [(35, '   ... 35 s. Er funkt einmal pro Minute, und der Takt'
                    ' faengt nach dem Trennen von vorn an.'),
               (95, '   ... 95 s. Jetzt haette eines kommen muessen.'),
-              (150, '   ... 150 s. Knopf am Sensor druecken.'),
-              (240, '   ... 240 s. Ohne Knopfdruck wird das nichts.')]
+              (150, '   ... 150 s. ' + KNOPF),
+              (240, '   ... 240 s. So wird das nichts. ' + KNOPF)]
     for i, (sekunde, text) in enumerate(marken, start=1):
         if vergangen >= sekunde and gemahnt < i:
             print(text, flush=True)
@@ -591,7 +600,9 @@ async def cmd_probe(args):
 
     print('Setze beide Schwellen auf %d und hoere dann %d Pakete lang zu.'
           % (args.wert, args.pakete))
-    print('Ein Mal den Knopf am Sensor druecken.\n', flush=True)
+    print('   %s' % KNOPF)
+    print('   Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
+          flush=True)
 
     c = await fassen(minuten=args.warten, weg=args.weg)
     if not c:
@@ -992,10 +1003,15 @@ async def cmd_track(args):
     dunkel_uuid, breite = FELDER['dark_threshold']
     hell_uuid, _ = FELDER['bright_threshold']
 
-    print('Folge der Helligkeit, %d Runden, etwa eine Minute je Runde.'
+    print('Folge der Helligkeit, %d Runden. Eine Runde ist ein Funkintervall,'
           % args.runden)
-    print('Jetzt ein Mal den Knopf am Sensor druecken. Danach laeuft es'
-          ' allein.\n', flush=True)
+    print('also rund eine Minute -- das macht etwa %d Minuten insgesamt. Der'
+          % args.runden)
+    print('Sensor funkt nicht schneller, und abbrechen darf man jederzeit:')
+    print('jede Zeile steht fuer sich, es gibt kein Ergebnis erst am Ende.')
+    print('   %s' % KNOPF)
+    print('   Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
+          flush=True)
 
     c = await fassen(minuten=args.warten, weg=args.weg)
     if not c:
@@ -1119,9 +1135,8 @@ async def cmd_bisect(args):
 
     print('Einkreisen zwischen %d und %d, hoechstens %d Schritte.'
           % (lo, hi, args.schritte))
-    print('Jetzt ein Mal den Knopf am Sensor druecken. Danach laeuft alles von')
-    print('allein -- weitere Knopfdruecke braucht das Skript nicht.')
-    print('Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
+    print('   %s' % KNOPF)
+    print('   Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
           flush=True)
 
     c = await fassen(minuten=args.warten, weg=args.weg)
@@ -1332,7 +1347,8 @@ def main():
                                      ' sich bewegt'))
     tr.add_argument('--start', type=int, default=None,
                     help='Startschwelle, sonst die vorhandene')
-    tr.add_argument('--runden', type=int, default=60)
+    tr.add_argument('--runden', type=int, default=20,
+                    help='eine Runde ist ein Funkintervall, also eine Minute')
     tr.add_argument('--weite', type=int, default=64,
                     help='groesster Schritt, mit dem nachgefuehrt wird')
     tr.add_argument('--min', type=int, default=0)
