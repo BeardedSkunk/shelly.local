@@ -10,7 +10,8 @@
     python blu-gatt.py pin 123456      PIN schicken, dann den Schluessel lesen
     python blu-gatt.py shell           einmal verbinden, dann viele Befehle
     python blu-gatt.py probe 40        eine Schwelle, viele Pakete
-    python blu-gatt.py bisect          Helligkeit einkreisen
+    python blu-gatt.py track           der Helligkeit folgen, auch bewegter
+    python blu-gatt.py bisect          Helligkeit einkreisen (nur stillstehend)
 
 Jeder dieser Befehle laeuft auch einzeln, ohne die shell -- die shell spart nur
 die Wartezeit auf die Verbindung, wenn man mehrere hintereinander braucht.
@@ -895,6 +896,130 @@ async def schwellen_setzen(c, wert):
             await lesen(c, hell_uuid, breite))
 
 
+async def cmd_track(args):
+    """Folgt der Helligkeit, statt sie einzukreisen.
+
+    Einkreisen halbiert eine Klammer und kann darum nur einmal falsch liegen:
+    was einmal ausgeschlossen ist, bleibt ausgeschlossen. Das ist richtig,
+    solange das Gesuchte stillhaelt -- und falsch bei Sonnenaufgang. Am
+    19.08.2026 lief eine Suche in eine Klammer von 5 bis 6, waehrend es
+    draussen hell wurde; jeder Schritt antwortete auf eine andere Helligkeit
+    als der davor, und das Ergebnis galt fuer keinen der beiden Zeitpunkte.
+
+    Also nicht halbieren, sondern nachfuehren. Die Schwelle wird gesetzt, das
+    Urteil abgewartet und die Schwelle um einen Schritt in die Richtung
+    verschoben, aus der das Urteil kam: hell heisst zu niedrig, dunkel heisst
+    zu hoch. Sie pendelt dann um den wahren Wert und wandert mit ihm.
+    Nichts wird ausgeschlossen, und darum kann nichts falsch ausgeschlossen
+    werden.
+
+    Die Schrittweite verdoppelt sich, solange es in dieselbe Richtung geht,
+    und faellt auf eins zurueck, sobald das Urteil umschlaegt. So ist der
+    Anfang schnell, auch wenn der Startwert weit daneben liegt, und danach
+    steht die Schwelle so fein wie moeglich.
+
+    Was dabei entsteht, ist die Zeitreihe, die der Sensor selbst nicht
+    hergibt: die Helligkeit in den Einheiten seiner eigenen Schwellen, Minute
+    fuer Minute.
+    """
+    dunkel_uuid, breite = FELDER['dark_threshold']
+    hell_uuid, _ = FELDER['bright_threshold']
+
+    print('Folge der Helligkeit, %d Runden, etwa eine Minute je Runde.'
+          % args.runden)
+    print('Jetzt ein Mal den Knopf am Sensor druecken. Danach laeuft es'
+          ' allein.\n', flush=True)
+
+    c = await fassen(minuten=args.warten, weg=args.weg)
+    if not c:
+        return print('keine Verbindung.')
+    original = (await lesen(c, dunkel_uuid, breite),
+                await lesen(c, hell_uuid, breite))
+    print('Schwellen vorher: dunkel %d, hell %d' % original, flush=True)
+
+    wert = original[0] if args.start is None else args.start
+    wert = max(args.min, min(args.max, wert))
+    weite = 1
+    zuletzt = None
+    print('Start bei %d.\n' % wert)
+    print('  Zeit    Schwelle  0x64  Urteil    naechste')
+    angefangen = time.monotonic()
+    runde = 0
+    try:
+        while runde < args.runden:
+            runde += 1
+            if c is None:
+                c = await fassen(minuten=args.warten, weg=args.weg)
+                if c is None:
+                    print('  keine Verbindung mehr -- Schluss')
+                    break
+            try:
+                zurueck = await schwellen_setzen(c, wert)
+            except Exception:
+                c = None
+                runde -= 1
+                continue
+            if zurueck != (wert, wert):
+                print('  Schwellen nicht uebernommen (%d/%d)' % zurueck,
+                      flush=True)
+                c = None
+                runde -= 1
+                continue
+            await c.disconnect()
+            c = None
+            await asyncio.sleep(2.5)
+
+            paket, c = await messen_und_fassen(args.geduld)
+            if paket is None or 0x1e not in paket:
+                runde -= 1
+                continue
+            hell = bool(paket[0x1e])
+
+            # Umschlag heisst: wir sind darueber gelaufen. Dann wieder fein.
+            if zuletzt is not None and hell != zuletzt:
+                weite = 1
+            elif zuletzt is not None:
+                weite = min(weite * 2, args.weite)
+            zuletzt = hell
+
+            naechste = wert + weite if hell else wert - weite
+            naechste = max(args.min, min(args.max, naechste))
+            print('  %5.0f s  %8d  %4s  %-8s  %d'
+                  % (time.monotonic() - angefangen, wert,
+                     paket.get(0x64, '-'), 'hell' if hell else 'dunkel',
+                     naechste), flush=True)
+            wert = naechste
+
+        print('\nZuletzt stand die Schwelle auf %d. Solange sie um einen'
+              ' Wert pendelt,' % wert)
+        print('ist das die Helligkeit in Schwellen-Einheiten; wandert sie'
+              ' stetig, wandert')
+        print('das Licht.')
+    finally:
+        if args.behalten:
+            print('\nDie Schwellen bleiben auf %d.' % wert)
+        else:
+            print('\nSetze zurueck auf dunkel %d, hell %d.' % original,
+                  flush=True)
+            if c is None:
+                _, c = await messen_und_fassen(args.geduld)
+            if c is None:
+                c = await fassen(minuten=args.warten, weg=args.weg)
+            if c is None:
+                print('   keine Verbindung. Bitte nachholen:')
+                print('     python blu-gatt.py set bright %d' % original[1])
+                print('     python blu-gatt.py set dark %d' % original[0])
+            else:
+                await schreiben(c, hell_uuid, breite, original[1])
+                await schreiben(c, dunkel_uuid, breite, original[0])
+                await asyncio.sleep(0.4)
+                print('   jetzt: dunkel %d, hell %d'
+                      % (await lesen(c, dunkel_uuid, breite),
+                         await lesen(c, hell_uuid, breite)))
+        if c is not None:
+            await c.disconnect()
+
+
 async def cmd_bisect(args):
     """Kreist die Helligkeit ein -- ein Knopfdruck am Anfang, dann von allein.
 
@@ -1122,6 +1247,20 @@ def main():
                                 help='PIN schicken und den Schluessel lesen'))
     pn.add_argument('pin', type=int)
 
+    tr = mit_weg(sub.add_parser('track',
+                                help='der Helligkeit folgen, auch wenn sie'
+                                     ' sich bewegt'))
+    tr.add_argument('--start', type=int, default=None,
+                    help='Startschwelle, sonst die vorhandene')
+    tr.add_argument('--runden', type=int, default=60)
+    tr.add_argument('--weite', type=int, default=64,
+                    help='groesster Schritt, mit dem nachgefuehrt wird')
+    tr.add_argument('--min', type=int, default=0)
+    tr.add_argument('--max', type=int, default=65535)
+    tr.add_argument('--geduld', type=int, default=120)
+    tr.add_argument('--warten', type=float, default=5.0)
+    tr.add_argument('--behalten', action='store_true')
+
     b = mit_weg(sub.add_parser('bisect', help='die Helligkeit einkreisen'))
     b.add_argument('--von', type=int, default=0)
     b.add_argument('--bis', type=int, default=65535,
@@ -1145,7 +1284,8 @@ def main():
     befehle = {'dump': cmd_dump, 'gatt': cmd_gatt, 'key': cmd_key,
                'fields': cmd_fields, 'probe': cmd_probe, 'get': cmd_get,
                'listen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
-               'shell': cmd_shell, 'bisect': cmd_bisect}
+               'shell': cmd_shell, 'track': cmd_track,
+               'bisect': cmd_bisect}
     asyncio.run(befehle[args.cmd](args))
 
 
