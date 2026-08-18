@@ -6,6 +6,7 @@
     python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
     python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
+                                                 (ein Knopfdruck am Anfang)
 
 Warum es nie sofort geht: der Sensor funkt einmal pro Minute und schweigt
 dazwischen. Eine Verbindung kann nur zustande kommen, waehrend er funkt -- das
@@ -42,7 +43,10 @@ von 99 auf 98 Prozent ging. Das ist mit hoher Wahrscheinlichkeit die
 Batteriespannung in Hundertstel Volt.
 
 Deshalb bisect: die Helligkeit laesst sich nur einkreisen, indem man die
-Schwelle verstellt und zusieht, auf welcher Seite der Sensor landet.
+Schwelle verstellt und zusieht, auf welcher Seite der Sensor landet. Ein
+Knopfdruck zu Beginn, danach laeuft es allein -- jeder Schritt hoert ein
+Funkpaket ab und greift im selben Fenster fuer den naechsten Schreibvorgang zu,
+sodass ein Schritt ein Funkintervall kostet und nicht zwei.
 """
 
 import argparse
@@ -265,32 +269,6 @@ def bthome_lesen(daten):
     return aus
 
 
-async def rundfunk_abwarten(sekunden=90):
-    """Wartet auf das naechste Funkpaket und liest hell/dunkel daraus.
-
-    Der Sensor funkt nicht, solange eine Verbindung steht -- also erst trennen,
-    dann zuhoeren. Das geht vom selben Rechner aus; ein Shelly als Zuhoerer ist
-    dafuer nicht noetig, auch wenn er es koennte.
-    """
-    ergebnis = asyncio.Queue()
-
-    def gesehen(dev, adv):
-        if dev.address.upper() != ADDR:
-            return
-        daten = adv.service_data.get(BTHOME_UUID)
-        if daten:
-            ergebnis.put_nowait(bthome_lesen(daten))
-
-    sc = BleakScanner(detection_callback=gesehen)
-    await sc.start()
-    try:
-        return await asyncio.wait_for(ergebnis.get(), timeout=sekunden)
-    except asyncio.TimeoutError:
-        return None
-    finally:
-        await sc.stop()
-
-
 async def cmd_dump(args):
     c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
@@ -451,74 +429,204 @@ async def cmd_shell(args):
         print('getrennt')
 
 
-async def cmd_bisect(args):
-    """Kreist die Helligkeit ein, indem beide Schwellen gemeinsam wandern.
+async def messen_und_fassen(sekunden=120):
+    """Hoert ein Funkpaket ab und greift im selben Atemzug zu.
 
-    Der Sensor kennt zwei Schwellen, eine fuer den Weg nach dunkel und eine
-    fuer den Weg nach hell. Dazwischen bleibt er stehen, wo er ist -- eine
-    Hysterese, die eine Messung wertlos macht: er wuerde aus Traegheit auf
-    dunkel stehenbleiben und wir hielten das fuer ein Ergebnis. Beide Schwellen
-    auf denselben Wert zu setzen nimmt sie weg. Dann ist jeder Schritt ein
-    einzelner Vergleich: ueber dem Wert hell, darunter dunkel, unabhaengig
-    davon, wie er vorher stand.
+    Beides zusammen, weil beides dasselbe Fenster braucht: die Entscheidung
+    hell/dunkel steht nur im Rundfunk und nirgends in GATT, und verbinden laesst
+    sich der Sensor nur, waehrend er funkt. Getrennt gemacht kostet jeder
+    Messschritt zwei Funkintervalle statt einem -- bei einem Sensor, der einmal
+    pro Minute etwas sagt, ist das der Unterschied zwischen einer halben und
+    einer ganzen Stunde.
+
+    Zurueck kommt (Paket, Verbindung). Das Paket ist das erste nach dem Anfang
+    des Zuhoerens und damit die Antwort auf die zuletzt gesetzte Schwelle. Die
+    Verbindung kann fehlen, wenn das Fenster schon wieder zu war -- dann steht
+    die Antwort trotzdem fest und nur der naechste Schreibzugriff muss warten.
+    """
+    q = asyncio.Queue()
+
+    def gesehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        if daten:
+            q.put_nowait((bthome_lesen(daten), dev))
+
+    erstes = None
+    sc = BleakScanner(detection_callback=gesehen)
+    await sc.start()
+    ende = asyncio.get_event_loop().time() + sekunden
+    try:
+        while asyncio.get_event_loop().time() < ende:
+            try:
+                paket, dev = await asyncio.wait_for(q.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                continue
+            if erstes is None:
+                erstes = paket
+            try:
+                c = BleakClient(dev, timeout=8.0)
+                await c.connect()
+                return erstes, c
+            except Exception:
+                continue  # Fenster verpasst, das naechste Paket kommt bestimmt
+    finally:
+        await sc.stop()
+    return erstes, None
+
+
+async def schwellen_setzen(c, wert):
+    """Setzt beide Schwellen und liest nach, ob sie wirklich stehen.
+
+    Nachlesen ist nicht Zierde: ein stillschweigend verworfener Schreibvorgang
+    wuerde die naechste Messung zur Antwort auf die vorige machen, und die
+    Einkreisung liefe in die falsche Richtung, ohne dass es auffiele.
     """
     dunkel_uuid, breite = FELDER['schwelle_dunkel']
     hell_uuid, _ = FELDER['schwelle_hell']
+    await schreiben(c, dunkel_uuid, breite, wert)
+    await schreiben(c, hell_uuid, breite, wert)
+    await asyncio.sleep(0.4)
+    return (await lesen(c, dunkel_uuid, breite),
+            await lesen(c, hell_uuid, breite))
 
+
+async def cmd_bisect(args):
+    """Kreist die Helligkeit ein -- ein Knopfdruck am Anfang, dann von allein.
+
+    Der Sensor gibt seinen Messwert nicht her, nur sein Urteil. Also wird die
+    Schwelle verstellt und zugesehen, auf welche Seite er faellt: liegt sie
+    unter der Helligkeit, meldet er hell, darueber dunkel. Jeder Schritt
+    halbiert die Klammer.
+
+    Beide Schwellen wandern gemeinsam auf denselben Wert, und das mit Absicht.
+    Der Sensor hat eine fuer den Weg nach dunkel und eine fuer den Weg nach
+    hell, und dazwischen bleibt er aus Traegheit stehen, wo er war -- eine
+    Hysterese, die jede Messung wertlos machen wuerde. Gleiche Schwellen nehmen
+    sie weg: dann ist jeder Schritt ein einzelner Vergleich, unabhaengig davon,
+    wie er vorher stand.
+
+    Am Ende stehen die alten Schwellen wieder da, ausser man sagt --behalten.
+    Zwei gleiche Schwellen sind kein Zustand, in dem man einen Sensor laesst.
+    """
     lo, hi = args.von, args.bis
-    print('Einkreisen zwischen %d und %d, %d Schritte.' % (lo, hi, args.schritte))
-    print('Nach jedem Schritt: Knopf druecken, wenn das Skript darum bittet.\n')
 
-    original = None
-    for schritt in range(1, args.schritte + 1):
-        pruef = (lo + hi) // 2
-        print('Schritt %d/%d -- pruefe %d   (Klammer %d .. %d)'
-              % (schritt, args.schritte, pruef, lo, hi), flush=True)
-        c = await fassen(weg=getattr(args, 'weg', 1))
-        if not c:
-            print('   keine Verbindung, abgebrochen')
-            break
-        try:
-            if original is None:
-                original = (await lesen(c, dunkel_uuid, breite),
-                            await lesen(c, hell_uuid, breite))
-                print('   urspruengliche Schwellen: dunkel %d, hell %d' % original, flush=True)
-            await schreiben(c, dunkel_uuid, breite, pruef)
-            await schreiben(c, hell_uuid, breite, pruef)
-            await asyncio.sleep(0.4)
-            print('   gesetzt: beide Schwellen auf %d' % pruef, flush=True)
-        finally:
-            await c.disconnect()
+    print('Einkreisen zwischen %d und %d, hoechstens %d Schritte.'
+          % (lo, hi, args.schritte))
+    print('Jetzt ein Mal den Knopf am Sensor druecken. Danach laeuft alles von')
+    print('allein -- weitere Knopfdruecke braucht das Skript nicht.')
+    print('Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
+          flush=True)
 
-        # Erst getrennt funkt er wieder, und nur sein Funk verraet die
-        # Entscheidung -- ueber GATT ist sie nirgends zu lesen.
-        print('   warte auf sein naechstes Funkpaket ...', flush=True)
-        paket = await rundfunk_abwarten(args.geduld)
-        if paket is None or 0x1e not in paket:
-            print('   kein verwertbares Paket -- Schritt uebersprungen\n', flush=True)
-            continue
-        hell = bool(paket[0x1e])
-        print('   Sensor meldet: %s   (%.1f C, %d %%)'
-              % ('HELL' if hell else 'dunkel',
-                 paket.get(0x45, 0) / 10.0, paket.get(0x2e, 0)), flush=True)
+    c = await fassen(minuten=args.warten, weg=args.weg)
+    if not c:
+        return print('keine Verbindung. Knopf gedrueckt? Laeuft sonst noch'
+                     ' etwas ueber Bluetooth gegen diesen Sensor?')
 
-        if hell:
-            hi = pruef      # Helligkeit liegt ueber dem Pruefwert
-        else:
-            lo = pruef
-        print('   Klammer jetzt %d .. %d\n' % (lo, hi), flush=True)
+    dunkel_uuid, breite = FELDER['schwelle_dunkel']
+    hell_uuid, _ = FELDER['schwelle_hell']
+    original = (await lesen(c, dunkel_uuid, breite),
+                await lesen(c, hell_uuid, breite))
+    print('verbunden. Schwellen vorher: dunkel %d, hell %d\n' % original,
+          flush=True)
 
-    print('Ergebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
-    if original and args.zuruecksetzen:
-        print('\nSetze die urspruenglichen Schwellen zurueck.')
-        c = await fassen(weg=getattr(args, 'weg', 1))
-        if c:
+    schritt = 0
+    versuche = 0
+    try:
+        while schritt < args.schritte and hi - lo > args.genau:
+            schritt += 1
+            versuche += 1
+            if versuche > args.schritte * 3:
+                print('zu viele Fehlversuche -- abgebrochen')
+                break
+            pruef = (lo + hi) // 2
+            print('Schritt %d/%d -- pruefe %d   (Klammer %d .. %d)'
+                  % (schritt, args.schritte, pruef, lo, hi), flush=True)
+
+            if c is None:
+                print('   warte auf ein Fenster zum Schreiben ...', flush=True)
+                c = await fassen(minuten=args.warten, weg=args.weg)
+                if c is None:
+                    print('   keine Verbindung mehr -- abgebrochen')
+                    break
             try:
+                zurueck = await schwellen_setzen(c, pruef)
+            except Exception as e:
+                print('   Verbindung weg (%s) -- neuer Anlauf\n'
+                      % type(e).__name__, flush=True)
+                c = None
+                schritt -= 1
+                continue
+            if zurueck != (pruef, pruef):
+                print('   Schwellen nicht uebernommen (dunkel %d, hell %d)'
+                      ' -- neuer Anlauf\n' % zurueck, flush=True)
+                schritt -= 1
+                continue
+
+            await c.disconnect()
+            c = None
+            await asyncio.sleep(1.0)  # der Funk kommt erst nach dem Trennen
+
+            print('   gesetzt. warte auf sein naechstes Funkpaket ...',
+                  flush=True)
+            paket, c = await messen_und_fassen(args.geduld)
+            if paket is None or 0x1e not in paket:
+                print('   kein verwertbares Paket -- Schritt wiederholt\n',
+                      flush=True)
+                schritt -= 1
+                continue
+
+            hell = bool(paket[0x1e])
+            print('   Sensor meldet: %s   (%.1f C, %d %%, Batterie %d %%)'
+                  % ('HELL' if hell else 'dunkel',
+                     paket.get(0x45, 0) / 10.0, paket.get(0x2e, 0),
+                     paket.get(0x01, 0)), flush=True)
+
+            # Hell heisst: die Helligkeit liegt ueber dem Pruefwert. Dann ist
+            # der Pruefwert die neue Untergrenze, nicht die neue Obergrenze.
+            if hell:
+                lo = pruef
+            else:
+                hi = pruef
+            print('   Klammer jetzt %d .. %d\n' % (lo, hi), flush=True)
+
+        print('Ergebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
+        if lo == args.von:
+            print('   Sie kann auch darunter liegen -- nach unten wurde die')
+            print('   Klammer nie verlassen. Mit --von tiefer ansetzen.')
+        if hi == args.bis:
+            print('   Sie kann auch darueber liegen -- nach oben wurde die')
+            print('   Klammer nie verlassen. Mit --bis hoeher ansetzen.')
+    finally:
+        if args.behalten:
+            print('\nDie Schwellen bleiben stehen, wo die Suche sie gelassen'
+                  ' hat.')
+        else:
+            print('\nSetze die urspruenglichen Schwellen zurueck'
+                  ' (dunkel %d, hell %d).' % original, flush=True)
+            if c is None:
+                _, c = await messen_und_fassen(args.geduld)
+            if c is None:
+                c = await fassen(minuten=args.warten, weg=args.weg)
+            if c is None:
+                print('   KEINE VERBINDUNG -- die Schwellen stehen noch auf')
+                print('   dem letzten Pruefwert. Bitte nachholen:')
+                print('     python blu-gatt.py set schwelle_dunkel %d'
+                      % original[0])
+                print('     python blu-gatt.py set schwelle_hell %d'
+                      % original[1])
+            else:
                 await schreiben(c, dunkel_uuid, breite, original[0])
                 await schreiben(c, hell_uuid, breite, original[1])
-                print('   dunkel %d, hell %d wiederhergestellt' % original)
-            finally:
-                await c.disconnect()
+                await asyncio.sleep(0.4)
+                nach = (await lesen(c, dunkel_uuid, breite),
+                        await lesen(c, hell_uuid, breite))
+                print('   jetzt: dunkel %d, hell %d%s'
+                      % (nach[0], nach[1],
+                         '' if nach == original else '   NICHT UEBERNOMMEN'))
+        if c is not None:
+            await c.disconnect()
 
 
 def main():
@@ -545,14 +653,21 @@ def main():
     pn = mit_weg(sub.add_parser('pin', help='PIN schicken und den Schluessel lesen'))
     pn.add_argument('pin', type=int)
 
-    b = sub.add_parser('bisect', help='die Helligkeit einkreisen')
+    b = mit_weg(sub.add_parser('bisect', help='die Helligkeit einkreisen'))
     b.add_argument('--von', type=int, default=0)
-    b.add_argument('--bis', type=int, default=1000)
-    b.add_argument('--schritte', type=int, default=5)
-    b.add_argument('--geduld', type=int, default=90,
+    b.add_argument('--bis', type=int, default=65535,
+                   help='zwei Bytes fasst das Feld, mehr geht nicht')
+    b.add_argument('--schritte', type=int, default=16,
+                   help='16 halbieren 65535 bis auf eins herunter')
+    b.add_argument('--genau', type=int, default=1,
+                   help='Schluss, sobald die Klammer so eng ist')
+    b.add_argument('--geduld', type=int, default=120,
                    help='Sekunden, die auf ein Funkpaket gewartet wird')
-    b.add_argument('--zuruecksetzen', action='store_true',
-                   help='am Ende die urspruenglichen Schwellen wiederherstellen')
+    b.add_argument('--warten', type=float, default=5.0,
+                   help='Minuten, die auf die erste Verbindung gewartet wird')
+    b.add_argument('--behalten', action='store_true',
+                   help='die gefundenen Schwellen stehen lassen statt die'
+                        ' urspruenglichen zurueckzuschreiben')
 
     args = p.parse_args()
     asyncio.run({'dump': cmd_dump, 'get': cmd_get, 'set': cmd_set, 'pin': cmd_pin,
