@@ -781,8 +781,13 @@ def varianten():
         ('B Geraet, frische Suche',
          lambda dev: BleakClient(dev, timeout=10.0,
                                  winrt={'use_cached_services': False})),
+        # Ueber die Adresse sucht bleak selbst, und zwar innerhalb seiner
+        # Frist. Zehn Sekunden sind bei einem Sender, der einmal pro Minute
+        # etwas sagt, so gut wie sicher zu wenig: am 18.08.2026 endete das
+        # viermal mit BleakDeviceNotFoundError, was nach einem fehlenden
+        # Geraet aussieht und nur ein zu kurzes Fenster war.
         ('C Adresse statt Geraet',
-         lambda dev: BleakClient(ADDR, timeout=10.0,
+         lambda dev: BleakClient(ADDR, timeout=75.0,
                                  winrt={'use_cached_services': True})),
         ('D Geraet, mit Kopplung',
          lambda dev: BleakClient(dev, timeout=10.0, pair=True)),
@@ -811,7 +816,7 @@ async def geraet_suchen(frist):
         await sc.stop()
 
 
-async def durchprobieren(dev, frist_je=12.0):
+async def durchprobieren(dev, frist_je=20.0):
     """Probiert alle Varianten und gibt die erste zurueck, die traegt.
 
     Eine Variante gilt erst als gelungen, wenn auch die Merkmale da sind --
@@ -1039,10 +1044,22 @@ async def cmd_test(args):
     gelungen = [b for b in bericht if b[3]]
     print('')
     if not gelungen:
-        print('  Nichts hat getragen. Dann liegt es nicht am Zeitpunkt,')
-        print('  sondern an der Kopplung zwischen Rechner und Sensor: in den')
-        print('  Windows-Bluetooth-Einstellungen entfernen, neu koppeln,')
-        print('  danach diesen Test wiederholen.')
+        print('  Nichts hat getragen -- in keinem Display-Zustand. Damit')
+        print('  ist der Zeitpunkt als Ursache erledigt.')
+        print('')
+        print('  Steht im Protokoll "session_status: ACTIVE" und trotzdem')
+        print('  "device unreachable when getting services", dann kommt die')
+        print('  Funkverbindung zustande und nur die GATT-Ebene nicht. Das')
+        print('  heisst: veraltete Kopplungsschluessel, oder ein anderes')
+        print('  Geraet haelt den Sensor besetzt -- er laesst nur eine')
+        print('  Verbindung zu.')
+        print('')
+        print('  Der Reihe nach:')
+        print('   1. Bluetooth am Handy aus (Shelly-App!) und noch einmal.')
+        print('   2. In den Windows-Bluetooth-Einstellungen den Sensor')
+        print('      entfernen. Am Sensor 1x, dann 4x druecken -- die Leuchte')
+        print('      blinkt eine Minute lang alle zwei Sekunden. Neu koppeln,')
+        print('      dann diesen Test wiederholen.')
     else:
         print('  Es geht bei: %s' % ', '.join(b[0].strip() for b in gelungen))
         haeufig = {}
@@ -1990,7 +2007,11 @@ def main():
 
     ts = sub.add_parser('test', help='durchprobieren, wie das Geraet'
                                      ' anzusprechen ist')
-    ts.add_argument('--frist', type=float, default=80.0,
+    # Gemessen am 18.08.2026: zwischen zwei Funkspruechen lagen 60 bis 75
+    # Sekunden, und zwei von vier Versuchen bekamen in achtzig Sekunden gar
+    # kein Paket zu sehen. Ein Fenster, das knapp ueber dem Takt liegt,
+    # verpasst ihn regelmaessig -- also deutlich darueber.
+    ts.add_argument('--frist', type=float, default=110.0,
                     help='Sekunden je Versuch, dann geht es weiter')
 
     dg = sub.add_parser('diag', help='messen, wie sich der Sensor verhaelt')
