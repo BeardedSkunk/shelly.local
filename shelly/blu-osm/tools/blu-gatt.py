@@ -1002,8 +1002,10 @@ async def cmd_track(args):
             c = None
             await asyncio.sleep(2.5)
 
+            angefangen_runde = time.monotonic()
             paket, c = await messen_und_fassen(args.geduld)
             if paket is None or 0x1e not in paket:
+                print('  kein Paket -- Runde wiederholt', flush=True)
                 runde -= 1
                 continue
             hell = bool(paket[0x1e])
@@ -1021,6 +1023,14 @@ async def cmd_track(args):
                   % (time.monotonic() - angefangen, wert,
                      paket.get(0x64, '-'), 'hell' if hell else 'dunkel',
                      naechste), flush=True)
+            if args.debug:
+                print('      [debug] %.0f s gewartet, %d dBm, Schrittweite %d,'
+                      ' Verbindung %s'
+                      % (time.monotonic() - angefangen_runde,
+                         paket.get('rssi', 0), weite,
+                         'gehalten' if c else 'verloren'))
+                print('      [debug] roh %s   %s'
+                      % (paket.get('roh', ''), paket_text(paket)), flush=True)
             wert = naechste
 
         print('\nZuletzt stand die Schwelle auf %d. Solange sie um einen'
@@ -1293,6 +1303,8 @@ def main():
     tr.add_argument('--geduld', type=int, default=120)
     tr.add_argument('--warten', type=float, default=5.0)
     tr.add_argument('--behalten', action='store_true')
+    tr.add_argument('--debug', action='store_true',
+                    help='zusaetzlich Rohpaket, Feldstaerke und Wartezeit')
 
     b = mit_weg(sub.add_parser('bisect', help='die Helligkeit einkreisen'))
     b.add_argument('--von', type=int, default=0)
