@@ -438,8 +438,23 @@ BTHOME_UUID = '0000fcd2-0000-1000-8000-00805f9b34fb'
 # sortiert, ein unbekanntes bricht das Zerlegen ab, und 0x15 stuende vor
 # 0x1e. Solange die Batterie voll ist, sendet er es nicht und es fiel nicht
 # auf -- unter 15 Prozent waere hell/dunkel schlagartig verschwunden.
-BREITEN = {0x00: 1, 0x01: 1, 0x15: 1, 0x1e: 1, 0x2e: 1, 0x40: 2, 0x45: 2,
-           0x64: 1}
+BREITEN = {
+    0x00: 1,   # Paketzaehler
+    0x01: 1,   # Batterie %
+    0x02: 2,   # Temperatur 0.01 C
+    0x03: 2,   # Feuchte 0.01 %
+    0x04: 3,   # Luftdruck
+    0x05: 3,   # Beleuchtungsstaerke, 0.01 lux
+    0x0c: 2,   # Spannung
+    0x15: 1,   # Batterie schwach
+    0x1e: 1,   # hell/dunkel
+    0x2e: 1,   # Feuchte %
+    0x3f: 2,   # Drehung
+    0x40: 2,   # Abstand mm
+    0x41: 2,   # Abstand m
+    0x45: 2,   # Temperatur 0.1 C
+    0x64: 1,   # Stufe, siehe STUFEN
+}
 
 
 # Objekt 0x64 heisst beim Hersteller "light level" und sieht nach einer
@@ -458,6 +473,8 @@ STUFEN = {0: 'dunkel', 1: 'dazwischen', 2: 'hell'}
 def paket_text(paket):
     """Ein Funkpaket in eine Zeile."""
     teile = []
+    if 0x05 in paket:
+        teile.append('LUX %.2f' % (paket[0x05] / 100.0))
     if 0x64 in paket:
         teile.append('Stufe %d %-12s' % (paket[0x64],
                                          '(%s)' % STUFEN.get(paket[0x64], '?')))
@@ -678,6 +695,35 @@ async def naechstes_paket(sekunden=90):
 TEST_LOG = 'blu-test.log'
 
 
+class Zwiefach:
+    """Schreibt auf den Bildschirm und in die Datei zugleich.
+
+    Ein Konsolenfenster haelt nur so viele Zeilen, wie irgendwer irgendwann
+    eingestellt hat, und der Anfang eines Laufs ist genau der Teil, der
+    zuerst verlorengeht -- am 19.08.2026 fehlte er, und mit ihm der erste
+    Versuch. Wer hinterher verstehen will, was passiert ist, braucht die
+    ganze Sitzung als Datei und nicht das, was noch im Fenster stand.
+
+    Zeilen, die mit Wagenruecklauf anfangen, sind laufende Zaehler und werden
+    nicht mitgeschrieben: sie ueberschreiben sich auf dem Bildschirm und
+    wuerden die Datei mit tausend Zwischenstaenden fuellen.
+    """
+
+    def __init__(self, konsole, datei):
+        self.konsole = konsole
+        self.datei = datei
+
+    def write(self, text):
+        self.konsole.write(text)
+        if not text.startswith('\r'):
+            self.datei.write(text)
+            self.datei.flush()
+
+    def flush(self):
+        self.konsole.flush()
+        self.datei.flush()
+
+
 async def frage(text):
     """Fragt auf der Konsole. Blockiert nur diesen einen Punkt, nichts sonst."""
     schleife = asyncio.get_event_loop()
@@ -755,10 +801,11 @@ async def geraet_suchen(frist):
     try:
         aus = await mit_zaehler(q.get(), frist, 'suche ein Funkpaket')
         if aus is None:
-            return None, {}
+            return None, {}, ''
         dev, daten = aus
-        spur('Geraet gesehen, Dienstdaten %s' % (daten.hex() if daten else '-'))
-        return dev, (bthome_lesen(daten) if daten else {})
+        roh = daten.hex() if daten else ''
+        spur('Geraet gesehen, Dienstdaten %s' % (roh or '-'))
+        return dev, (bthome_lesen(daten) if daten else {}), roh
     finally:
         await sc.stop()
 
@@ -771,6 +818,8 @@ async def durchprobieren(dev, frist_je=12.0):
     """
     ergebnisse = []
     for name, bauen in varianten():
+        if dev is None and 'Adresse' not in name:
+            continue   # ohne Geraeteobjekt geht nur der Weg ueber die Adresse
         spur('Variante %s beginnt' % name)
         t = time.monotonic()
         try:
@@ -885,6 +934,11 @@ async def cmd_test(args):
                             format='%(asctime)s  %(name)s  %(message)s')
     spur('=== test %s ===' % time.strftime('%d.%m.%Y %H:%M:%S'))
 
+    # Ab hier steht jede Zeile auch in der Datei. Damit genuegt sie allein,
+    # und das Konsolenfenster darf so kurz sein, wie es will.
+    echt = sys.stdout
+    sys.stdout = Zwiefach(echt, SPUR)
+
     print('Vier Versuche, etwa acht Minuten. Alles geht nach %s.' % TEST_LOG)
     print('Vor jedem Versuch steht, was zu tun ist; mit Enter geht es weiter.')
     print('Kein Versuch dauert laenger als %.0f Sekunden.' % args.frist)
@@ -911,16 +965,31 @@ async def cmd_test(args):
         print('  -> Ausgangszustand: Display %s' % zustand)
         spur('Display %s' % zustand)
 
-        dev, paket = await geraet_suchen(args.frist)
+        dev, paket, roh = await geraet_suchen(args.frist)
+        if roh:
+            print('    Paket roh: %s' % roh)
+            print('    Paket:     %s' % paket_text(paket))
+            verbraucht = 1
+            for kennung in paket:
+                verbraucht += 1 + BREITEN.get(kennung, 0)
+            if verbraucht < len(roh) // 2:
+                print('    ACHTUNG: ab Byte %d unbekannt -- %s'
+                      % (verbraucht, roh[verbraucht * 2:]))
+                print('    Das ist ein Pakettyp, den wir noch nicht kennen.')
         if dev is None:
-            print('    kein Funkpaket in %.0f s -- Versuch faellt aus.'
-                  % args.frist)
-            bericht.append((name, zustand, 'kein Paket', None))
-            continue
-        if paket:
-            print('    Paket: %s' % paket_text(paket))
+            # Kein Funkpaket heisst nicht, dass nichts geht: ueber die Adresse
+            # laesst sich ein gekoppeltes Geraet auch ohne frisches Paket
+            # ansprechen. Frueher fiel der Versuch hier aus und lieferte gar
+            # nichts -- lieber ein Versuch mit halber Aussicht als keiner.
+            print('    kein Funkpaket in %.0f s. Versuche es trotzdem ueber'
+                  ' die Adresse.' % args.frist)
+            spur('kein Paket, weiche auf die Adresse aus')
 
         gewinner, c, alle = await durchprobieren(dev)
+        if c is None and dev is not None:
+            print('    Noch einmal ueber die Adresse, ohne Geraeteobjekt:')
+            gewinner, c, weitere = await durchprobieren(None)
+            alle = alle + weitere
         for vname, ausgang, dauer in alle:
             spur('  %s -> %s (%.1f s)' % (vname, ausgang, dauer))
 
@@ -977,6 +1046,8 @@ async def cmd_test(args):
             print('  In beiden Display-Zustaenden. Der set-Modus ist also')
             print('  nicht die Bedingung, fuer die ich ihn gehalten habe.')
     print('\n  Vollstaendiges Protokoll: %s' % TEST_LOG)
+    print('  Darin steht auch diese Ausgabe -- die Datei allein genuegt.')
+    sys.stdout = echt
 
 
 async def cmd_probe(args):
