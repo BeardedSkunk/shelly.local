@@ -1,5 +1,6 @@
 """Redet mit einem Shelly BLU H&T direkt, ohne die Shelly-App.
 
+    python blu-gatt.py diag            messen, wie sich der Sensor verhaelt
     python blu-gatt.py fields          Feldnamen und Kurzformen zeigen
     python blu-gatt.py listen          nur zuhoeren, nichts anfassen
     python blu-gatt.py dump            alle Einstellungen lesen
@@ -263,7 +264,7 @@ async def merkmale_abwarten(c, sekunden=10.0):
     return False
 
 
-async def verbinde(ziel, versuche=2):
+async def verbinde(ziel, versuche=1, frist=8.0):
     """Verbindet sich mit einem Geraet oder einer Adresse -- oder sagt warum.
 
     Das Zeitfenster nach einem Knopfdruck ist kurz, und ein Fehlschlag muss
@@ -273,7 +274,7 @@ async def verbinde(ziel, versuche=2):
     """
     for versuch in range(1, versuche + 1):
         try:
-            c = BleakClient(ziel, timeout=10.0)
+            c = BleakClient(ziel, timeout=frist)
             await c.connect()
         except Exception as e:
             spur('connect fehlgeschlagen: %s' % type(e).__name__)
@@ -347,7 +348,11 @@ async def _lauschen(minuten=5.0):
     nur einmal pro Minute. Mit Start-Stop-Start wurden 24 Versuche gebraucht und
     ein einziges Paket gehoert.
     """
-    c = await verbinde(ADDR, versuche=2)
+    # Ein einziger Versuch, und ein kurzer. Waehrend er laeuft, hoert der
+    # Scanner nicht, und was in dieser Zeit vorbeifunkt, ist verloren. Heute
+    # frueh war das eine Frist von acht Sekunden und lief zuverlaessig; zwei
+    # Versuche zu je zehn haben daraus zwanzig blinde Sekunden gemacht.
+    c = await verbinde(ADDR)
     if c is not None:
         return c
 
@@ -684,6 +689,156 @@ async def cmd_probe(args):
                  await lesen(c, hell_uuid, breite)))
     finally:
         await c.disconnect()
+
+
+async def naechstes_paket(sekunden=90):
+    """Wartet auf ein Funkpaket und gibt (Geraet, Paket, Wartezeit) zurueck."""
+    q = asyncio.Queue()
+
+    def gesehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        q.put_nowait((dev, bthome_lesen(daten) if daten else {}, adv.rssi))
+
+    sc = BleakScanner(detection_callback=gesehen)
+    beginn = time.monotonic()
+    await sc.start()
+    try:
+        dev, paket, rssi = await asyncio.wait_for(q.get(), timeout=sekunden)
+        return dev, paket, time.monotonic() - beginn, rssi
+    except asyncio.TimeoutError:
+        return None, None, time.monotonic() - beginn, None
+    finally:
+        await sc.stop()
+
+
+async def cmd_diag(args):
+    """Misst, wie sich der Sensor wirklich verhaelt, statt es zu vermuten.
+
+    Alles, was dieses Werkzeug ueber Zeiten annimmt, ist bisher aus einzelnen
+    Beobachtungen zusammengeraten -- wie oft er funkt, ob er ohne Knopfdruck
+    ansprechbar ist, wie lange ein Verbindungsaufbau dauert, wie lange nach
+    dem Trennen bis zum naechsten Funkpaket vergeht. Jede dieser Zahlen steht
+    in irgendeiner Fristsetzung, und wenn eine davon falsch ist, sieht es aus
+    wie ein launisches Geraet.
+
+    Also einmal richtig messen. Erst nur zuhoeren, dann eine Handvoll ganzer
+    Zyklen mit Uhr: verbinden, Merkmale abwarten, lesen, trennen, auf das
+    naechste Paket warten. Am Ende stehen die Zahlen da, und die Fristen im
+    Skript koennen sich danach richten statt umgekehrt.
+
+    Nichts davon wird geschrieben. Der Sensor kommt unveraendert heraus.
+    """
+    print('Messung, zwei Teile. Es wird nichts geschrieben.\n')
+    print('   %s\n' % KNOPF, flush=True)
+
+    print('Teil 1: nur zuhoeren, %d s. Wie oft funkt er?' % args.horchen)
+    zeiten = []
+    pakete = []
+
+    def gesehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        zeiten.append(time.monotonic())
+        pakete.append(bthome_lesen(daten) if daten else {})
+        print('   %6.1f s   %4d dBm   %s'
+              % (zeiten[-1] - zeiten[0], adv.rssi,
+                 paket_text(pakete[-1])), flush=True)
+
+    sc = BleakScanner(detection_callback=gesehen)
+    await sc.start()
+    try:
+        await asyncio.sleep(args.horchen)
+    finally:
+        await sc.stop()
+
+    if len(zeiten) < 2:
+        print('\n   %d Pakete. Zu wenig fuer eine Aussage -- ist er in'
+              ' Reichweite?' % len(zeiten))
+    else:
+        luecken = [zeiten[i + 1] - zeiten[i] for i in range(len(zeiten) - 1)]
+        luecken.sort()
+        print('\n   %d Pakete, Abstaende von %.1f bis %.1f s, Mitte %.1f s.'
+              % (len(zeiten), luecken[0], luecken[-1],
+                 luecken[len(luecken) // 2]))
+
+    print('\nTeil 2: %d ganze Zyklen mit Uhr.' % args.zyklen)
+    print('   Zeile: warten auf Paket / verbinden / Merkmale / lesen /'
+          ' trennen / bis zum naechsten Paket\n', flush=True)
+
+    ergebnisse = []
+    for i in range(1, args.zyklen + 1):
+        print('  Zyklus %d' % i, flush=True)
+        dev, paket, gewartet, rssi = await naechstes_paket(args.geduld)
+        if dev is None:
+            print('   kein Paket nach %.0f s -- abgebrochen' % gewartet)
+            break
+        print('   Paket nach %5.1f s   %s' % (gewartet, paket_text(paket)),
+              flush=True)
+
+        t = time.monotonic()
+        try:
+            c = BleakClient(dev, timeout=args.frist)
+            await c.connect()
+            verbunden = time.monotonic() - t
+        except Exception as e:
+            print('   verbinden fehlgeschlagen nach %.1f s (%s)'
+                  % (time.monotonic() - t, type(e).__name__), flush=True)
+            ergebnisse.append((gewartet, None, None, None, None))
+            continue
+        print('   verbunden nach       %5.1f s' % verbunden, flush=True)
+
+        t = time.monotonic()
+        hat = await merkmale_abwarten(c, sekunden=args.frist)
+        merkmale = time.monotonic() - t
+        print('   Merkmale nach        %5.1f s%s'
+              % (merkmale, '' if hat else '   AUSGEBLIEBEN'), flush=True)
+
+        gelesen = None
+        if hat:
+            t = time.monotonic()
+            try:
+                await lesen(c, FELDER['dark_threshold'][0], 2)
+                gelesen = time.monotonic() - t
+                print('   gelesen nach         %5.1f s' % gelesen, flush=True)
+            except Exception as e:
+                print('   lesen fehlgeschlagen (%s)' % type(e).__name__,
+                      flush=True)
+
+        t = time.monotonic()
+        try:
+            await c.disconnect()
+        except Exception:
+            pass
+        print('   getrennt nach        %5.1f s' % (time.monotonic() - t),
+              flush=True)
+
+        _, _, danach, _ = await naechstes_paket(args.geduld)
+        print('   naechstes Paket nach %5.1f s\n' % danach, flush=True)
+        ergebnisse.append((gewartet, verbunden, merkmale, gelesen, danach))
+
+    gute = [e for e in ergebnisse if e[1] is not None]
+    print('Was dabei herauskam')
+    print('-------------------')
+    print('  %d von %d Zyklen haben verbunden%s.'
+          % (len(gute), len(ergebnisse),
+             ' -- und zwar ohne einen einzigen Knopfdruck' if
+             len(gute) == len(ergebnisse) and gute else ''))
+    if gute:
+        def mitte(werte):
+            w = sorted([x for x in werte if x is not None])
+            return w[len(w) // 2] if w else float('nan')
+        print('  verbinden      Mitte %.1f s' % mitte([e[1] for e in gute]))
+        print('  Merkmale       Mitte %.1f s' % mitte([e[2] for e in gute]))
+        print('  lesen          Mitte %.1f s' % mitte([e[3] for e in gute]))
+        print('  Trennen bis zum naechsten Paket: Mitte %.1f s'
+              % mitte([e[4] for e in gute]))
+        print('\n  Die letzte Zahl ist der Preis einer Runde in track und'
+              ' bisect.')
+        print('  Kuerzer als sie geht keine Messung, die den Rundfunk'
+              ' braucht.')
 
 
 async def cmd_fields(args):
@@ -1312,6 +1467,14 @@ def main():
     mit_weg(sub.add_parser('key', help='den 16-Byte-Schluessel lesen'))
     sub.add_parser('fields', help='die Feldnamen und ihre Kurzformen zeigen')
 
+    dg = sub.add_parser('diag', help='messen, wie sich der Sensor verhaelt')
+    dg.add_argument('--horchen', type=int, default=150,
+                    help='Sekunden fuer den reinen Zuhoerteil')
+    dg.add_argument('--zyklen', type=int, default=4)
+    dg.add_argument('--geduld', type=int, default=120)
+    dg.add_argument('--frist', type=float, default=15.0,
+                    help='Frist fuer Verbinden und Merkmale')
+
     pr = mit_weg(sub.add_parser('probe',
                                 help='eine Schwelle setzen und mehrere'
                                      ' Pakete lang zusehen'))
@@ -1389,6 +1552,7 @@ def main():
                             format='%(asctime)s  %(name)s  %(message)s')
         print('Spur laeuft mit in %s' % args.log)
     befehle = {'dump': cmd_dump, 'gatt': cmd_gatt, 'key': cmd_key,
+               'diag': cmd_diag,
                'fields': cmd_fields, 'probe': cmd_probe, 'get': cmd_get,
                'listen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
                'shell': cmd_shell, 'track': cmd_track,
