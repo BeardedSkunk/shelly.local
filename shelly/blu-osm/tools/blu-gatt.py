@@ -211,29 +211,54 @@ NUR_LESBAR = {
 }
 
 
-async def brauchbar(c):
+def hat_merkmale(c):
     """Steht die Verbindung wirklich, oder nur der Anschein davon?
 
     Ein connect() kann durchkommen, bevor die Merkmalstabelle geholt ist. Der
     Client sieht verbunden aus, der erste Zugriff faellt mit
     BleakCharacteristicNotFoundError um, und das sieht aus wie ein
-    abgebrochener Funkkontakt, obwohl nur zu frueh gefragt wurde. Am
-    18.08.2026 hat das einen Bisect-Schritt gekostet.
-
-    Also nach jedem Verbindungsaufbau einmal nachsehen, ob ein Merkmal da ist,
-    von dem wir wissen, dass es da sein muss.
+    abgebrochener Funkkontakt, obwohl nur zu frueh gefragt wurde.
     """
     try:
-        uuid = FELDER['dark_threshold'][0]
-        if c.services.get_characteristic(uuid) is not None:
-            return True
+        return c.services.get_characteristic(FELDER['dark_threshold'][0]) \
+            is not None
     except Exception:
-        pass
-    try:
-        await c.disconnect()
-    except Exception:
-        pass
-    return False
+        return False
+
+
+async def verbinde(ziel, versuche=3):
+    """Verbindet sich mit einem Geraet oder einer Adresse -- oder sagt warum.
+
+    Das Zeitfenster nach einem Knopfdruck ist kurz. Was hier schiefgeht, muss
+    deshalb sofort sichtbar sein und sofort noch einmal versucht werden, statt
+    still in die naechste Wartschleife zu fallen. Eine Verbindung ohne
+    Merkmalstabelle war frueher eine laute Fehlermeldung und ein neuer Anlauf
+    binnen Sekunden; dass sie am 18.08.2026 stumm verworfen wurde und in 120
+    Sekunden Warten muendete, war eine Verschlechterung und ist der Grund fuer
+    diese Funktion.
+    """
+    for versuch in range(1, versuche + 1):
+        try:
+            c = BleakClient(ziel, timeout=8.0)
+            await c.connect()
+        except Exception as e:
+            if versuch == versuche:
+                print('   Verbindung abgelehnt (%s)' % type(e).__name__,
+                      flush=True)
+                return None
+            continue
+        if hat_merkmale(c):
+            return c
+        print('   verbunden, aber ohne Merkmalstabelle -- Versuch %d von %d'
+              % (versuch, versuche), flush=True)
+        try:
+            await c.disconnect()
+        except Exception:
+            pass
+    print('   dreimal ohne Merkmalstabelle -- der Sensor laesst uns nicht'
+          ' heran.', flush=True)
+    print('   Knopf am Sensor druecken.', flush=True)
+    return None
 
 
 async def fassen(minuten=5.0, weg=1):
@@ -253,12 +278,7 @@ async def fassen(minuten=5.0, weg=1):
     oder haelt die Verbindung offen, siehe 'shell'.
     """
     if weg == 2:
-        try:
-            c = BleakClient(ADDR, timeout=minuten * 60)
-            await c.connect()
-            return c if await brauchbar(c) else None
-        except Exception:
-            return None
+        return await verbinde(ADDR)
     if weg == 3:
         direkt = asyncio.create_task(_direkt(minuten))
         lauschen = asyncio.create_task(_lauschen(minuten))
@@ -274,12 +294,7 @@ async def fassen(minuten=5.0, weg=1):
 
 
 async def _direkt(minuten):
-    try:
-        c = BleakClient(ADDR, timeout=minuten * 60)
-        await c.connect()
-        return c if await brauchbar(c) else None
-    except Exception:
-        return None
+    return await verbinde(ADDR)
 
 
 async def _lauschen(minuten=5.0):
@@ -295,13 +310,9 @@ async def _lauschen(minuten=5.0):
     nur einmal pro Minute. Mit Start-Stop-Start wurden 24 Versuche gebraucht und
     ein einziges Paket gehoert.
     """
-    try:
-        c = BleakClient(ADDR, timeout=12.0)
-        await c.connect()
-        if await brauchbar(c):
-            return c
-    except Exception:
-        pass
+    c = await verbinde(ADDR, versuche=2)
+    if c is not None:
+        return c
 
     q = asyncio.Queue()
 
@@ -311,22 +322,22 @@ async def _lauschen(minuten=5.0):
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
-    ende = asyncio.get_event_loop().time() + minuten * 60
+    beginn = asyncio.get_event_loop().time()
+    ende = beginn + minuten * 60
+    gemahnt = 0
     try:
         while asyncio.get_event_loop().time() < ende:
             try:
                 dev, rssi = await asyncio.wait_for(q.get(), timeout=5.0)
             except asyncio.TimeoutError:
+                gemahnt = mahnen(asyncio.get_event_loop().time() - beginn,
+                                 gemahnt)
                 continue
             while not q.empty():
                 q.get_nowait()
-            try:
-                c = BleakClient(dev, timeout=8.0)
-                await c.connect()
-                if await brauchbar(c):
-                    return c
-            except Exception:
-                pass
+            c = await verbinde(dev)
+            if c is not None:
+                return c
     finally:
         await sc.stop()
     return None
@@ -345,6 +356,26 @@ async def lesen(c, uuid, breite, mit_vorzeichen=False):
 async def schreiben(c, uuid, breite, wert):
     roh = wert.to_bytes(breite, 'little', signed=wert < 0)
     await c.write_gatt_char(uuid, roh, response=False)
+
+
+def mahnen(vergangen, gemahnt):
+    """Sagt beim Warten, wie lange schon -- und wann ein Knopfdruck faellig ist.
+
+    Ein Fortschrittsbalken waere Zierde; das hier ist keiner. Der Sensor funkt
+    einmal pro Minute, also ist eine halbe Minute Stille normal und zwei
+    Minuten Stille bedeuten, dass das Fenster zu ist und niemand es merkt.
+    Stumm zu warten heisst, den Unterschied zu verschweigen.
+    """
+    marken = [(20, '   ... 20 s, noch nichts gehoert. Er funkt einmal pro'
+                   ' Minute, das ist normal.'),
+              (50, '   ... 50 s. Jetzt haette eines kommen muessen.'),
+              (80, '   ... 80 s. Knopf am Sensor druecken.'),
+              (140, '   ... 140 s. Ohne Knopfdruck wird das nichts.')]
+    for i, (sekunde, text) in enumerate(marken, start=1):
+        if vergangen >= sekunde and gemahnt < i:
+            print(text, flush=True)
+            return i
+    return gemahnt
 
 
 BTHOME_UUID = '0000fcd2-0000-1000-8000-00805f9b34fb'
@@ -848,22 +879,24 @@ async def messen_und_fassen(sekunden=120):
     erstes = None
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
-    ende = asyncio.get_event_loop().time() + sekunden
+    beginn = asyncio.get_event_loop().time()
+    ende = beginn + sekunden
+    gemahnt = 0
     try:
         while asyncio.get_event_loop().time() < ende:
             try:
                 paket, dev = await asyncio.wait_for(q.get(), timeout=5.0)
             except asyncio.TimeoutError:
+                gemahnt = mahnen(asyncio.get_event_loop().time() - beginn,
+                                 gemahnt)
                 continue
             if erstes is None:
                 erstes = paket
-            try:
-                c = BleakClient(dev, timeout=8.0)
-                await c.connect()
-                if await brauchbar(c):
-                    return erstes, c
-            except Exception:
-                pass  # Fenster verpasst, das naechste Paket kommt bestimmt
+            c = await verbinde(dev)
+            if c is not None:
+                return erstes, c
+            # Fenster verpasst. Das naechste Paket kommt bestimmt -- aber das
+            # Urteil steht schon fest und geht nicht mehr verloren.
     finally:
         await sc.stop()
     return erstes, None
