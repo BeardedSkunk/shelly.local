@@ -441,11 +441,25 @@ BREITEN = {0x00: 1, 0x01: 1, 0x15: 1, 0x1e: 1, 0x2e: 1, 0x40: 2, 0x45: 2,
            0x64: 1}
 
 
+# Objekt 0x64 heisst beim Hersteller "light level" und sieht nach einer
+# gemessenen Helligkeit aus. Es ist keine. In allen bisher aufgezeichneten
+# Paketen hat es ausschliesslich 0 und 2 angenommen, nie etwas dazwischen und
+# nie darueber -- und das passt genau zu zwei Schwellen, die drei Zonen
+# aufspannen. Dass die 1 fehlte, hat einen Grund: bisect und track setzen
+# beide Schwellen absichtlich auf denselben Wert, und damit ist die mittlere
+# Zone leer. Nachzuweisen ist es mit probe --dark klein --bright gross.
+#
+# Der Sensor gibt die gemessene Helligkeit also nirgends heraus, weder ueber
+# GATT noch im Funk. Nur, in welchem der drei Bereiche er sich sieht.
+STUFEN = {0: 'dunkel', 1: 'dazwischen', 2: 'hell'}
+
+
 def paket_text(paket):
     """Ein Funkpaket in eine Zeile."""
     teile = []
     if 0x64 in paket:
-        teile.append('Helligkeit %3d' % paket[0x64])
+        teile.append('Stufe %d %-12s' % (paket[0x64],
+                                         '(%s)' % STUFEN.get(paket[0x64], '?')))
     if 0x1e in paket:
         teile.append('%s' % ('HELL  ' if paket[0x1e] else 'dunkel'))
     if 0x45 in paket:
@@ -658,6 +672,146 @@ async def naechstes_paket(sekunden=90):
         return None, None, time.monotonic() - beginn, None
     finally:
         await sc.stop()
+
+
+async def cmd_probe(args):
+    """Setzt beide Schwellen auf einen Wert und sieht mehrere Pakete lang zu.
+
+    bisect fragt nach jedem Schritt genau ein Paket ab und geht weiter. Das
+    setzt voraus, dass der Sensor seine Entscheidung sofort neu faellt --
+    was niemand geprueft hat. Faellt er sie nur alle paar Minuten neu, oder
+    erst nach irgendeinem inneren Anlass, dann antwortet das eine Paket auf
+    eine Frage von vorhin, und die ganze Einkreisung misst nichts.
+
+    Also eine Schwelle, viele Pakete. Aendert sich das Urteil beim dritten
+    oder fuenften, wissen wir, dass es an der Zeit lag und nicht am Wert.
+    Aendert es sich nie, obwohl die Schwelle weit unter der gemeldeten
+    Helligkeit liegt, dann gehorcht das Bit diesen Schwellen nicht.
+    """
+    dunkel_uuid, breite = FELDER['dark_threshold']
+    hell_uuid, _ = FELDER['bright_threshold']
+
+    # Ein Wert setzt beide gleich, zwei Werte spannen die mittlere Zone auf.
+    # Letzteres ist der einzige Weg, die Stufe 1 zu Gesicht zu bekommen:
+    # solange dunkel und hell aufeinanderliegen, gibt es nichts dazwischen.
+    dunkel = args.dark if args.dark is not None else args.wert
+    hell = args.bright if args.bright is not None else args.wert
+    if dunkel is None or hell is None:
+        return print('Entweder einen Wert fuer beide angeben, oder --dark'
+                     ' und --bright.')
+
+    print('Setze dunkel %d, hell %d und hoere dann %d Pakete lang zu.'
+          % (dunkel, hell, args.pakete))
+    print('   %s' % KNOPF)
+    print('   Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
+          flush=True)
+
+    c = await fassen(minuten=args.warten, weg=args.weg)
+    if not c:
+        return print('keine Verbindung.')
+    original = (await lesen(c, dunkel_uuid, breite),
+                await lesen(c, hell_uuid, breite))
+    print('vorher: dunkel %d, hell %d' % original, flush=True)
+    # Erst die, die den Weg frei macht -- sonst steht dunkel kurz ueber hell.
+    if dunkel > original[0]:
+        await schreiben(c, hell_uuid, breite, hell)
+        await schreiben(c, dunkel_uuid, breite, dunkel)
+    else:
+        await schreiben(c, dunkel_uuid, breite, dunkel)
+        await schreiben(c, hell_uuid, breite, hell)
+    await asyncio.sleep(0.4)
+    zurueck = (await lesen(c, dunkel_uuid, breite),
+               await lesen(c, hell_uuid, breite))
+    print('jetzt:  dunkel %d, hell %d%s'
+          % (zurueck[0], zurueck[1],
+             '' if zurueck == (dunkel, hell) else '   NICHT UEBERNOMMEN'),
+          flush=True)
+    await c.disconnect()
+    await asyncio.sleep(1.0)
+
+    print('\nhoere zu. Jetzt ist der Moment fuer die Taschenlampe.\n',
+          flush=True)
+    urteile = set()
+    stufen = set()
+    gesehen = [0]
+    angefangen = time.monotonic()
+
+    def sehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        if not daten:
+            return
+        paket = bthome_lesen(daten)
+        gesehen[0] += 1
+        if 0x1e in paket:
+            urteile.add(paket[0x1e])
+        if 0x64 in paket:
+            stufen.add(paket[0x64])
+        print('  %5.0f s   %s' % (time.monotonic() - angefangen,
+                                  paket_text(paket)), flush=True)
+
+    sc = BleakScanner(detection_callback=sehen)
+    await sc.start()
+    try:
+        ende = time.monotonic() + args.pakete * 70
+        while gesehen[0] < args.pakete and time.monotonic() < ende:
+            await asyncio.sleep(1.0)
+    finally:
+        await sc.stop()
+
+    print('')
+    if not gesehen[0]:
+        print('nichts gehoert.')
+    elif len(urteile) > 1:
+        print('Das Urteil hat sich waehrend der Beobachtung geaendert. Es'
+              ' haengt also an')
+        print('der Zeit oder am Licht, nicht nur am geschriebenen Wert -- und'
+              ' bisect,')
+        print('das nach jedem Schritt ein einziges Paket abfragt, misst zu'
+              ' frueh.')
+    else:
+        print('%d Pakete, ein einziges Urteil (%s) bei dunkel %d, hell %d.'
+              % (gesehen[0], 'hell' if urteile.pop() else 'dunkel',
+                 dunkel, hell))
+        print('Keine Traegheit zu sehen -- das eine Paket, das bisect'
+              ' abfragt, genuegt.')
+
+    if stufen:
+        print('\n0x64 stand auf: %s'
+              % ', '.join('%d (%s)' % (x, STUFEN.get(x, '?'))
+                          for x in sorted(stufen)))
+        if 1 in stufen:
+            print('Die 1 ist da. Damit ist 0x64 keine Helligkeit, sondern die')
+            print('Zone zwischen den Schwellen: drei Stufen, zwei Schwellen.')
+            print('Eine gemessene Helligkeit gibt der Sensor nirgends her.')
+        elif dunkel < hell:
+            print('Keine 1, obwohl die Schwellen weit auseinanderstehen --')
+            print('dann liegt das Licht ausserhalb von %d bis %d.'
+                  % (dunkel, hell))
+
+    if args.behalten:
+        print('\nDie Schwellen bleiben auf dunkel %d, hell %d.'
+              % (dunkel, hell))
+        return
+    print('\nSetze zurueck auf dunkel %d, hell %d.' % original, flush=True)
+    _, c = await messen_und_fassen(args.geduld)
+    if c is None:
+        c = await fassen(minuten=args.warten, weg=args.weg)
+    if c is None:
+        print('   keine Verbindung. Bitte nachholen:')
+        print('     python blu-gatt.py set bright %d' % original[1])
+        print('     python blu-gatt.py set dark %d' % original[0])
+        return
+    try:
+        await schreiben(c, hell_uuid, breite, original[1])
+        await schreiben(c, dunkel_uuid, breite, original[0])
+        await asyncio.sleep(0.4)
+        print('   jetzt: dunkel %d, hell %d'
+              % (await lesen(c, dunkel_uuid, breite),
+                 await lesen(c, hell_uuid, breite)))
+    finally:
+        await c.disconnect()
 
 
 async def cmd_diag(args):
@@ -1456,7 +1610,13 @@ def main():
     pr = mit_weg(sub.add_parser('probe',
                                 help='eine Schwelle setzen und mehrere'
                                      ' Pakete lang zusehen'))
-    pr.add_argument('wert', type=int)
+    pr.add_argument('wert', type=int, nargs='?', default=None,
+                    help='setzt beide Schwellen auf diesen Wert')
+    pr.add_argument('--dark', type=int, default=None,
+                    help='dunkel-Schwelle einzeln')
+    pr.add_argument('--bright', type=int, default=None,
+                    help='hell-Schwelle einzeln. Weit auseinander macht die'
+                         ' mittlere Zone sichtbar.')
     pr.add_argument('--pakete', type=int, default=5)
     pr.add_argument('--geduld', type=int, default=120)
     pr.add_argument('--warten', type=float, default=5.0)
