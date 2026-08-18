@@ -944,7 +944,15 @@ async def cmd_test(args):
     echt = sys.stdout
     sys.stdout = Zwiefach(echt, SPUR)
 
+    # Ein angehaltenes Programm sieht aus wie ein abgestuerztes. Windows-
+    # Konsolen halten den Schreibvorgang an, sobald jemand ins Fenster klickt
+    # -- QuickEdit --, und da hier viel herauskopiert wird, passiert das
+    # zwangslaeufig. Es kostet eine Zeile, das vorher zu sagen, und spart die
+    # Fehlersuche an der falschen Stelle.
     print('Vier Versuche, etwa acht Minuten. Alles geht nach %s.' % TEST_LOG)
+    print('')
+    print('Wenn der Zaehler stehenbleibt: ein Mal Esc druecken. Ein Klick ins')
+    print('Fenster haelt die Ausgabe an, und das sieht aus wie ein Absturz.')
     print('Vor jedem Versuch steht, was zu tun ist; mit Enter geht es weiter.')
     print('Kein Versuch dauert laenger als %.0f Sekunden.' % args.frist)
     print('\nWichtig: zwei schnelle Druecker sind KEINE zwei Druecker. Das')
