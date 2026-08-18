@@ -113,10 +113,10 @@ ADDR = 'FC:4D:6A:38:E2:F2'
 # teurer ist als gar keiner. Am 19.08.2026 stand in jeder Fehlermeldung
 # "Knopf am Sensor druecken", und das ist genau verkehrt, wenn "set" schon im
 # Display steht: der naechste Druck fuehrt tiefer hinein statt hinaus.
-KNOPF = ('Zwei Mal kurz druecken: einmal in den set-Modus hinein, einmal'
-         ' wieder\n   heraus. Danach ist er eine Weile ansprechbar. Solange'
-         ' "set" im Display\n   steht, nimmt er keine Verbindung an -- und'
-         ' warten, bis es von selbst\n   verschwindet, dauert viel zu lange.')
+KNOPF = ('Ein Mal druecken, warten bis "set" im Display steht, dann NOCH'
+         ' EIN Mal druecken, bis "set" wieder weg ist. Danach ist er'
+         ' eine Weile ansprechbar.\n   Zwei GETRENNTE Druecker mit Pause --'
+         ' zwei schnelle hintereinander liest das Geraet als eine\n   Geste (2x = Datum/Uhr) und schaltet nur die Anzeige um.')
 
 # Name -> (UUID, Breite in Bytes). Die Zuordnung stammt aus dem Mitschnitt:
 # jede Einstellung einmal in der App geaendert, mit auffaelligen Zahlen, und
@@ -678,57 +678,72 @@ async def naechstes_paket(sekunden=90):
 TEST_LOG = 'blu-test.log'
 
 
-async def mit_zaehler(aufgabe, frist, text):
-    """Wartet auf eine Aufgabe und zeigt dabei jede Sekunde, wie lange schon.
+async def frage(text):
+    """Fragt auf der Konsole. Blockiert nur diesen einen Punkt, nichts sonst."""
+    schleife = asyncio.get_event_loop()
+    antwort = await schleife.run_in_executor(None, input, text)
+    spur('Antwort: %r' % antwort)
+    return antwort.strip().lower()
 
-    Eine Konsole, die schweigt, ist von einer haengenden nicht zu
-    unterscheiden. Und eine Frist, die nicht sichtbar ablaeuft, fuehlt sich
-    an wie keine. Beides hat am 19.08.2026 mehr Aerger gemacht als jeder
-    technische Fehler.
+
+async def warten_mit_zaehler(sekunden, text):
+    for rest in range(int(sekunden), 0, -1):
+        sys.stdout.write('\r     %s  noch %3d s ' % (text, rest))
+        sys.stdout.flush()
+        await asyncio.sleep(1.0)
+    sys.stdout.write('\r     %s  vorbei.       \n' % text)
+
+
+async def mit_zaehler(aufgabe, frist, text):
+    """Wartet auf eine Aufgabe und zeigt jede Sekunde, wie lange schon.
+
+    Eine schweigende Konsole ist von einer haengenden nicht zu unterscheiden,
+    und eine Frist, die nicht sichtbar ablaeuft, fuehlt sich an wie keine.
     """
     aufgabe = asyncio.ensure_future(aufgabe)
     begonnen = time.monotonic()
     while True:
         try:
-            return await asyncio.wait_for(asyncio.shield(aufgabe), timeout=1.0)
+            aus = await asyncio.wait_for(asyncio.shield(aufgabe), timeout=1.0)
+            sys.stdout.write('\r      %-40s               \r' % '')
+            return aus
         except asyncio.TimeoutError:
             v = time.monotonic() - begonnen
-            sys.stdout.write('\r      %-34s %3.0f s von %3.0f s '
+            sys.stdout.write('\r      %-30s %3.0f s von %3.0f s '
                              % (text, v, frist))
             sys.stdout.flush()
             if v >= frist:
                 aufgabe.cancel()
-                sys.stdout.write('\r      %-34s Frist abgelaufen.         \n'
+                sys.stdout.write('\r      %-30s Frist abgelaufen.        \n'
                                  % text)
                 return None
         except Exception as e:
-            sys.stdout.write('\r      %-34s %s                \n'
+            sys.stdout.write('\r      %-30s %s               \n'
                              % (text, type(e).__name__))
             return None
 
 
 # Die Theorien, warum eine Verbindung zustande kommt oder nicht. bleak laesst
 # mehr Stellschrauben zu, als bisher benutzt wurden, und welche davon zaehlt,
-# ist reine Vermutung gewesen. Also alle vier der Reihe nach, und aufschreiben,
-# welche traegt.
+# war reine Vermutung. Also alle vier, und aufschreiben, welche traegt.
 def varianten():
     return [
-        ('A  Geraet, Zwischenspeicher',
+        ('A Geraet, Zwischenspeicher',
          lambda dev: BleakClient(dev, timeout=10.0,
                                  winrt={'use_cached_services': True})),
-        ('B  Geraet, frische Suche',
+        ('B Geraet, frische Suche',
          lambda dev: BleakClient(dev, timeout=10.0,
                                  winrt={'use_cached_services': False})),
-        ('C  Adresse statt Geraet',
+        ('C Adresse statt Geraet',
          lambda dev: BleakClient(ADDR, timeout=10.0,
                                  winrt={'use_cached_services': True})),
-        ('D  Geraet, mit Kopplung',
+        ('D Geraet, mit Kopplung',
          lambda dev: BleakClient(dev, timeout=10.0, pair=True)),
     ]
 
 
-async def geraet_suchen(frist=25.0):
-    """Sucht ein Funkpaket und gibt das Geraet zurueck, an dem es hing."""
+async def geraet_suchen(frist):
+    """Sucht ein Funkpaket, mit sichtbar ablaufender Frist."""
     q = asyncio.Queue()
 
     def gesehen(dev, adv):
@@ -738,57 +753,54 @@ async def geraet_suchen(frist=25.0):
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
     try:
-        dev, daten = await asyncio.wait_for(q.get(), timeout=frist)
+        aus = await mit_zaehler(q.get(), frist, 'suche ein Funkpaket')
+        if aus is None:
+            return None, {}
+        dev, daten = aus
         spur('Geraet gesehen, Dienstdaten %s' % (daten.hex() if daten else '-'))
         return dev, (bthome_lesen(daten) if daten else {})
-    except asyncio.TimeoutError:
-        return None, {}
     finally:
         await sc.stop()
 
 
-async def durchprobieren(dev, frist_je=14.0):
-    """Probiert alle Varianten durch und gibt die erste zurueck, die traegt.
+async def durchprobieren(dev, frist_je=12.0):
+    """Probiert alle Varianten und gibt die erste zurueck, die traegt.
 
-    Zurueck kommt (Name der Variante, Verbindung, Liste der Ergebnisse). Eine
-    Variante gilt erst als gelungen, wenn auch die Merkmale da sind -- eine
-    Verbindung ohne sie kann nichts.
+    Eine Variante gilt erst als gelungen, wenn auch die Merkmale da sind --
+    eine Verbindung ohne sie kann nichts.
     """
     ergebnisse = []
     for name, bauen in varianten():
         spur('Variante %s beginnt' % name)
         t = time.monotonic()
-        c = None
         try:
             c = bauen(dev)
-            ok = await mit_zaehler(c.connect(), frist_je, name + ' verbinden')
-            if ok is None:
-                ergebnisse.append((name, 'verbinden misslungen',
-                                   time.monotonic() - t))
-                spur('Variante %s: verbinden misslungen' % name)
-                try:
-                    await c.disconnect()
-                except Exception:
-                    pass
-                continue
         except Exception as e:
-            ergebnisse.append((name, 'Fehler %s' % type(e).__name__,
-                               time.monotonic() - t))
-            spur('Variante %s: %s' % (name, e))
+            print('      %-30s Fehler beim Anlegen (%s)'
+                  % (name, type(e).__name__))
+            ergebnisse.append((name, 'Fehler', 0.0))
             continue
-
+        ok = await mit_zaehler(c.connect(), frist_je, name)
+        if ok is None:
+            print('      %-30s verbinden misslungen' % name)
+            ergebnisse.append((name, 'verbinden misslungen',
+                               time.monotonic() - t))
+            try:
+                await c.disconnect()
+            except Exception:
+                pass
+            continue
         verbunden_nach = time.monotonic() - t
         hat = await merkmale_abwarten(c, sekunden=8.0)
         gesamt = time.monotonic() - t
         if hat:
-            print('      %-34s GEHT   (%.1f s bis Verbindung, %.1f s gesamt)'
+            print('      %-30s GEHT  (%.1f s verbinden, %.1f s gesamt)'
                   % (name, verbunden_nach, gesamt))
             ergebnisse.append((name, 'geht', gesamt))
             spur('Variante %s traegt nach %.1f s' % (name, gesamt))
             return name, c, ergebnisse
-        print('      %-34s verbunden, aber keine Merkmale' % name)
+        print('      %-30s verbunden, aber keine Merkmale' % name)
         ergebnisse.append((name, 'ohne Merkmale', gesamt))
-        spur('Variante %s: verbunden ohne Merkmale' % name)
         try:
             await c.disconnect()
         except Exception:
@@ -800,9 +812,8 @@ async def durchprobieren(dev, frist_je=14.0):
 async def kann_lesen_und_schreiben(c):
     """Prueft, was mit einer stehenden Verbindung wirklich geht.
 
-    Geschrieben wird der Wert, der ohnehin dort steht. Ein Schreibvorgang, der
-    nichts aendert, beantwortet dieselbe Frage wie einer, der etwas kaputt
-    macht.
+    Geschrieben wird der Wert, der ohnehin dort steht -- das beantwortet
+    dieselbe Frage wie ein Schreibvorgang, der etwas veraendert.
     """
     uuid, breite = FELDER['dark_threshold']
     aus = {'lesen': False, 'schreiben': False, 'wert': None}
@@ -821,36 +832,49 @@ async def kann_lesen_und_schreiben(c):
     return aus
 
 
-async def anweisung(text, drucke, reaktion=4.0):
-    """Sagt, was zu tun ist, und zaehlt herunter, statt es zu erwarten."""
-    print('\n  ANWEISUNG: %s' % text)
-    if drucke:
-        for i in (3, 2, 1):
-            sys.stdout.write('\r     in %d ...   ' % i)
-            sys.stdout.flush()
-            await asyncio.sleep(1.0)
-        print('\r     >>> JETZT %s <<<        ' % drucke)
-        await asyncio.sleep(reaktion)
+# Der Zustand, auf den es ankommt, steht im Display und nirgends sonst. Ueber
+# Bluetooth ist er nicht zu sehen, und geraten hat er die Versuche vom
+# 19.08.2026 gegeneinander verschmutzt: der set-Modus aus einem Versuch stand
+# noch im naechsten. Also wird gefragt.
+#
+# Und die Anweisungen sagen ausdruecklich "warten, bis sich das Display
+# aendert". Zwei schnelle Druecker sind naemlich nicht zwei Druecker: das
+# Geraet liest schnelle Folgen als eine Geste -- 1x set-Modus, 2x Datum/Uhr,
+# 3x Celsius/Fahrenheit. Wer zweimal hintereinander tippt, loest die
+# Datumsanzeige aus und nicht zweimal den set-Modus.
+VERSUCHE = [
+    ('1  Ruhezustand',
+     'Das Display soll NORMAL sein, also ohne "set".\n'
+     '   Steht "set" da: ein Mal druecken und warten, bis es verschwindet.\n'
+     '   Danach eine halbe Minute nichts anfassen.',
+     'Nimmt er im Ruhezustand ueberhaupt Verbindungen an?'),
+    ('2  waehrend "set" steht',
+     'Ein Mal druecken, sodass "set" im Display STEHT.\n'
+     '   Warten, bis es wirklich dasteht -- nicht zweimal tippen.',
+     'Ist er ansprechbar, solange er im set-Modus ist?'),
+    ('3  direkt nach dem set-Modus',
+     'Falls "set" nicht steht: ein Mal druecken, warten, bis es steht.\n'
+     '   Dann NOCH EIN MAL druecken, sodass "set" wieder verschwindet.\n'
+     '   Zwei getrennte Druecker, mit Pause dazwischen.',
+     'Das ist der Weg, der zuletzt funktioniert hat. Traegt er wirklich?'),
+    ('4  eine Minute spaeter',
+     'Nichts tun. Das Display bleibt, wie es ist.',
+     'Wie lange haelt das Fenster aus Versuch 3?'),
+]
 
 
 async def cmd_test(args):
     """Probiert der Reihe nach durch, wie dieses Geraet anzusprechen ist.
 
     Alles, was dieses Werkzeug ueber den Verbindungsaufbau annimmt, ist aus
-    Einzelfaellen geraten worden, und die Annahmen haben sich mehrfach
-    widersprochen: mal ging es ohne Knopfdruck, mal nicht; mal reichte ein
-    Druck, mal brauchte es zwei. Solange das so ist, ist jedes andere Werkzeug
-    hier ein Gluecksspiel.
+    Einzelfaellen geraten worden, und die Annahmen widersprechen sich. Solange
+    das so ist, ist jedes andere Werkzeug hier ein Gluecksspiel.
 
-    Also sechs Versuche, jeder mit klarer Anweisung, sichtbar ablaufender
-    Frist und einem harten Ende. Und in jedem Versuch vier Varianten des
-    Verbindungsaufbaus, weil bleak mehr Stellschrauben hat als bisher benutzt
-    wurden -- Windows-Zwischenspeicher fuer die Merkmalstabelle, frische
-    Suche, Adresse statt Geraet, Kopplung erzwingen.
-
-    Niemand muss dabei etwas beantworten. Wer nicht am Rechner sitzt,
-    verpasst hoechstens die Versuche mit Knopfdruck; die ohne laufen von
-    selbst.
+    Vier Versuche mit klar benanntem Ausgangszustand. Vor jedem wird gefragt,
+    was im Display steht, denn genau das ist die Groesse, die alles entscheidet
+    und die ueber Bluetooth unsichtbar bleibt. Danach vier Varianten des
+    Verbindungsaufbaus, weil bleak mehr Stellschrauben hat als je benutzt
+    wurden.
 
     Geschrieben wird nur ein Wert, der ohnehin dort steht.
     """
@@ -861,63 +885,48 @@ async def cmd_test(args):
                             format='%(asctime)s  %(name)s  %(message)s')
     spur('=== test %s ===' % time.strftime('%d.%m.%Y %H:%M:%S'))
 
-    print('Sechs Versuche. Alles geht in %s.' % TEST_LOG)
-    print('Anweisungen kommen mit Countdown -- nur druecken, wenn JETZT'
-          ' dasteht.')
-    print('Kein Versuch dauert laenger als %.0f Sekunden.\n' % args.frist)
-
-    versuche = [
-        ('1  ohne jeden Knopfdruck', None, 0.0,
-         'Geht es ueberhaupt ohne? Das ist die Frage, die alles andere'
-         ' entscheidet.'),
-        ('2  ein Mal druecken, sofort', 'EIN MAL DRUECKEN', 0.0,
-         'Frueher schien ein Druck zu genuegen. Stimmt das?'),
-        ('3  ein Mal druecken, 10 s warten', 'EIN MAL DRUECKEN', 10.0,
-         'Waehrend "set" im Display steht -- geht es da, oder nicht?'),
-        ('4  zwei Mal druecken, sofort', 'ZWEI MAL DRUECKEN', 0.0,
-         'Der Weg, der zuletzt funktioniert hat.'),
-        ('5  zwei Mal druecken, 45 s warten', 'ZWEI MAL DRUECKEN', 45.0,
-         'Wie lange haelt das Fenster nach einem Doppeldruck?'),
-        ('6  ohne Knopfdruck, direkt danach', None, 0.0,
-         'Bleibt er nach einer Sitzung offen, oder faellt er zurueck?'),
-    ]
+    print('Vier Versuche, etwa acht Minuten. Alles geht nach %s.' % TEST_LOG)
+    print('Vor jedem Versuch steht, was zu tun ist; mit Enter geht es weiter.')
+    print('Kein Versuch dauert laenger als %.0f Sekunden.' % args.frist)
+    print('\nWichtig: zwei schnelle Druecker sind KEINE zwei Druecker. Das')
+    print('Geraet liest schnelle Folgen als eine Geste (2x = Datum/Uhr).')
+    print('Immer warten, bis sich das Display geaendert hat.\n')
 
     bericht = []
-    for name, drucke, warten, warum in versuche:
+    for nummer, (name, was_tun, warum) in enumerate(VERSUCHE, start=1):
         print('\n' + '=' * 68)
         print('Versuch %s' % name)
-        print('  %s' % warum)
+        print('  Frage: %s' % warum)
+        print('\n  ZU TUN: %s' % was_tun)
         spur('--- Versuch %s ---' % name)
 
-        await anweisung('Knopf in Ruhe lassen.' if not drucke
-                        else 'gleich %s.' % drucke.lower(), drucke)
-        if warten:
-            for rest in range(int(warten), 0, -1):
-                sys.stdout.write('\r     warte noch %2d s ...   ' % rest)
-                sys.stdout.flush()
-                await asyncio.sleep(1.0)
-            print('\r     Wartezeit vorbei.         ')
+        if nummer == 4:
+            await warten_mit_zaehler(60, 'eine Minute Ruhe')
+        else:
+            await frage('\n  Enter, sobald das erledigt ist ... ')
 
-        anfang = time.monotonic()
-        print('    suche ein Funkpaket ...', flush=True)
-        dev, paket = await geraet_suchen(min(25.0, args.frist))
+        zustand = await frage('  Was steht JETZT im Display?'
+                              '  [n]ormal / [s]et : ')
+        zustand = 'set' if zustand.startswith('s') else 'normal'
+        print('  -> Ausgangszustand: Display %s' % zustand)
+        spur('Display %s' % zustand)
+
+        dev, paket = await geraet_suchen(args.frist)
         if dev is None:
             print('    kein Funkpaket in %.0f s -- Versuch faellt aus.'
-                  % (time.monotonic() - anfang))
-            bericht.append((name, 'kein Paket', None, None))
-            spur('Versuch %s: kein Paket' % name)
+                  % args.frist)
+            bericht.append((name, zustand, 'kein Paket', None))
             continue
         if paket:
             print('    Paket: %s' % paket_text(paket))
 
-        gewinner, c, alle = await durchprobieren(
-            dev, frist_je=max(8.0, (args.frist - 25.0) / 4.0))
+        gewinner, c, alle = await durchprobieren(dev)
         for vname, ausgang, dauer in alle:
             spur('  %s -> %s (%.1f s)' % (vname, ausgang, dauer))
 
         if c is None:
             print('    Keine Variante hat getragen.')
-            bericht.append((name, 'keine Verbindung', None, alle))
+            bericht.append((name, zustand, 'keine Verbindung', None))
             continue
 
         koennen = await kann_lesen_und_schreiben(c)
@@ -926,7 +935,7 @@ async def cmd_test(args):
                  'ja' if koennen['schreiben'] else 'NEIN', koennen['wert']))
         spur('Versuch %s: %s, lesen=%s schreiben=%s'
              % (name, gewinner, koennen['lesen'], koennen['schreiben']))
-        bericht.append((name, gewinner, koennen, alle))
+        bericht.append((name, zustand, gewinner, koennen))
         try:
             await c.disconnect()
         except Exception:
@@ -936,32 +945,38 @@ async def cmd_test(args):
     # ------------------------------------------------------------------
     print('\n' + '=' * 68)
     print('ERGEBNIS\n')
-    for name, ausgang, koennen, alle in bericht:
+    print('  %-26s %-8s %-26s %s' % ('Versuch', 'Display', 'Verbindung',
+                                     'lesen/schreiben'))
+    for name, zustand, ausgang, koennen in bericht:
+        lese = ''
         if koennen:
-            print('  %-32s %s' % (name, ausgang))
-            print('  %-32s   lesen %s, schreiben %s'
-                  % ('', 'ja' if koennen['lesen'] else 'NEIN',
-                     'ja' if koennen['schreiben'] else 'NEIN'))
-        else:
-            print('  %-32s %s' % (name, ausgang))
-    gelungen = [b for b in bericht if b[2]]
+            lese = '%s / %s' % ('ja' if koennen['lesen'] else 'NEIN',
+                                'ja' if koennen['schreiben'] else 'NEIN')
+        print('  %-26s %-8s %-26s %s' % (name.strip(), zustand, ausgang, lese))
+
+    gelungen = [b for b in bericht if b[3]]
     print('')
     if not gelungen:
         print('  Nichts hat getragen. Dann liegt es nicht am Zeitpunkt,')
-        print('  sondern an der Kopplung zwischen Rechner und Sensor --')
-        print('  in den Windows-Bluetooth-Einstellungen entfernen und neu')
-        print('  koppeln, danach diesen Test wiederholen.')
+        print('  sondern an der Kopplung zwischen Rechner und Sensor: in den')
+        print('  Windows-Bluetooth-Einstellungen entfernen, neu koppeln,')
+        print('  danach diesen Test wiederholen.')
     else:
         print('  Es geht bei: %s' % ', '.join(b[0].strip() for b in gelungen))
         haeufig = {}
         for b in gelungen:
-            haeufig[b[1]] = haeufig.get(b[1], 0) + 1
+            haeufig[b[2]] = haeufig.get(b[2], 0) + 1
         beste = sorted(haeufig.items(), key=lambda x: -x[1])[0]
-        print('  Am haeufigsten getragen hat Variante: %s (%dx)' % beste)
-        print('\n  Danach richtet sich der Rest des Werkzeugs.')
+        print('  Getragen hat am haeufigsten: %s (%dx)' % beste)
+        zustaende = set(b[1] for b in gelungen)
+        if zustaende == {'normal'}:
+            print('  Und zwar nur bei normalem Display -- im set-Modus nie.')
+        elif zustaende == {'set'}:
+            print('  Und zwar nur im set-Modus.')
+        else:
+            print('  In beiden Display-Zustaenden. Der set-Modus ist also')
+            print('  nicht die Bedingung, fuer die ich ihn gehalten habe.')
     print('\n  Vollstaendiges Protokoll: %s' % TEST_LOG)
-    print('  Diese Datei und die Ausgabe oben genuegen, um den Ablauf zu')
-    print('  rekonstruieren -- beides schicken.')
 
 
 async def cmd_probe(args):
