@@ -5,6 +5,7 @@
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
     python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
     python blu-gatt.py gatt                      alle Merkmale auflisten
+    python blu-gatt.py horchen                   nur zuhoeren, nichts anfassen
     python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
                                                  (ein Knopfdruck am Anfang)
@@ -82,8 +83,9 @@ FELDER = {
     # Display erst zeigt, wenn der Sensor den set-Bildschirm verlaesst -- alle
     # anderen schlagen sofort durch.
     'uhr12h':          ('a9e33a3f-0396-41e5-a7c4-30511ffba2ad', 1),
-    # Schaltet ein Globus-Symbol ein und aus. Wofuer es steht, ist offen.
-    'globus':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
+    # Zigbee. Der Globus im Display ist seine Anzeige -- was am Geraet als
+    # unerklaerliches Symbol auffiel, ist schlicht die Funkart.
+    'zigbee':          ('68348d04-f62c-435d-b075-cc54b9f049cc', 1),
     # Nicht die Sendefrequenz, sondern ein Zeitversatz: die Zahl wird in
     # Minuten auf die Uhrzeit aufgeschlagen, 65535 zieht eine Minute ab. In
     # manchen Betriebsarten ist die Uhrzeit leer und der BLU zaehlt hiermit --
@@ -99,20 +101,45 @@ FELDER = {
     # eine gueltige ist: der Sensor uebernimmt sie und zeigt sie nur, wenn man
     # auf die Uhranzeige umschaltet -- drei Mal druecken.
     'epochSec':        ('d56a3410-115e-41d1-945b-3a7f189966a1', 4),
-    # Zwei Schalter ohne sichtbare Wirkung. Uebrig sind Energiesparmodus,
-    # Uhr-Synchronisierung, Zigbee und Sicherheit -- alles Dinge, die sich auf
-    # einem Display auch nicht zeigen wuerden.
-    'schalter_a':      ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),
-    'schalter_b':      ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),
+    # Beide zeigen am Geraet nichts, und beide sind jetzt benannt -- nicht
+    # geraten, sondern aus der Merkmalstabelle des Herstellers.
+    'zeitsync':        ('317c7868-5889-4572-b6ef-2c436ee5a92a', 1),   # ab Werk 1
+    'energiesparen':   ('ca9d7a88-2ad3-4940-9b8b-75558d08a3b0', 1),   # ab Werk 0
 }
 
-# Was der Knopf am Sensor selbst tut, unabhaengig von alldem:
+# Die Namen, unter denen dieselben Merkmale hier frueher liefen. Sie bleiben
+# gueltig, damit aufgeschriebene Befehle nicht ins Leere laufen.
+ALIASSE = {
+    'globus': 'zigbee',
+    'fahrenheit': 'fahrenheit',
+    'schalter_a': 'zeitsync',
+    'schalter_b': 'energiesparen',
+    'schalter_c': 'uhr12h',
+    'intervall': 'zeitversatz',
+}
+
+
+def feld(name):
+    return ALIASSE.get(name, name)
+
+# Was der Knopf am Sensor selbst tut. Am Geraet durchprobiert und spaeter in
+# der Herstellerdoku Zeile fuer Zeile wiedergefunden -- beides stimmt ueberein:
 #
-#   2 mal   Celsius / Fahrenheit
-#   3 mal   Datum statt Uhrzeit
+#   1 mal   set-Modus
+#   2 mal   Datum statt Uhrzeit
+#   3 mal   Celsius / Fahrenheit
 #   4 mal   invertieren
 #   5 mal   zwoelf / vierundzwanzig Stunden
-#   6 bis 9 kein sichtbarer Unterschied
+#
+# und im set-Modus, also nach dem ersten Druck:
+#
+#   4 mal   Bluetooth-Kopplung
+#   5 mal   Zigbee-Anmeldung
+#
+# Deshalb war "6 bis 9 mal kein Unterschied" richtig beobachtet: mehr gibt es
+# nicht. Waehrend die Kopplung laeuft, blinkt die Leuchte eine Minute lang
+# einmal alle zwei Sekunden -- das ist die Anzeige, die wir am Display vermisst
+# haben.
 
 # Die Sicherheits-Eingabe. Nur beschreibbar, und als einzige Stelle im ganzen
 # Geraet big-endian: die 123456 aus der App standen im Mitschnitt als 0001e240.
@@ -123,6 +150,10 @@ PIN_UUID = '0ffb7104-860c-49ae-8989-1f946d5f6c03'
 # key:false, was dazu passt. Ob er sich nach einer PIN anders liest, ist genau
 # die Frage, die 'pin' beantwortet.
 SCHLUESSEL_UUID = 'eb0fb41b-af4b-4724-a6f9-974f55aba81a'
+
+# Werksreset: eine 1 hierhin und das Geraet ist leer. Absichtlich nur als
+# Konstante und ohne Befehl -- es gibt keinen Grund, so etwas bequem zu machen.
+WERKSRESET_UUID = 'b0a7e40f-2b87-49db-801c-eb3686a24bdb'
 
 NUR_LESBAR = {
     'firmware':  '00002a26-0000-1000-8000-00805f9b34fb',
@@ -247,7 +278,39 @@ BTHOME_UUID = '0000fcd2-0000-1000-8000-00805f9b34fb'
 
 # Wie breit ein BTHome-Objekt ist, soweit dieser Sensor sie sendet. Gebraucht
 # wird nur, ueber die unbekannten hinwegzukommen, um an 0x1e zu gelangen.
-BREITEN = {0x00: 1, 0x01: 1, 0x1e: 1, 0x2e: 1, 0x40: 2, 0x45: 2, 0x64: 1}
+#   0x00 Paketzaehler   0x01 Batterie %   0x15 Batterie schwach
+#   0x1e hell/dunkel    0x2e Feuchte %    0x45 Temperatur 0.1 C
+#   0x64 Helligkeit     0x40 nur beim Modell ohne Display
+#
+# 0x15 fehlte hier und das war gefaehrlich: die Objekte kommen aufsteigend
+# sortiert, ein unbekanntes bricht das Zerlegen ab, und 0x15 stuende vor
+# 0x1e. Solange die Batterie voll ist, sendet er es nicht und es fiel nicht
+# auf -- unter 15 Prozent waere hell/dunkel schlagartig verschwunden.
+BREITEN = {0x00: 1, 0x01: 1, 0x15: 1, 0x1e: 1, 0x2e: 1, 0x40: 2, 0x45: 2,
+           0x64: 1}
+
+
+def paket_text(paket):
+    """Ein Funkpaket in eine Zeile."""
+    teile = []
+    if 0x64 in paket:
+        teile.append('Helligkeit %3d' % paket[0x64])
+    if 0x1e in paket:
+        teile.append('%s' % ('HELL  ' if paket[0x1e] else 'dunkel'))
+    if 0x45 in paket:
+        roh = paket[0x45]
+        if roh >= 0x8000:
+            roh -= 0x10000
+        teile.append('%5.1f C' % (roh / 10.0))
+    if 0x2e in paket:
+        teile.append('%2d %%' % paket[0x2e])
+    if 0x01 in paket:
+        teile.append('Batterie %d %%' % paket[0x01])
+    if paket.get(0x15):
+        teile.append('BATTERIE SCHWACH')
+    if 0x00 in paket:
+        teile.append('#%d' % paket[0x00])
+    return '   '.join(teile)
 
 
 def bthome_lesen(daten):
@@ -321,6 +384,57 @@ async def merkmale_zeigen(c, lesen_auch=True):
     return gefunden
 
 
+async def cmd_horchen(args):
+    """Hoert nur zu. Kein Verbindungsaufbau, kein Schreiben, kein Knopfdruck.
+
+    Der Sensor funkt alle sechzig Sekunden von sich aus, und in diesem Paket
+    steht laut Herstellertabelle nicht nur seine Entscheidung hell/dunkel,
+    sondern unter 0x64 auch die gemessene Helligkeit. Wenn das stimmt, ist das
+    Einkreisen ueber die Schwellen ueberfluessig -- man liest den Wert einfach
+    ab. Ein Empfaenger stoert den Sensor nicht; er weiss nicht einmal, dass
+    jemand zuhoert.
+
+    Ungewoehnliche Objekte werden roh gezeigt statt verschwiegen: das Zerlegen
+    bricht bei einer unbekannten Kennung ab, und dann fehlt alles dahinter,
+    ohne dass es auffiele.
+    """
+    print('hoere zu, %d Sekunden. Er meldet sich etwa einmal pro Minute.'
+          % args.dauer)
+    print('(Nur Empfang -- der Sensor merkt davon nichts.)\n', flush=True)
+
+    gesehen_zahl = [0]
+
+    def gesehen(dev, adv):
+        if dev.address.upper() != ADDR:
+            return
+        daten = adv.service_data.get(BTHOME_UUID)
+        if not daten:
+            return
+        gesehen_zahl[0] += 1
+        paket = bthome_lesen(daten)
+        rest = ''
+        verbraucht = 1
+        for kennung in paket:
+            verbraucht += 1 + BREITEN.get(kennung, 0)
+        if verbraucht < len(daten):
+            rest = '   Rest %s' % daten[verbraucht:].hex()
+        print('%s   %s%s' % (paket_text(paket), '', rest), flush=True)
+        if args.roh:
+            print('      roh %s' % daten.hex(), flush=True)
+
+    sc = BleakScanner(detection_callback=gesehen)
+    await sc.start()
+    try:
+        await asyncio.sleep(args.dauer)
+    finally:
+        await sc.stop()
+    if not gesehen_zahl[0]:
+        print('nichts gehoert. Ist er in Reichweite, und laeuft nebenher ein'
+              ' anderes BLE-Programm?')
+    else:
+        print('\n%d Pakete.' % gesehen_zahl[0])
+
+
 async def cmd_gatt(args):
     c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
@@ -351,6 +465,7 @@ async def cmd_dump(args):
 
 
 async def cmd_get(args):
+    args.feld = feld(args.feld)
     uuid, breite = FELDER[args.feld]
     c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
@@ -362,6 +477,7 @@ async def cmd_get(args):
 
 
 async def cmd_set(args):
+    args.feld = feld(args.feld)
     if args.feld not in FELDER:
         return print('unbekanntes Feld. Bekannt:', ', '.join(FELDER))
     uuid, breite = FELDER[args.feld]
@@ -470,7 +586,9 @@ async def cmd_shell(args):
                     for name, (uuid, breite) in FELDER.items():
                         print('  %-18s %d' % (name, await lesen(c, uuid, breite,
                                                                 name in VORZEICHEN)))
-                elif befehl == 'get' and len(teile) == 2 and teile[1] in FELDER:
+                if len(teile) >= 2:
+                    teile[1] = feld(teile[1])
+                if befehl == 'get' and len(teile) == 2 and teile[1] in FELDER:
                     uuid, breite = FELDER[teile[1]]
                     print('  %s = %d' % (teile[1],
                                          await lesen(c, uuid, breite, teile[1] in VORZEICHEN)))
@@ -643,10 +761,12 @@ async def cmd_bisect(args):
                 continue
 
             hell = bool(paket[0x1e])
-            print('   Sensor meldet: %s   (%.1f C, %d %%, Batterie %d %%)'
-                  % ('HELL' if hell else 'dunkel',
-                     paket.get(0x45, 0) / 10.0, paket.get(0x2e, 0),
-                     paket.get(0x01, 0)), flush=True)
+            print('   %s' % paket_text(paket), flush=True)
+            if 0x64 in paket:
+                print('   -- er sendet die Helligkeit selbst mit (%d). Dann'
+                      ' braucht es dieses' % paket[0x64])
+                print('      Einkreisen gar nicht:  python blu-gatt.py'
+                      ' horchen', flush=True)
 
             # Hell heisst: die Helligkeit liegt ueber dem Pruefwert. Dann ist
             # der Pruefwert die neue Untergrenze, nicht die neue Obergrenze.
@@ -707,11 +827,18 @@ def main():
     mit_weg(sub.add_parser('dump', help='alle Einstellungen lesen'))
     mit_weg(sub.add_parser('gatt', help='alle Merkmale des Geraets auflisten'))
 
+    h = sub.add_parser('horchen', help='nur zuhoeren, ohne den Sensor'
+                                       ' anzufassen')
+    h.add_argument('--dauer', type=int, default=180,
+                   help='Sekunden')
+    h.add_argument('--roh', action='store_true',
+                   help='die Dienstdaten zusaetzlich als Hex')
+
     g = mit_weg(sub.add_parser('get', help='eine Einstellung lesen'))
-    g.add_argument('feld', choices=sorted(FELDER))
+    g.add_argument('feld', choices=sorted(FELDER) + sorted(ALIASSE))
 
     s = mit_weg(sub.add_parser('set', help='eine Einstellung schreiben'))
-    s.add_argument('feld', choices=sorted(FELDER))
+    s.add_argument('feld', choices=sorted(FELDER) + sorted(ALIASSE))
     s.add_argument('wert', type=int)
 
     mit_weg(sub.add_parser('shell', help='einmal verbinden, dann viele Befehle'))
@@ -737,7 +864,7 @@ def main():
 
     args = p.parse_args()
     asyncio.run({'dump': cmd_dump, 'gatt': cmd_gatt, 'get': cmd_get,
-                 'set': cmd_set, 'pin': cmd_pin,
+                 'horchen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
                  'shell': cmd_shell, 'bisect': cmd_bisect}[args.cmd](args))
 
 

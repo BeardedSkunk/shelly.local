@@ -118,25 +118,29 @@ integer while everything else is little-endian.
 
     0de178e5-…a000   temperature offset, tenths of a degree
     0de178e5-…a002   humidity offset, whole percent
-    c1a32099-…841    darkness threshold
-    c1a32099-…842    brightness threshold
-    68348d04-…49cc   Fahrenheit
-    8645a7a9-…2519   invert the display
-    611723f5-…bb59   Zigbee
-    d56a3410-…66a1   clock
+    c1a32099-…841    dark threshold, default 50
+    c1a32099-…842    bright threshold, default 500
+    8645a7a9-…2519   Celsius or Fahrenheit
+    611723f5-…bb59   invert the display
+    68348d04-…49cc   Zigbee
+    a9e33a3f-…ba2ad  twelve or twenty-four hour clock
+    317c7868-…a92a   clock sync, on from the factory
+    ca9d7a88-…08a3b0 energy saving, off from the factory
+    d56a3410-…66a1   the clock, UTC seconds
+    08b83239-…716e   the time zone, in minutes
+    b0a7e40f-…24bdb  factory reset, write-only, a 1 empties the device
 
-Two booleans are known to be the energy-saving mode and the clock sync but not
-which is which, and a third was toggled before anybody was writing down what
-they touched. They are named for what is known about them rather than guessed
-at. Working out the rest costs one capture each: change exactly one setting,
-see which characteristic moved.
+The mapping came out of the capture the hard way, from the values rather than
+from the order things were done in, and three of the names were still wrong
+until the device itself corrected them. On 18.08.2026 the manufacturer's own
+characteristic table turned up, for the BLU H&T Display ZB, and it lists every
+UUID above. It agrees with what the device had taught us, settles the two
+switches nobody could see — clock sync and energy saving — and explains the
+mystery symbol: the globe is not a symbol of its own, it is the Zigbee
+indicator, which is why it moved with the Zigbee characteristic.
 
-The mapping did not come from the order things were done in — that turned out
-not to match the order they were written in — but from the values. Three
-booleans went to 1 and two to 0 in a round where three settings were switched on
-and two off, which splits the five into two groups; the first round then
-separates them, because a characteristic that already stood at 1 and was cleared
-cannot be the one that was off to begin with.
+It also names the second of the two write-only characteristics: the factory
+reset. It is kept here as a constant and deliberately without a command.
 
 The offsets are applied to what the sensor **broadcasts**, not merely to its
 display: setting the temperature offset to 42.0 moved the reading the plug
@@ -148,19 +152,70 @@ advertise connectably in normal operation — that is what its battery life is
 made of — and only a press opens a short window. Once a connection stands it
 holds; three minutes and sixty-four reads went through one.
 
-What the sensor will not give up is the measured brightness. Only the decision
-comes out, light or dark. Two read-only characteristics looked like the number
-and were not: they sat unmoved at 299 and 297 for three minutes under a torch,
-and fell by one each over an hour while the battery went from 99 to 98 per cent
-— almost certainly the cell voltage in hundredths of a volt.
+What the button does on its own, worked out at the device and afterwards found
+line for line in the manufacturer's documentation:
 
-So brightness can only be bracketed, by moving the threshold and watching which
-side the sensor lands on. `blu-gatt.py bisect` does that, and it moves **both**
-thresholds together to the same value on purpose. The sensor has one for the way
-to dark and one for the way to light, and between them it stays where it was;
-left alone, that hysteresis would have it sitting on "dark" out of inertia and
-the reading would mean nothing. Equal thresholds turn each step into a single
-comparison that does not care what came before.
+    1×   setup mode
+    2×   date instead of time
+    3×   Celsius or Fahrenheit
+    4×   invert the display
+    5×   twelve or twenty-four hour clock
+
+and inside setup mode, so after the first press:
+
+    4×   Bluetooth pairing
+    5×   Zigbee joining
+
+Which is why six, seven, eight and nine presses did nothing: there is nothing
+there. Pairing is 1× then 4×, and while it runs the lamp blinks once every two
+seconds for a minute — the sign the display was searched for in vain. Note that
+this is the display model's scheme; the one without a display documents pairing
+as a ten-second hold, and a factory reset only shortly after the battery goes
+in.
+
+Over GATT the sensor will not give up the measured brightness. Two read-only
+characteristics looked like the number and were not: they sat unmoved at 299 and
+297 for three minutes under a torch, and fell by one each over an hour while the
+battery went from 99 to 98 per cent. The manufacturer's table confirms what that
+already suggested — they are the two cells, in hundredths of a volt.
+
+But it does not keep the brightness to itself. It **broadcasts** it. The beacon
+carries seven objects and the last of them, 0x64, is the light level:
+
+    0x00 packet counter   0x01 battery %      0x15 battery low
+    0x1e light or dark    0x2e humidity %     0x45 temperature 0.1 °C
+    0x64 light level
+
+`blu-gatt.py horchen` prints them, and it does so without touching the sensor at
+all — no connection, no button, no write. Receiving is invisible to the far end.
+
+Which makes `bisect` a detour around something that was in every packet all
+along. It stays, because bracketing is the only way to learn what the threshold
+numbers mean in the sensor's own units, and because it is the pattern for any
+setting that has an effect but no readout. But for the question "how light is
+it right now", listening is the answer.
+
+That the light level was missed for a week has a cause worth writing down. The
+decoder walks the objects in order and stops at the first id it does not know,
+because past an unknown length nothing behind it can be trusted. 0x15 was not in
+its table. The objects come sorted ascending, so 0x15 stands in front of 0x1e —
+and the day the battery drops below 15 per cent and the sensor starts sending
+it, light, humidity, temperature and brightness would all have vanished at once,
+with a full battery being the only reason it had not happened yet.
+
+When `bisect` is used, it moves **both** thresholds together to the same value on
+purpose. The sensor has one for the way to dark and one for the way to light,
+and between them it stays where it was; left alone, that hysteresis would have it
+sitting on "dark" out of inertia and the reading would mean nothing. Equal
+thresholds turn each step into a single comparison that does not care what came
+before. Afterwards the originals go back — the factory pair is 50 and 500.
+
+Each step costs a full minute, and there is no way around it. The beacon goes
+out every sixty seconds; the only things that make the sensor speak sooner are a
+press of its button and the battery falling below 15 per cent. A change from
+light to dark is not among them, and there is no characteristic for the
+interval. So a sixteen-step search takes a quarter of an hour, and the way to
+shorten it is a narrower bracket — `--von` and `--bis` — not a faster sensor.
 
 ## Correcting a sensor
 
