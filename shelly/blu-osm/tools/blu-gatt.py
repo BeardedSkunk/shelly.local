@@ -764,8 +764,9 @@ async def mit_zaehler(aufgabe, frist, text):
                                  % text)
                 return None
         except Exception as e:
-            sys.stdout.write('\r      %-30s %s               \n'
-                             % (text, type(e).__name__))
+            sys.stdout.write('\r' + ' ' * 62 + '\r')
+            print('      %-30s %s: %s' % (text, type(e).__name__, e))
+            spur('%s scheiterte: %s: %s' % (text, type(e).__name__, e))
             return None
 
 
@@ -891,6 +892,8 @@ async def kann_lesen_und_schreiben(c):
 # Geraet liest schnelle Folgen als eine Geste -- 1x set-Modus, 2x Datum/Uhr,
 # 3x Celsius/Fahrenheit. Wer zweimal hintereinander tippt, loest die
 # Datumsanzeige aus und nicht zweimal den set-Modus.
+NL = chr(10)
+
 VERSUCHE = [
     ('1  Ruhezustand',
      'Das Display soll NORMAL sein, also ohne "set".\n'
@@ -902,9 +905,11 @@ VERSUCHE = [
      '   Warten, bis es wirklich dasteht -- nicht zweimal tippen.',
      'Ist er ansprechbar, solange er im set-Modus ist?'),
     ('3  direkt nach dem set-Modus',
-     'Falls "set" nicht steht: ein Mal druecken, warten, bis es steht.\n'
-     '   Dann NOCH EIN MAL druecken, sodass "set" wieder verschwindet.\n'
-     '   Zwei getrennte Druecker, mit Pause dazwischen.',
+     'Ziel: gerade eben aus dem set-Modus herausgekommen.' + NL +
+     '   Steht "set" JETZT da: ein Mal druecken, sodass es verschwindet.' + NL +
+     '   Steht "set" nicht da: ein Mal druecken (set erscheint), warten,' + NL +
+     '   dann noch ein Mal (set verschwindet).' + NL +
+     '   Danach sofort Enter.',
      'Das ist der Weg, der zuletzt funktioniert hat. Traegt er wirklich?'),
     ('4  eine Minute spaeter',
      'Nichts tun. Das Display bleibt, wie es ist.',
