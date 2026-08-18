@@ -210,6 +210,31 @@ NUR_LESBAR = {
 }
 
 
+async def brauchbar(c):
+    """Steht die Verbindung wirklich, oder nur der Anschein davon?
+
+    Ein connect() kann durchkommen, bevor die Merkmalstabelle geholt ist. Der
+    Client sieht verbunden aus, der erste Zugriff faellt mit
+    BleakCharacteristicNotFoundError um, und das sieht aus wie ein
+    abgebrochener Funkkontakt, obwohl nur zu frueh gefragt wurde. Am
+    18.08.2026 hat das einen Bisect-Schritt gekostet.
+
+    Also nach jedem Verbindungsaufbau einmal nachsehen, ob ein Merkmal da ist,
+    von dem wir wissen, dass es da sein muss.
+    """
+    try:
+        uuid = FELDER['dark_threshold'][0]
+        if c.services.get_characteristic(uuid) is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        await c.disconnect()
+    except Exception:
+        pass
+    return False
+
+
 async def fassen(minuten=5.0, weg=1):
     """Verbindet sich, auf einem von mehreren Wegen.
 
@@ -230,7 +255,7 @@ async def fassen(minuten=5.0, weg=1):
         try:
             c = BleakClient(ADDR, timeout=minuten * 60)
             await c.connect()
-            return c
+            return c if await brauchbar(c) else None
         except Exception:
             return None
     if weg == 3:
@@ -251,7 +276,7 @@ async def _direkt(minuten):
     try:
         c = BleakClient(ADDR, timeout=minuten * 60)
         await c.connect()
-        return c
+        return c if await brauchbar(c) else None
     except Exception:
         return None
 
@@ -272,7 +297,8 @@ async def _lauschen(minuten=5.0):
     try:
         c = BleakClient(ADDR, timeout=12.0)
         await c.connect()
-        return c
+        if await brauchbar(c):
+            return c
     except Exception:
         pass
 
@@ -296,7 +322,8 @@ async def _lauschen(minuten=5.0):
             try:
                 c = BleakClient(dev, timeout=8.0)
                 await c.connect()
-                return c
+                if await brauchbar(c):
+                    return c
             except Exception:
                 pass
     finally:
@@ -832,9 +859,10 @@ async def messen_und_fassen(sekunden=120):
             try:
                 c = BleakClient(dev, timeout=8.0)
                 await c.connect()
-                return erstes, c
+                if await brauchbar(c):
+                    return erstes, c
             except Exception:
-                continue  # Fenster verpasst, das naechste Paket kommt bestimmt
+                pass  # Fenster verpasst, das naechste Paket kommt bestimmt
     finally:
         await sc.stop()
     return erstes, None
@@ -942,7 +970,11 @@ async def cmd_bisect(args):
 
             await c.disconnect()
             c = None
-            await asyncio.sleep(1.0)  # der Funk kommt erst nach dem Trennen
+            # Der Funk kommt erst nach dem Trennen, und das Trennen ist nicht
+            # fertig, wenn disconnect() zurueckkommt: am 18.08.2026 blieb ein
+            # Schritt volle 120 Sekunden ohne ein einziges Paket, weil zu
+            # frueh zugehoert wurde.
+            await asyncio.sleep(2.5)
 
             print('   gesetzt (dunkel %d, hell %d). warte auf sein naechstes'
                   ' Funkpaket ...' % zurueck, flush=True)
@@ -990,11 +1022,24 @@ async def cmd_bisect(args):
                 print('   Einheit wie die Schwellen -- 0x64 lag bei %d bis %d.'
                       % (min(stufen), max(stufen)))
             elif stufen:
-                print('\n   0x64 lag waehrenddessen bei %d bis %d. Der'
-                      ' Umschlagpunkt in' % (min(stufen), max(stufen)))
-                print('   Schwellen-Einheiten liegt zwischen %d und %d --'
-                      ' das ist der' % (lo, hi))
-                print('   Umrechnungsfaktor zwischen beiden Skalen.')
+                print('\n   0x64 lag waehrenddessen bei %d bis %d, der'
+                      ' Umschlagpunkt in Schwellen-'
+                      % (min(stufen), max(stufen)))
+                print('   Einheiten zwischen %d und %d. Beides nebeneinander'
+                      ' ist das Verhaeltnis' % (lo, hi))
+                print('   der zwei Skalen.')
+                if max(stufen) - min(stufen) > 1:
+                    print('\n   ABER: 0x64 hat sich waehrend der Suche um %d'
+                          ' bewegt. Eine Halbierung' % (max(stufen)
+                                                        - min(stufen)))
+                    print('   setzt voraus, dass das Gesuchte stillhaelt. Tut'
+                          ' es das nicht -- Abend,')
+                    print('   Wolke, jemand macht Licht an --, dann antwortet'
+                          ' jeder Schritt auf eine')
+                    print('   andere Helligkeit und die Klammer bedeutet'
+                          ' nichts. Im Dunkeln messen,')
+                    print('   oder bei kuenstlichem Licht, das sich nicht'
+                          ' bewegt.')
 
         print('\nErgebnis: die Helligkeit liegt zwischen %d und %d.' % (lo, hi))
         if lo == args.von:
