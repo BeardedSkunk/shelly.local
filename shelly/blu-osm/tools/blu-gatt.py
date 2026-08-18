@@ -1,20 +1,25 @@
 """Redet mit einem Shelly BLU H&T direkt, ohne die Shelly-App.
 
-    python blu-gatt.py fields                    Feldnamen und Kuerzel zeigen
-    python blu-gatt.py listen                    nur zuhoeren, nichts anfassen
-    python blu-gatt.py dump                      alles lesen
-    python blu-gatt.py get bt                    eine Einstellung lesen
-    python blu-gatt.py set to 0                  eine Einstellung schreiben
-    python blu-gatt.py gatt                      alle Merkmale auflisten
-    python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
-    python blu-gatt.py shell                     einmal verbinden, viele Befehle
-    python blu-gatt.py probe 40                  eine Schwelle, viele Pakete
-    python blu-gatt.py bisect                    Helligkeit einkreisen
+    python blu-gatt.py fields          Feldnamen und Kurzformen zeigen
+    python blu-gatt.py listen          nur zuhoeren, nichts anfassen
+    python blu-gatt.py dump            alle Einstellungen lesen
+    python blu-gatt.py get bright      eine Einstellung lesen
+    python blu-gatt.py set toff 0      eine Einstellung schreiben
+    python blu-gatt.py gatt            alle Merkmale auflisten
+    python blu-gatt.py key             den 16-Byte-Schluessel lesen
+    python blu-gatt.py pin 123456      PIN schicken, dann den Schluessel lesen
+    python blu-gatt.py shell           einmal verbinden, dann viele Befehle
+    python blu-gatt.py probe 40        eine Schwelle, viele Pakete
+    python blu-gatt.py bisect          Helligkeit einkreisen
 
-Die Feldnamen folgen der Merkmalstabelle des Herstellers und sind deshalb
-englisch; jedes hat ein Kuerzel aus zwei Buchstaben, damit man in der shell
-etwas ausprobieren kann, ohne zu tippen. Die frueheren deutschen Namen gelten
-weiter. 'fields' zeigt beides und braucht dafuer kein Bluetooth.
+Jeder dieser Befehle laeuft auch einzeln, ohne die shell -- die shell spart nur
+die Wartezeit auf die Verbindung, wenn man mehrere hintereinander braucht.
+
+Die Feldnamen folgen der Merkmalstabelle des Herstellers. Jedes hat eine kurze
+Form, und zwar ein Wort und keine Anfangsbuchstaben: "dark" statt "dt", weil
+man sich das eine nach einer Woche noch merkt und das andere nicht. Beide
+Formen gelten ueberall. 'fields' zeigt die Tabelle und braucht dafuer weder
+Bluetooth noch Sensor.
 
 Warum es nie sofort geht: der Sensor funkt einmal pro Minute und schweigt
 dazwischen. Eine Verbindung kann nur zustande kommen, waehrend er funkt -- das
@@ -128,58 +133,39 @@ FIELDS = {
                          'UTC seconds'),
 }
 
-# Two letters per field, for trying things out at the shell without typing.
+# A short form per field. Words, not initials -- "dark" and "toff" can be
+# recalled a week later, "dt" and "to" cannot, and a short form nobody
+# remembers saves nothing.
 SHORT = {
-    'to': 'temp_offset',      'ho': 'humidity_offset',
-    'dt': 'dark_threshold',   'bt': 'bright_threshold',
-    'tu': 'temp_unit',        'iv': 'invert_display',
-    'c12': 'clock_12h',       'zb': 'zigbee',
-    'ts': 'time_sync',        'ps': 'power_saver',
-    'uo': 'utc_offset',       'ut': 'unix_time',
+    'toff':   'temp_offset',
+    'hoff':   'humidity_offset',
+    'dark':   'dark_threshold',
+    'bright': 'bright_threshold',
+    'unit':   'temp_unit',
+    'invert': 'invert_display',
+    'clock':  'clock_12h',
+    'sync':   'time_sync',
+    'power':  'power_saver',
+    'tz':     'utc_offset',
+    'time':   'unix_time',
 }
 
-# What these fields were called here before. Three of the old names were also
-# wrong, not merely German: the globe turned out to be the Zigbee indicator,
-# and the two nameless switches are the clock sync and the power saver. The
-# old names keep working so that anything written down still runs.
-OLD = {
-    'feuchte_offset': 'humidity_offset',
-    'schwelle_dunkel': 'dark_threshold',
-    'schwelle_hell': 'bright_threshold',
-    'fahrenheit': 'temp_unit',
-    'invertieren': 'invert_display',
-    'uhr12h': 'clock_12h',
-    'globus': 'zigbee',
-    'zeitsync': 'time_sync',
-    'energiesparen': 'power_saver',
-    'schalter_a': 'time_sync',
-    'schalter_b': 'power_saver',
-    'schalter_c': 'clock_12h',
-    'zeitversatz': 'utc_offset',
-    'intervall': 'utc_offset',
-    'epochSec': 'unix_time',
-}
-
-NAMEN = dict(SHORT)
-NAMEN.update(OLD)
-
-# Was hier frueher stand, damit alter Code nicht bricht.
 FELDER = dict([(n, (u, b)) for n, (u, b, _, _) in FIELDS.items()])
 VORZEICHEN = set([n for n, (_, _, vz, _) in FIELDS.items() if vz])
+ERLAUBT = sorted(FIELDS) + sorted(SHORT)
 
 
 def feld(name):
-    """Loest Kuerzel und alte Namen auf einen heutigen Feldnamen auf."""
-    return NAMEN.get(name, name)
+    """Loest eine Kurzform auf den vollen Feldnamen auf."""
+    return SHORT.get(name, name)
 
 
-def feld_liste():
-    zeilen = []
+def feld_liste(einzug='  '):
     kurz = dict([(v, k) for k, v in SHORT.items()])
+    zeilen = ['%s%-8s %-17s %s' % (einzug, 'short', 'name', 'what it is')]
     for name, (uuid, breite, vz, note) in FIELDS.items():
-        zeilen.append('  %-4s %-17s %s%s  %s'
-                      % (kurz.get(name, ''), name, breite,
-                         ' signed' if vz else '       ', note))
+        zeilen.append('%s%-8s %-17s %s'
+                      % (einzug, kurz.get(name, ''), name, note))
     return '\n'.join(zeilen)
 
 
@@ -583,8 +569,8 @@ async def cmd_probe(args):
         c = await fassen(minuten=args.warten, weg=args.weg)
     if c is None:
         print('   keine Verbindung. Bitte nachholen:')
-        print('     python blu-gatt.py set bt %d' % original[1])
-        print('     python blu-gatt.py set dt %d' % original[0])
+        print('     python blu-gatt.py set bright %d' % original[1])
+        print('     python blu-gatt.py set dark %d' % original[0])
         return
     try:
         await schreiben(c, hell_uuid, breite, original[1])
@@ -599,10 +585,19 @@ async def cmd_probe(args):
 
 async def cmd_fields(args):
     """Zeigt die Feldnamen. Braucht kein Bluetooth und keinen Sensor."""
-    print('kurz name              bytes            was es ist')
     print(feld_liste())
-    print('\nAlte Namen gelten weiter: %s'
-          % ', '.join(sorted(OLD)))
+    print('\nBeide Formen gelten ueberall:  get bright   get bright_threshold')
+
+
+async def cmd_key(args):
+    """Liest den 16-Byte-Schluessel. In der shell heisst das auch 'key'."""
+    c = await fassen(weg=getattr(args, 'weg', 1))
+    if not c:
+        return print('keine Verbindung')
+    try:
+        await zeige_schluessel(c, 'jetzt  ')
+    finally:
+        await c.disconnect()
 
 
 async def cmd_gatt(args):
@@ -722,11 +717,17 @@ async def cmd_shell(args):
     c = await fassen(weg=args.weg)
     if not c:
         return print('keine Verbindung')
-    print('verbunden. Befehle:')
-    print('  g|get <feld>          s|set <feld> <wert>     d|dump')
-    print('  f|fields              gatt                    k|key')
-    print('  pin <zahl>            q|quit')
-    print('Felder (kurz lang):')
+    print('verbunden.\n')
+    print('commands')
+    print('  get <field>            read one setting')
+    print('  set <field> <value>    write one setting')
+    print('  dump                   read them all')
+    print('  gatt                   list every characteristic')
+    print('  key                    read the 16-byte key')
+    print('  pin <number>           send a PIN, then read the key')
+    print('  fields                 this table again')
+    print('  quit                   disconnect and leave')
+    print('')
     print(feld_liste(), flush=True)
     try:
         while True:
@@ -739,9 +740,9 @@ async def cmd_shell(args):
             teile = zeile.split()
             befehl = teile[0].lower()
             try:
-                if befehl in ('ende', 'quit', 'exit', 'q'):
+                if befehl in ('quit', 'exit'):
                     break
-                if befehl in ('fields', 'f'):
+                if befehl == 'fields':
                     print(feld_liste())
                     continue
                 if befehl == 'pin' and len(teile) == 2:
@@ -755,20 +756,20 @@ async def cmd_shell(args):
                 if befehl == 'gatt':
                     await merkmale_zeigen(c)
                     continue
-                if befehl in ('schluessel', 'key', 'k'):
+                if befehl == 'key':
                     await zeige_schluessel(c, 'jetzt  ')
                     continue
-                if befehl in ('dump', 'd'):
+                if befehl == 'dump':
                     for name, (uuid, breite) in FELDER.items():
                         print('  %-18s %d' % (name, await lesen(c, uuid, breite,
                                                                 name in VORZEICHEN)))
                 if len(teile) >= 2:
                     teile[1] = feld(teile[1])
-                if befehl in ('get', 'g') and len(teile) == 2 and teile[1] in FELDER:
+                if befehl == 'get' and len(teile) == 2 and teile[1] in FELDER:
                     uuid, breite = FELDER[teile[1]]
                     print('  %s = %d' % (teile[1],
                                          await lesen(c, uuid, breite, teile[1] in VORZEICHEN)))
-                elif befehl in ('set', 's') and len(teile) == 3 and teile[1] in FELDER:
+                elif befehl == 'set' and len(teile) == 3 and teile[1] in FELDER:
                     uuid, breite = FELDER[teile[1]]
                     vz = teile[1] in VORZEICHEN
                     wert = int(teile[2], 0)
@@ -779,8 +780,8 @@ async def cmd_shell(args):
                     print('  %s: %d -> %d%s' % (teile[1], vorher, nachher,
                                                 '' if nachher == wert else '   NICHT UEBERNOMMEN'))
                 else:
-                    print('  ?  g <feld> | s <feld> <wert> | d | f | gatt |'
-                          ' k | pin <zahl> | q')
+                    print('  ?  get | set | dump | gatt | key | pin | fields'
+                          ' | quit')
             except Exception as e:
                 print('  Verbindung weg (%s) -- neu starten' % type(e).__name__)
                 break
@@ -1016,8 +1017,8 @@ async def cmd_bisect(args):
             if c is None:
                 print('   KEINE VERBINDUNG -- die Schwellen stehen noch auf')
                 print('   dem letzten Pruefwert. Bitte nachholen:')
-                print('     python blu-gatt.py set bt %d' % original[1])
-                print('     python blu-gatt.py set dt %d' % original[0])
+                print('     python blu-gatt.py set bright %d' % original[1])
+                print('     python blu-gatt.py set dark %d' % original[0])
             else:
                 await schreiben(c, dunkel_uuid, breite, original[0])
                 await schreiben(c, hell_uuid, breite, original[1])
@@ -1041,13 +1042,12 @@ def main():
                        help='1 lauschen, 2 geradeheraus, 3 beides zugleich')
         return p
 
-    mit_weg(sub.add_parser('dump', aliases=['d'],
-                           help='alle Einstellungen lesen'))
+    mit_weg(sub.add_parser('dump', help='alle Einstellungen lesen'))
     mit_weg(sub.add_parser('gatt', help='alle Merkmale des Geraets auflisten'))
-    sub.add_parser('fields', aliases=['f'],
-                   help='die Feldnamen und ihre Kuerzel zeigen')
+    mit_weg(sub.add_parser('key', help='den 16-Byte-Schluessel lesen'))
+    sub.add_parser('fields', help='die Feldnamen und ihre Kurzformen zeigen')
 
-    pr = mit_weg(sub.add_parser('probe', aliases=['p'],
+    pr = mit_weg(sub.add_parser('probe',
                                 help='eine Schwelle setzen und mehrere'
                                      ' Pakete lang zusehen'))
     pr.add_argument('wert', type=int)
@@ -1056,33 +1056,28 @@ def main():
     pr.add_argument('--warten', type=float, default=5.0)
     pr.add_argument('--behalten', action='store_true')
 
-    h = sub.add_parser('listen', aliases=['l', 'horchen'],
+    h = sub.add_parser('listen',
                        help='nur zuhoeren, ohne den Sensor anzufassen')
     h.add_argument('--dauer', type=int, default=180,
                    help='Sekunden')
     h.add_argument('--roh', action='store_true',
                    help='die Dienstdaten zusaetzlich als Hex')
 
-    erlaubt = sorted(FIELDS) + sorted(NAMEN)
+    g = mit_weg(sub.add_parser('get', help='eine Einstellung lesen'))
+    g.add_argument('feld', choices=ERLAUBT, metavar='field')
 
-    g = mit_weg(sub.add_parser('get', aliases=['g'],
-                               help='eine Einstellung lesen'))
-    g.add_argument('feld', choices=erlaubt, metavar='feld')
-
-    st = mit_weg(sub.add_parser('set', aliases=['s'],
-                                help='eine Einstellung schreiben'))
-    st.add_argument('feld', choices=erlaubt, metavar='feld')
+    st = mit_weg(sub.add_parser('set', help='eine Einstellung schreiben'))
+    st.add_argument('feld', choices=ERLAUBT, metavar='field')
     st.add_argument('wert', type=int)
 
-    mit_weg(sub.add_parser('shell', aliases=['sh'],
+    mit_weg(sub.add_parser('shell',
                            help='einmal verbinden, dann viele Befehle'))
 
     pn = mit_weg(sub.add_parser('pin',
                                 help='PIN schicken und den Schluessel lesen'))
     pn.add_argument('pin', type=int)
 
-    b = mit_weg(sub.add_parser('bisect', aliases=['b'],
-                               help='die Helligkeit einkreisen'))
+    b = mit_weg(sub.add_parser('bisect', help='die Helligkeit einkreisen'))
     b.add_argument('--von', type=int, default=0)
     b.add_argument('--bis', type=int, default=65535,
                    help='zwei Bytes fasst das Feld, mehr geht nicht')
@@ -1102,16 +1097,10 @@ def main():
                         ' mitschreiben')
 
     args = p.parse_args()
-    befehle = {'dump': cmd_dump, 'd': cmd_dump,
-               'gatt': cmd_gatt,
-               'fields': cmd_fields, 'f': cmd_fields,
-               'probe': cmd_probe, 'p': cmd_probe,
-               'get': cmd_get, 'g': cmd_get,
-               'listen': cmd_horchen, 'l': cmd_horchen, 'horchen': cmd_horchen,
-               'set': cmd_set, 's': cmd_set,
-               'pin': cmd_pin,
-               'shell': cmd_shell, 'sh': cmd_shell,
-               'bisect': cmd_bisect, 'b': cmd_bisect}
+    befehle = {'dump': cmd_dump, 'gatt': cmd_gatt, 'key': cmd_key,
+               'fields': cmd_fields, 'probe': cmd_probe, 'get': cmd_get,
+               'listen': cmd_horchen, 'set': cmd_set, 'pin': cmd_pin,
+               'shell': cmd_shell, 'bisect': cmd_bisect}
     asyncio.run(befehle[args.cmd](args))
 
 
