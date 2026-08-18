@@ -112,10 +112,10 @@ ADDR = 'FC:4D:6A:38:E2:F2'
 # teurer ist als gar keiner. Am 19.08.2026 stand in jeder Fehlermeldung
 # "Knopf am Sensor druecken", und das ist genau verkehrt, wenn "set" schon im
 # Display steht: der naechste Druck fuehrt tiefer hinein statt hinaus.
-KNOPF = ('Steht "set" im Display, nimmt er keine Verbindung an -- warten, bis'
-         ' es\n   von selbst verschwindet. Steht es nicht da: ein Mal'
-         ' druecken, dann\n   warten, bis "set" wieder weg ist. Erst dann ist'
-         ' er ansprechbar.')
+KNOPF = ('Zwei Mal kurz druecken: einmal in den set-Modus hinein, einmal'
+         ' wieder\n   heraus. Danach ist er eine Weile ansprechbar. Solange'
+         ' "set" im Display\n   steht, nimmt er keine Verbindung an -- und'
+         ' warten, bis es von selbst\n   verschwindet, dauert viel zu lange.')
 
 # Name -> (UUID, Breite in Bytes). Die Zuordnung stammt aus dem Mitschnitt:
 # jede Einstellung einmal in der App geaendert, mit auffaelligen Zahlen, und
@@ -560,8 +560,15 @@ async def cmd_horchen(args):
     print('   Zeit   Abstand   Paket')
 
     beginn = time.monotonic()
-    letztes = [None]
+    letztes = [None]      # wann das letzte neue Beacon kam
+    laufend = [None]      # welcher Zaehler gerade wiederholt wird
+    wieder = [0]          # wie oft schon
     zahl = [0]
+
+    def zeile_abschliessen():
+        if wieder[0] > 1:
+            print('           (dasselbe Beacon %d mal gemeldet)' % wieder[0],
+                  flush=True)
 
     def gesehen(dev, adv):
         if dev.address.upper() != ADDR:
@@ -569,12 +576,24 @@ async def cmd_horchen(args):
         daten = adv.service_data.get(BTHOME_UUID)
         if not daten:
             return
+        paket = bthome_lesen(daten)
+        zaehler = paket.get(0x00)
+
+        # Ein Funkspruch wird vielfach gemeldet -- am 19.08.2026 sechzehn Mal
+        # derselbe Zaehler in eineinhalb Sekunden. Wer die Zeilen zaehlt,
+        # zaehlt Wiederholungen; was zaehlt, ist der Zaehler im Paket.
+        if zaehler is not None and zaehler == laufend[0]:
+            wieder[0] += 1
+            return
+        zeile_abschliessen()
+        laufend[0] = zaehler
+        wieder[0] = 1
+
         jetzt = time.monotonic()
         abstand = '     -' if letztes[0] is None else '%5.1f s' % (
             jetzt - letztes[0])
         letztes[0] = jetzt
         zahl[0] += 1
-        paket = bthome_lesen(daten)
         verbraucht = 1
         for kennung in paket:
             verbraucht += 1 + BREITEN.get(kennung, 0)
@@ -610,11 +629,13 @@ async def cmd_horchen(args):
     finally:
         await sc.stop()
 
+    zeile_abschliessen()
     if not zahl[0]:
         print('\nnichts gehoert. Ist er in Reichweite, und laeuft nebenher ein'
               ' anderes BLE-Programm?')
     else:
-        print('\n%d Pakete in %.0f s.' % (zahl[0], time.monotonic() - beginn))
+        print('\n%d Funksprueche in %.0f s (Wiederholungen nicht mitgezaehlt).'
+              % (zahl[0], time.monotonic() - beginn))
 
 
 async def naechstes_paket(sekunden=90):
@@ -642,36 +663,48 @@ async def naechstes_paket(sekunden=90):
 async def cmd_diag(args):
     """Misst, wie sich der Sensor wirklich verhaelt, statt es zu vermuten.
 
-    Alles, was dieses Werkzeug ueber Zeiten annimmt, ist bisher aus einzelnen
-    Beobachtungen zusammengeraten -- wie oft er funkt, ob er ohne Knopfdruck
-    ansprechbar ist, wie lange ein Verbindungsaufbau dauert, wie lange nach
-    dem Trennen bis zum naechsten Funkpaket vergeht. Jede dieser Zahlen steht
-    in irgendeiner Fristsetzung, und wenn eine davon falsch ist, sieht es aus
-    wie ein launisches Geraet.
+    Zwei Teile, und sie verlangen Gegensaetzliches: im ersten soll niemand den
+    Knopf anfassen, im zweiten soll er zwei Mal gedrueckt werden. Deshalb sagt
+    jeder Teil es noch einmal, unmittelbar bevor er anfaengt.
 
-    Also einmal richtig messen. Erst nur zuhoeren, dann eine Handvoll ganzer
-    Zyklen mit Uhr: verbinden, Merkmale abwarten, lesen, trennen, auf das
-    naechste Paket warten. Am Ende stehen die Zahlen da, und die Fristen im
-    Skript koennen sich danach richten statt umgekehrt.
+    Gezaehlt werden Funksprueche, nicht Zeilen. Ein Beacon wird vielfach
+    gemeldet -- am 19.08.2026 sechzehn Mal derselbe Paketzaehler in
+    eineinhalb Sekunden -- und wer die Meldungen zaehlt, misst den
+    Bluetooth-Stapel des Rechners statt den Sensor. Unterscheidbar sind sie am
+    Zaehler im Paket, Objekt 0x00.
 
-    Nichts davon wird geschrieben. Der Sensor kommt unveraendert heraus.
+    Geschrieben wird nichts. Der Sensor kommt unveraendert heraus.
     """
-    print('Messung, zwei Teile. Es wird nichts geschrieben.\n')
-    print('   %s\n' % KNOPF, flush=True)
+    print('Messung in zwei Teilen. Es wird nichts am Sensor geaendert.\n')
 
-    print('Teil 1: nur zuhoeren, %d s. Wie oft funkt er?' % args.horchen)
+    # ------------------------------------------------------------------
+    print('Teil 1 -- BITTE JETZT NICHTS DRUECKEN. %d s nur zuhoeren.'
+          % args.horchen)
+    print('Frage: wie oft funkt er von allein?\n', flush=True)
+
     zeiten = []
-    pakete = []
+    letzte = {'zaehler': None, 'wieder': 0}
 
     def gesehen(dev, adv):
         if dev.address.upper() != ADDR:
             return
         daten = adv.service_data.get(BTHOME_UUID)
-        zeiten.append(time.monotonic())
-        pakete.append(bthome_lesen(daten) if daten else {})
+        if not daten:
+            return
+        paket = bthome_lesen(daten)
+        z = paket.get(0x00)
+        if z is not None and z == letzte['zaehler']:
+            letzte['wieder'] += 1
+            return
+        if letzte['wieder'] > 1:
+            print('           (%d mal wiederholt)' % letzte['wieder'],
+                  flush=True)
+        letzte['zaehler'] = z
+        letzte['wieder'] = 1
+        jetzt = time.monotonic()
+        zeiten.append(jetzt)
         print('   %6.1f s   %4d dBm   %s'
-              % (zeiten[-1] - zeiten[0], adv.rssi,
-                 paket_text(pakete[-1])), flush=True)
+              % (jetzt - zeiten[0], adv.rssi, paket_text(paket)), flush=True)
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
@@ -679,27 +712,39 @@ async def cmd_diag(args):
         await asyncio.sleep(args.horchen)
     finally:
         await sc.stop()
+    if letzte['wieder'] > 1:
+        print('           (%d mal wiederholt)' % letzte['wieder'])
 
+    takt = None
     if len(zeiten) < 2:
-        print('\n   %d Pakete. Zu wenig fuer eine Aussage -- ist er in'
-              ' Reichweite?' % len(zeiten))
+        print('\n   %d Funksprueche -- zu wenig fuer eine Aussage.'
+              % len(zeiten))
     else:
-        luecken = [zeiten[i + 1] - zeiten[i] for i in range(len(zeiten) - 1)]
-        luecken.sort()
-        print('\n   %d Pakete, Abstaende von %.1f bis %.1f s, Mitte %.1f s.'
-              % (len(zeiten), luecken[0], luecken[-1],
-                 luecken[len(luecken) // 2]))
+        luecken = sorted([zeiten[i + 1] - zeiten[i]
+                          for i in range(len(zeiten) - 1)])
+        takt = luecken[len(luecken) // 2]
+        print('\n   %d Funksprueche, Abstaende %.0f bis %.0f s, Mitte %.0f s.'
+              % (len(zeiten), luecken[0], luecken[-1], takt))
+        print('   Das ist der Takt, und er ist die Untergrenze fuer alles,')
+        print('   was auf ein Funkpaket warten muss.')
 
-    print('\nTeil 2: %d ganze Zyklen mit Uhr.' % args.zyklen)
-    print('   Zeile: warten auf Paket / verbinden / Merkmale / lesen /'
-          ' trennen / bis zum naechsten Paket\n', flush=True)
+    # ------------------------------------------------------------------
+    print('\n' + '-' * 68)
+    print('Teil 2 -- JETZT ZWEI MAL KURZ DRUECKEN, hinein und wieder heraus.')
+    print('Frage: nimmt er danach Verbindungen an, wie schnell, und wie lange')
+    print('       haelt das an? Nach dem Doppeldruck nichts mehr anfassen.')
+    print('       %d Zyklen, Beginn in 8 Sekunden.\n' % args.zyklen,
+          flush=True)
+    await asyncio.sleep(8.0)
 
+    angefangen = time.monotonic()
     ergebnisse = []
     for i in range(1, args.zyklen + 1):
-        print('  Zyklus %d' % i, flush=True)
+        seit = time.monotonic() - angefangen
+        print('  Zyklus %d   (%.0f s nach dem Druck)' % (i, seit), flush=True)
         dev, paket, gewartet, rssi = await naechstes_paket(args.geduld)
         if dev is None:
-            print('   kein Paket nach %.0f s -- abgebrochen' % gewartet)
+            print('   kein Paket nach %.0f s -- abgebrochen\n' % gewartet)
             break
         print('   Paket nach %5.1f s   %s' % (gewartet, paket_text(paket)),
               flush=True)
@@ -710,9 +755,9 @@ async def cmd_diag(args):
             await c.connect()
             verbunden = time.monotonic() - t
         except Exception as e:
-            print('   verbinden fehlgeschlagen nach %.1f s (%s)'
+            print('   VERBINDEN FEHLGESCHLAGEN nach %.1f s (%s)\n'
                   % (time.monotonic() - t, type(e).__name__), flush=True)
-            ergebnisse.append((gewartet, None, None, None, None))
+            ergebnisse.append((seit, False, None, None, None))
             continue
         print('   verbunden nach       %5.1f s' % verbunden, flush=True)
 
@@ -722,49 +767,56 @@ async def cmd_diag(args):
         print('   Merkmale nach        %5.1f s%s'
               % (merkmale, '' if hat else '   AUSGEBLIEBEN'), flush=True)
 
-        gelesen = None
         if hat:
-            t = time.monotonic()
             try:
                 await lesen(c, FELDER['dark_threshold'][0], 2)
-                gelesen = time.monotonic() - t
-                print('   gelesen nach         %5.1f s' % gelesen, flush=True)
+                print('   gelesen: geht', flush=True)
             except Exception as e:
                 print('   lesen fehlgeschlagen (%s)' % type(e).__name__,
                       flush=True)
-
-        t = time.monotonic()
         try:
             await c.disconnect()
         except Exception:
             pass
-        print('   getrennt nach        %5.1f s' % (time.monotonic() - t),
-              flush=True)
 
         _, _, danach, _ = await naechstes_paket(args.geduld)
-        print('   naechstes Paket nach %5.1f s\n' % danach, flush=True)
-        ergebnisse.append((gewartet, verbunden, merkmale, gelesen, danach))
+        print('   nach dem Trennen bis zum naechsten Paket: %5.1f s\n'
+              % danach, flush=True)
+        ergebnisse.append((seit, True, verbunden, merkmale, danach))
 
-    gute = [e for e in ergebnisse if e[1] is not None]
-    print('Was dabei herauskam')
-    print('-------------------')
-    print('  %d von %d Zyklen haben verbunden%s.'
-          % (len(gute), len(ergebnisse),
-             ' -- und zwar ohne einen einzigen Knopfdruck' if
-             len(gute) == len(ergebnisse) and gute else ''))
+    # ------------------------------------------------------------------
+    print('-' * 68)
+    print('Was dabei herauskam\n')
+    if takt is not None:
+        print('  Takt von allein:        %.0f s' % takt)
+    gute = [e for e in ergebnisse if e[1]]
+    print('  Verbindungen:           %d von %d gelungen'
+          % (len(gute), len(ergebnisse)))
+    for seit, ok, verb, merk, danach in ergebnisse:
+        print('    %5.0f s nach dem Druck: %s' % (seit, 'ja' if ok else 'NEIN'))
     if gute:
         def mitte(werte):
             w = sorted([x for x in werte if x is not None])
             return w[len(w) // 2] if w else float('nan')
-        print('  verbinden      Mitte %.1f s' % mitte([e[1] for e in gute]))
-        print('  Merkmale       Mitte %.1f s' % mitte([e[2] for e in gute]))
-        print('  lesen          Mitte %.1f s' % mitte([e[3] for e in gute]))
-        print('  Trennen bis zum naechsten Paket: Mitte %.1f s'
+        print('  verbinden:              Mitte %.1f s'
+              % mitte([e[2] for e in gute]))
+        print('  Merkmale danach:        Mitte %.1f s'
+              % mitte([e[3] for e in gute]))
+        print('  Trennen bis Paket:      Mitte %.0f s'
               % mitte([e[4] for e in gute]))
         print('\n  Die letzte Zahl ist der Preis einer Runde in track und'
               ' bisect.')
-        print('  Kuerzer als sie geht keine Messung, die den Rundfunk'
-              ' braucht.')
+    misslungen = [e for e in ergebnisse if not e[1]]
+    if misslungen and gute:
+        print('\n  Gelungen bis %.0f s nach dem Druck, misslungen ab %.0f s.'
+              % (max(e[0] for e in gute), min(e[0] for e in misslungen)))
+        print('  Dazwischen liegt das Fenster -- so lange bleibt er nach'
+              ' einem')
+        print('  Doppeldruck ansprechbar.')
+    elif misslungen and not gute:
+        print('\n  Keine einzige Verbindung. Entweder war der Doppeldruck zu'
+              ' frueh')
+        print('  oder zu spaet, oder er laesst ueberhaupt niemanden heran.')
 
 
 async def cmd_fields(args):
