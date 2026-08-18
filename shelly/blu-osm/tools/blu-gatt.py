@@ -4,6 +4,7 @@
     python blu-gatt.py get zigbee                eine Einstellung lesen
     python blu-gatt.py set temp_offset 0         eine Einstellung schreiben
     python blu-gatt.py pin 123456                PIN schicken, Schluessel lesen
+    python blu-gatt.py gatt                      alle Merkmale auflisten
     python blu-gatt.py shell                     einmal verbinden, dann viele Befehle
     python blu-gatt.py bisect                    Helligkeit einkreisen
                                                  (ein Knopfdruck am Anfang)
@@ -269,6 +270,67 @@ def bthome_lesen(daten):
     return aus
 
 
+BEKANNT = dict([(u.lower(), n) for n, (u, _) in FELDER.items()]
+               + [(u.lower(), n) for n, u in NUR_LESBAR.items()]
+               + [(PIN_UUID, 'PIN'), (SCHLUESSEL_UUID, 'Schluessel')])
+
+
+async def merkmale_zeigen(c, lesen_auch=True):
+    """Zaehlt auf, was das Geraet ueberhaupt anbietet.
+
+    Alles, was wir bisher kennen, stammt aus dem Handy-Mitschnitt und damit aus
+    dem, was die Shelly-App angefasst hat. Was sie nicht anfasst, steht dort
+    nicht -- und genau da koennte liegen, was wir suchen: ein Merkmal, das die
+    Hell-Dunkel-Entscheidung direkt hergibt, oder eins mit notify, das sie von
+    sich aus meldet. Waere eines davon da, braeuchte bisect das Trennen und
+    Abhorchen ueberhaupt nicht mehr.
+    """
+    gefunden = []
+    for dienst in c.services:
+        print('\nDienst %s' % dienst.uuid)
+        for m in dienst.characteristics:
+            eig = ','.join(m.properties)
+            name = BEKANNT.get(m.uuid.lower(), '')
+            zeile = '  %s  [%s]  %s' % (m.uuid, eig, name)
+            wert = ''
+            if lesen_auch and 'read' in m.properties:
+                try:
+                    roh = await c.read_gatt_char(m)
+                    wert = '%s' % roh.hex()
+                    if 1 <= len(roh) <= 4:
+                        wert += '  = %d' % int.from_bytes(roh, 'little')
+                    else:
+                        try:
+                            t = roh.decode()
+                            if t.isprintable():
+                                wert += '  = %r' % t
+                        except Exception:
+                            pass
+                except Exception as e:
+                    wert = '<%s>' % type(e).__name__
+            print('%-72s %s' % (zeile, wert))
+            if 'notify' in m.properties or 'indicate' in m.properties:
+                gefunden.append(m.uuid)
+    if gefunden:
+        print('\nMit notify/indicate: %s' % ', '.join(gefunden))
+        print('Das ist die interessante Spur -- so ein Merkmal koennte die')
+        print('Helligkeit melden, ohne dass die Verbindung getrennt wird.')
+    else:
+        print('\nKein einziges Merkmal mit notify oder indicate.')
+        print('Der Sensor sagt von sich aus nichts, solange man an ihm haengt.')
+    return gefunden
+
+
+async def cmd_gatt(args):
+    c = await fassen(weg=getattr(args, 'weg', 1))
+    if not c:
+        return print('keine Verbindung')
+    try:
+        await merkmale_zeigen(c)
+    finally:
+        await c.disconnect()
+
+
 async def cmd_dump(args):
     c = await fassen(weg=getattr(args, 'weg', 1))
     if not c:
@@ -374,7 +436,7 @@ async def cmd_shell(args):
     c = await fassen(weg=args.weg)
     if not c:
         return print('keine Verbindung')
-    print('verbunden. Befehle: get <feld> | set <feld> <wert> | dump |'
+    print('verbunden. Befehle: get <feld> | set <feld> <wert> | dump | gatt |'
           ' pin <zahl> | schluessel | ende')
     print('Felder:', ', '.join(sorted(FELDER)), flush=True)
     try:
@@ -397,6 +459,9 @@ async def cmd_shell(args):
                     print('  PIN geschickt: %d' % wert)
                     await asyncio.sleep(0.6)
                     await zeige_schluessel(c, 'nachher')
+                    continue
+                if befehl == 'gatt':
+                    await merkmale_zeigen(c)
                     continue
                 if befehl == 'schluessel':
                     await zeige_schluessel(c, 'jetzt  ')
@@ -640,6 +705,7 @@ def main():
         return p
 
     mit_weg(sub.add_parser('dump', help='alle Einstellungen lesen'))
+    mit_weg(sub.add_parser('gatt', help='alle Merkmale des Geraets auflisten'))
 
     g = mit_weg(sub.add_parser('get', help='eine Einstellung lesen'))
     g.add_argument('feld', choices=sorted(FELDER))
@@ -670,7 +736,8 @@ def main():
                         ' urspruenglichen zurueckzuschreiben')
 
     args = p.parse_args()
-    asyncio.run({'dump': cmd_dump, 'get': cmd_get, 'set': cmd_set, 'pin': cmd_pin,
+    asyncio.run({'dump': cmd_dump, 'gatt': cmd_gatt, 'get': cmd_get,
+                 'set': cmd_set, 'pin': cmd_pin,
                  'shell': cmd_shell, 'bisect': cmd_bisect}[args.cmd](args))
 
 
