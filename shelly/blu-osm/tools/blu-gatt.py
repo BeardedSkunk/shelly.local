@@ -538,12 +538,17 @@ async def merkmale_zeigen(c, lesen_auch=True):
 async def cmd_horchen(args):
     """Hoert nur zu. Kein Verbindungsaufbau, kein Schreiben, kein Knopfdruck.
 
-    Der Sensor funkt alle sechzig Sekunden von sich aus, und in diesem Paket
-    steht laut Herstellertabelle nicht nur seine Entscheidung hell/dunkel,
-    sondern unter 0x64 auch die gemessene Helligkeit. Wenn das stimmt, ist das
-    Einkreisen ueber die Schwellen ueberfluessig -- man liest den Wert einfach
-    ab. Ein Empfaenger stoert den Sensor nicht; er weiss nicht einmal, dass
-    jemand zuhoert.
+    Der Sensor funkt etwa alle sechzig Sekunden von sich aus, und in diesem
+    Paket steht neben seiner Entscheidung hell/dunkel auch die gemessene
+    Helligkeit als Objekt 0x64. Ein Empfaenger stoert ihn nicht; er weiss
+    nicht einmal, dass jemand zuhoert.
+
+    Zwei Dinge stehen deshalb in jeder Zeile, die frueher fehlten. Erstens der
+    Abstand zum vorigen Paket: am 19.08.2026 kamen nach langer Stille drei
+    Zeilen auf einmal, und ohne diese Spalte laesst sich nicht sagen, ob der
+    Sensor buendelt oder der Rechner die Meldungen gestaut hat. Zweitens eine
+    Zeile beim Warten -- wer eine Minute lang nichts sieht, kann sonst nicht
+    zwischen "gleich kommt was" und "hier ist etwas kaputt" unterscheiden.
 
     Ungewoehnliche Objekte werden roh gezeigt statt verschwiegen: das Zerlegen
     bricht bei einer unbekannten Kennung ab, und dann fehlt alles dahinter,
@@ -552,8 +557,11 @@ async def cmd_horchen(args):
     print('hoere zu, %d Sekunden. Er meldet sich etwa einmal pro Minute.'
           % args.dauer)
     print('(Nur Empfang -- der Sensor merkt davon nichts.)\n', flush=True)
+    print('   Zeit   Abstand   Paket')
 
-    gesehen_zahl = [0]
+    beginn = time.monotonic()
+    letztes = [None]
+    zahl = [0]
 
     def gesehen(dev, adv):
         if dev.address.upper() != ADDR:
@@ -561,134 +569,52 @@ async def cmd_horchen(args):
         daten = adv.service_data.get(BTHOME_UUID)
         if not daten:
             return
-        gesehen_zahl[0] += 1
+        jetzt = time.monotonic()
+        abstand = '     -' if letztes[0] is None else '%5.1f s' % (
+            jetzt - letztes[0])
+        letztes[0] = jetzt
+        zahl[0] += 1
         paket = bthome_lesen(daten)
-        rest = ''
         verbraucht = 1
         for kennung in paket:
             verbraucht += 1 + BREITEN.get(kennung, 0)
-        if verbraucht < len(daten):
-            rest = '   Rest %s' % daten[verbraucht:].hex()
-        print('%s   %s%s' % (paket_text(paket), '', rest), flush=True)
+        rest = ('   Rest %s' % daten[verbraucht:].hex()
+                if verbraucht < len(daten) else '')
+        print('  %5.0f s  %s   %s%s'
+              % (jetzt - beginn, abstand, paket_text(paket), rest), flush=True)
         if args.roh:
-            print('      roh %s' % daten.hex(), flush=True)
+            print('           roh %s' % daten.hex(), flush=True)
 
     sc = BleakScanner(detection_callback=gesehen)
     await sc.start()
     try:
-        await asyncio.sleep(args.dauer)
+        # Statt einmal zu schlafen: wach bleiben und sagen, dass noch nichts
+        # da ist. Stille ohne Uhr sieht aus wie ein Defekt.
+        naechste_meldung = 20.0
+        while True:
+            vergangen = time.monotonic() - beginn
+            if vergangen >= args.dauer:
+                break
+            await asyncio.sleep(1.0)
+            vergangen = time.monotonic() - beginn
+            still = vergangen if letztes[0] is None else (
+                time.monotonic() - letztes[0])
+            if still >= naechste_meldung:
+                print('  %5.0f s  ... seit %.0f s nichts gehoert%s'
+                      % (vergangen, still,
+                         ' (bis 90 s ist das normal)' if still < 95 else ''),
+                      flush=True)
+                naechste_meldung = still + 20.0
+            elif still < 5.0:
+                naechste_meldung = 20.0
     finally:
         await sc.stop()
-    if not gesehen_zahl[0]:
-        print('nichts gehoert. Ist er in Reichweite, und laeuft nebenher ein'
+
+    if not zahl[0]:
+        print('\nnichts gehoert. Ist er in Reichweite, und laeuft nebenher ein'
               ' anderes BLE-Programm?')
     else:
-        print('\n%d Pakete.' % gesehen_zahl[0])
-
-
-async def cmd_probe(args):
-    """Setzt beide Schwellen auf einen Wert und sieht mehrere Pakete lang zu.
-
-    bisect fragt nach jedem Schritt genau ein Paket ab und geht weiter. Das
-    setzt voraus, dass der Sensor seine Entscheidung sofort neu faellt --
-    was niemand geprueft hat. Faellt er sie nur alle paar Minuten neu, oder
-    erst nach irgendeinem inneren Anlass, dann antwortet das eine Paket auf
-    eine Frage von vorhin, und die ganze Einkreisung misst nichts.
-
-    Also eine Schwelle, viele Pakete. Aendert sich das Urteil beim dritten
-    oder fuenften, wissen wir, dass es an der Zeit lag und nicht am Wert.
-    Aendert es sich nie, obwohl die Schwelle weit unter der gemeldeten
-    Helligkeit liegt, dann gehorcht das Bit diesen Schwellen nicht.
-    """
-    dunkel_uuid, breite = FELDER['dark_threshold']
-    hell_uuid, _ = FELDER['bright_threshold']
-
-    print('Setze beide Schwellen auf %d und hoere dann %d Pakete lang zu.'
-          % (args.wert, args.pakete))
-    print('   %s' % KNOPF)
-    print('   Und nebenher kein zweites BLE-Programm auf denselben Sensor.\n',
-          flush=True)
-
-    c = await fassen(minuten=args.warten, weg=args.weg)
-    if not c:
-        return print('keine Verbindung.')
-    original = (await lesen(c, dunkel_uuid, breite),
-                await lesen(c, hell_uuid, breite))
-    print('vorher: dunkel %d, hell %d' % original, flush=True)
-    zurueck = await schwellen_setzen(c, args.wert)
-    print('jetzt:  dunkel %d, hell %d%s'
-          % (zurueck[0], zurueck[1],
-             '' if zurueck == (args.wert, args.wert)
-             else '   NICHT UEBERNOMMEN'), flush=True)
-    await c.disconnect()
-    await asyncio.sleep(1.0)
-
-    print('\nhoere zu. Jetzt ist der Moment fuer die Taschenlampe.\n',
-          flush=True)
-    urteile = set()
-    gesehen = [0]
-    angefangen = time.monotonic()
-
-    def sehen(dev, adv):
-        if dev.address.upper() != ADDR:
-            return
-        daten = adv.service_data.get(BTHOME_UUID)
-        if not daten:
-            return
-        paket = bthome_lesen(daten)
-        gesehen[0] += 1
-        if 0x1e in paket:
-            urteile.add(paket[0x1e])
-        print('  %5.0f s   %s' % (time.monotonic() - angefangen,
-                                  paket_text(paket)), flush=True)
-
-    sc = BleakScanner(detection_callback=sehen)
-    await sc.start()
-    try:
-        ende = time.monotonic() + args.pakete * 70
-        while gesehen[0] < args.pakete and time.monotonic() < ende:
-            await asyncio.sleep(1.0)
-    finally:
-        await sc.stop()
-
-    print('')
-    if not gesehen[0]:
-        print('nichts gehoert.')
-    elif len(urteile) > 1:
-        print('Das Urteil hat sich waehrend der Beobachtung geaendert. Es'
-              ' haengt also an')
-        print('der Zeit oder am Licht, nicht nur am geschriebenen Wert -- und'
-              ' bisect,')
-        print('das nach jedem Schritt ein einziges Paket abfragt, misst zu'
-              ' frueh.')
-    else:
-        print('%d Pakete, ein einziges Urteil (%s) bei Schwelle %d.'
-              % (gesehen[0], 'hell' if urteile.pop() else 'dunkel',
-                 args.wert))
-        print('Keine Traegheit zu sehen -- das eine Paket, das bisect'
-              ' abfragt, genuegt.')
-
-    if args.behalten:
-        print('\nDie Schwellen bleiben auf %d.' % args.wert)
-        return
-    print('\nSetze zurueck auf dunkel %d, hell %d.' % original, flush=True)
-    _, c = await messen_und_fassen(args.geduld)
-    if c is None:
-        c = await fassen(minuten=args.warten, weg=args.weg)
-    if c is None:
-        print('   keine Verbindung. Bitte nachholen:')
-        print('     python blu-gatt.py set bright %d' % original[1])
-        print('     python blu-gatt.py set dark %d' % original[0])
-        return
-    try:
-        await schreiben(c, hell_uuid, breite, original[1])
-        await schreiben(c, dunkel_uuid, breite, original[0])
-        await asyncio.sleep(0.4)
-        print('   jetzt: dunkel %d, hell %d'
-              % (await lesen(c, dunkel_uuid, breite),
-                 await lesen(c, hell_uuid, breite)))
-    finally:
-        await c.disconnect()
+        print('\n%d Pakete in %.0f s.' % (zahl[0], time.monotonic() - beginn))
 
 
 async def naechstes_paket(sekunden=90):
