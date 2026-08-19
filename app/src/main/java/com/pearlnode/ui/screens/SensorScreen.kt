@@ -339,7 +339,7 @@ private fun SeriesCard(
             Spacer(Modifier.height(8.dp))
             SeriesChart(
                 buckets = series.buckets,
-                labels = barLabels(state.window, series.buckets, state.zone, formats),
+                labels = barLabels(series.buckets, state.zone, formats),
                 left = { scale -> plainAxis(scale, if (temperature) formats.degreeUnit else "%") },
                 // Per cent is nought to a hundred, always. Quarters of it, so
                 // the gridlines read 0, 25, 50, 75, 100.

@@ -393,7 +393,7 @@ private fun ChartCard(
             val barHours = remember(state.buckets) { meanBarHours(state.buckets) }
             SeriesChart(
                 buckets = rates,
-                labels = barLabels(state.window, state.buckets, state.zone, formats),
+                labels = barLabels(state.buckets, state.zone, formats),
                 left = ::powerAxis,
                 right = { scale -> moneyAxis(scale, cents, barHours, formats) },
                 highlight = state.scrubbed,
@@ -794,79 +794,89 @@ fun levelLabel(level: PowerLevel): Int = when (level) {
 /**
  * What is written under the bars.
  *
- * Each level is marked where a reader of that level actually looks, which is
- * not the same as every nth bar:
+ * The format comes off the bars, not off the level that asked for them.
+ *
+ * The two disagree while a level is being changed: the window is the new one
+ * from the moment the chip is tapped, the bars arrive from the database a
+ * moment later. The sensor screen makes that visible, because its two series
+ * each have their own fold and whichever finishes first sets the window --
+ * so the other chart is briefly labelled in a format its bars are not in. A
+ * bar knows how wide it is, and how wide it is decides what it is called.
+ *
+ * Each width is marked where a reader of it actually looks, which is not the
+ * same as every nth bar:
  *
  *  - an hour at the quarters. Nobody looks for the bar that began at :38, and
- *    the quarters are not bar boundaries anyway -- the bars are two minutes
- *    wide. So they are put where the quarters fall along the axis: :15 and :45
- *    land on the middle of a bar, and :30 on the seam between two, which is
- *    exactly where the half hour is.
+ *    nothing guarantees a bar begins at :15 either. So they are put where the
+ *    quarters fall along the axis, whatever the bars underneath are doing.
  *  - a day every three hours. The ends stay bare: a label under the first or
  *    last bar has half of itself hanging off the chart.
- *  - a month at the fifths of the month, 5 through 25, and the 30th where the
- *    month has a 31st for it not to be the end of. The round numbers are what a
- *    date is looked up by, and the 1st and the last are the ends again.
+ *  - a month at the fifths of the month, 5 through 30. The round numbers are
+ *    what a date is looked up by, and the 1st and the last are the ends again.
  *  - a week and a year every bar, because seven and twelve both fit.
  */
 fun barLabels(
-    window: PowerWindow,
     buckets: List<PowerBucket>,
     zone: ZoneId,
     formats: Formats,
 ): List<PowerAxisLabel> {
     if (buckets.isEmpty()) return emptyList()
-    if (window.level == PowerLevel.HOUR) {
+    fun at(index: Int) =
+        ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone)
+
+    val span = buckets.first().endUtc - buckets.first().startUtc
+    val shape = when {
+        span < 3600L -> Shape.MINUTE
+        span < 20 * 3600L -> Shape.HOUR
+        // Twenty days apart is nowhere near either a day or a month, so this
+        // survives a short February and a day with a clock change in it.
+        span < 20 * 86400L -> if (buckets.size <= 7) Shape.WEEKDAY else Shape.DAY
+        else -> Shape.MONTH
+    }
+
+    // By fraction of the axis rather than by bar, which is the whole reason
+    // PowerAxisLabel carries a position: a quarter hour need not be a bar edge.
+    if (shape == Shape.MINUTE) {
         return QUARTERS.map {
             PowerAxisLabel(String.format(Locale.getDefault(), ":%02d", it), it / 60f)
         }
     }
-    val dayOfMonth = { index: Int ->
-        ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone).dayOfMonth
-    }
-    val marked = when (window.level) {
-        PowerLevel.DAY -> everyThird(buckets)
-        // The 30th as well, now that a label at the end has a gutter to hang
-        // into: the gap from the 25th to the end of a month is wide enough to
-        // want a mark in it.
-        PowerLevel.MONTH -> buckets.indices.filter { index ->
-            val day = dayOfMonth(index)
-            day in MONTH_MARKS || day == 30
-        }
+
+    val marked = when (shape) {
+        Shape.HOUR -> everyThird(buckets)
+        Shape.DAY -> buckets.indices.filter { at(it).dayOfMonth in MONTH_MARKS }
         else -> buckets.indices.toList()
     }
     return marked.map { index ->
-        val at = ZonedDateTime.ofInstant(Instant.ofEpochSecond(buckets[index].startUtc), zone)
-        val text = when (window.level) {
-            PowerLevel.HOUR -> String.format(Locale.getDefault(), ":%02d", at.minute)
-            PowerLevel.DAY -> formats.hour(buckets[index].startUtc * 1000)
-            PowerLevel.WEEK -> at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
-            PowerLevel.MONTH -> at.dayOfMonth.toString()
-            PowerLevel.YEAR -> at.month.getDisplayName(TextStyle.NARROW, Locale.getDefault())
+        val moment = at(index)
+        val text = when (shape) {
+            Shape.MINUTE -> String.format(Locale.getDefault(), ":%02d", moment.minute)
+            Shape.HOUR -> formats.hour(buckets[index].startUtc * 1000)
+            Shape.WEEKDAY -> moment.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
+            Shape.DAY -> moment.dayOfMonth.toString()
+            Shape.MONTH -> moment.month.getDisplayName(TextStyle.NARROW, Locale.getDefault())
         }
         PowerAxisLabel(text, (index + 0.5f) / buckets.size)
     }
 }
 
+/** What a bar is called, decided by how much time it covers. */
+private enum class Shape { MINUTE, HOUR, WEEKDAY, DAY, MONTH }
+
 /** The minutes an hour is read at. */
 private val QUARTERS = listOf(15, 30, 45)
 
 /**
- * The days a month is always read at. The 30th joins them where the month is
- * long enough for it not to be the end -- see the caller.
- */
-private val MONTH_MARKS = listOf(5, 10, 15, 20, 25)
-
-/**
- * Every third bar of a day, kept clear of both ends.
+ * Which days of a month get a figure.
  *
- * Which of the two possible starts is used is decided by what it would write.
- * Midnight is the hour that reads "0", and a lone zero under a chart of energy
- * reads as a measurement rather than as a time -- so if one start hits midnight
- * and the other does not, the other one is taken. The window is not always a
- * calendar day: the rolling one ends at the next full hour, so which bars are
- * which hour moves through the day, and neither start can be picked in advance.
+ * The thirtieth is in the list rather than a special case beside it. It used to
+ * be one because a label that near the end had to share the right-hand gutter
+ * with a second axis; there is no second axis any more, and a month running to
+ * thirty or thirty-one with nothing written past twenty-five reads as though it
+ * ended early.
  */
+private val MONTH_MARKS = listOf(5, 10, 15, 20, 25, 30)
+
 /**
  * Every third bar, from the second to the second last.
  *
