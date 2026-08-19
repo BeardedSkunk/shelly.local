@@ -68,9 +68,10 @@ private const val MAX_DECIMALS = 4
  * One label along an axis, at a fraction of that axis's length.
  *
  * A position rather than a bar index, because the marks a reader looks for are
- * not always bars. The quarters of an hour are the case in point: bars are two
- * minutes wide, so no bar begins at :15, and the label belongs a quarter of the
- * way across the chart whether or not a bar starts there.
+ * not always bars. The quarters of an hour are the case in point: at three
+ * minutes to a bar the quarters do fall on bar edges, but nothing guarantees
+ * that -- the label belongs a quarter of the way across the chart whether or
+ * not a bar happens to start there.
  */
 data class PowerAxisLabel(val text: String, val at: Float)
 
@@ -547,7 +548,7 @@ class Axis(val unit: String, val ticks: List<String>)
  * Power rather than the energy each bar holds, which is what this used to read.
  * A bar's height is its energy, but the number worth putting beside it is the
  * rate: watts are what the plug reports, what the figure under the chart says,
- * and what anyone knows a kettle or a fridge by. Watt hours per two-minute bar
+ * and what anyone knows a kettle or a fridge by. Watt hours per three-minute bar
  * are a quantity nobody has a feel for, and they change meaning with the level
  * -- the same load reads 13 in an hour chart and 300 in a day chart.
  *
@@ -581,7 +582,7 @@ fun powerAxis(scale: Scale): Axis {
  * and the length of February, so one figure prices the whole axis.
  *
  * An axis names its unit once, so unlike a single figure it cannot pick the
- * unit that suits it: the minor one is what keeps two minutes of a small load
+ * unit that suits it: the minor one is what keeps three minutes of a small load
  * readable, and where the user has cleared it the whole unit is all there is.
  */
 fun moneyAxis(scale: Scale, centsPerKwh: Double, barHours: Double, formats: Formats): Axis {

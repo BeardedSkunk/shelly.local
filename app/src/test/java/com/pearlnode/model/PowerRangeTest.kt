@@ -93,14 +93,14 @@ class PowerRangeTest {
         // Bar 2 of that day is 03:00, because 02:00 never happens.
         val hour = forward.drillInto(2, nowIn("2026-03-30T00:00"), berlin)!!
         assertEquals(at("2026-03-29T03:00"), hour.anchor)
-        assertEquals(30, bars(hour))
+        assertEquals(20, bars(hour))
 
         val back = PowerWindow.of(PowerLevel.DAY, at("2026-10-25T00:00"))
         // 02:00 happens twice; bars 2 and 3 are the two of them, and they are an
         // hour apart in real time even though they are the same wall clock hour.
         val edges = back.edges(nowIn("2026-10-26T00:00"), berlin)
         assertEquals(3600L, edges[3] - edges[2])
-        assertEquals(30, bars(back.drillInto(2, nowIn("2026-10-26T00:00"), berlin)!!))
+        assertEquals(20, bars(back.drillInto(2, nowIn("2026-10-26T00:00"), berlin)!!))
     }
 
     @Test
@@ -295,7 +295,7 @@ class PowerRangeTest {
     @Test
     fun `every level agrees with the calendar on how many bars it has`() {
         val now = nowIn("2026-08-05T12:00")
-        assertEquals(30, bars(PowerWindow.of(PowerLevel.HOUR, at("2026-08-05T09:00")), now))
+        assertEquals(20, bars(PowerWindow.of(PowerLevel.HOUR, at("2026-08-05T09:00")), now))
         assertEquals(24, bars(PowerWindow.of(PowerLevel.DAY, at("2026-08-04T00:00")), now))
         assertEquals(7, bars(PowerWindow.of(PowerLevel.WEEK, at("2026-08-03T00:00")), now))
         assertEquals(31, bars(PowerWindow.of(PowerLevel.MONTH, at("2026-08-01T00:00")), now))

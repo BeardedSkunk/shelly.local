@@ -25,7 +25,7 @@ enum class PowerLevel { HOUR, DAY, WEEK, MONTH, YEAR }
  * The bars stay where they always were: hours are still hours and days still
  * days, because the anchor moves by whole bars and never between them.
  *
- * Bars per screen: 30 two-minute bars in an hour, 24 hours in a day, 7 days in
+ * Bars per screen: 20 three-minute bars in an hour, 24 hours in a day, 7 days in
  * a week, 28 to 31 in a month, 12 months in a year. The day is 23 or 25 bars on
  * the two days a year the clocks move, because it genuinely is.
  *
@@ -96,7 +96,7 @@ data class PowerWindow(
     /**
      * The window behind one bar, or null at the finest level. A year opens the
      * month that was tapped, a month or a week the day, a day the hour -- and
-     * an hour is two-minute bars, comfortably inside what the plug records.
+     * an hour is three-minute bars, comfortably inside what the plug records.
      */
     fun drillInto(barIndex: Int, nowUtc: Long, zone: ZoneId = ZoneId.systemDefault()): PowerWindow? {
         if (level == PowerLevel.HOUR) return null
@@ -227,8 +227,17 @@ data class PowerWindow(
     }
 
     companion object {
-        /** Bar width inside an hour. The plug's native tier resolves far finer. */
-        const val BAR_MINUTES = 2L
+        /**
+         * Bar width inside an hour: twenty bars, not thirty.
+         *
+         * The plug's native tier resolves far finer, so this is a drawing
+         * decision and not a limit. Two minutes made a bar too narrow to carry
+         * anything but its own height -- and the quarter hours, which are what
+         * an hour is read at, fell in the middle of a bar rather than on an
+         * edge. Sixty divides by three as cleanly as by two, so the bars still
+         * begin on whole minutes and now the quarters begin with them.
+         */
+        const val BAR_MINUTES = 3L
 
         fun of(
             level: PowerLevel,
