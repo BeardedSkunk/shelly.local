@@ -396,6 +396,7 @@ private fun ChartCard(
                 labels = barLabels(state.buckets, state.zone, formats),
                 left = ::powerAxis,
                 right = { scale -> moneyAxis(scale, cents, barHours, formats) },
+                minTop = IDLE_TOP,
                 highlight = state.scrubbed,
                 projectFrom = System.currentTimeMillis() / 1000,
                 onBarTap = if (state.canDrill) onDrill else null,
@@ -782,6 +783,18 @@ private fun meanBarHours(buckets: List<PowerBucket>): Double {
     val span = buckets.last().endUtc - buckets.first().startUtc
     return span.toDouble() / buckets.size / 3600.0
 }
+
+/**
+ * How high the power axis reaches even when nothing much is going on: one watt,
+ * in the milliwatts the chart counts in.
+ *
+ * Chosen to sit just above what a plug draws while idle and well below anything
+ * plugged into it: a charger, a fridge, a kettle all pass it in their first
+ * second, so the axis behaves exactly as before wherever there is a real load.
+ * What it stops is the empty hour, where a standby light of two hundred
+ * milliwatts filled the chart and every flicker of it looked like an event.
+ */
+private const val IDLE_TOP = 1_000.0
 
 fun levelLabel(level: PowerLevel): Int = when (level) {
     PowerLevel.HOUR -> R.string.power_range_hour

@@ -141,6 +141,19 @@ fun SeriesChart(
      * headroom that cannot exist.
      */
     fixedScale: Scale? = null,
+    /**
+     * The smallest top the axis may settle on, in the thousandths the charts
+     * carry throughout.
+     *
+     * A floor rather than a fixed scale. A plug that is only idling draws a few
+     * hundred milliwatts, and an axis fitted to those redraws itself at every
+     * twitch of a standby light -- so a fridge that has not started yet fills
+     * the chart and looks like something happening. With a floor the axis stays
+     * put until something genuinely does not fit; then it grows, and the small
+     * stuff shrinks into it where it belongs. Only for the unsigned charts: a
+     * temperature has no natural bottom to be measured up from.
+     */
+    minTop: Double = 0.0,
     /** The bar under the finger while scrubbing, drawn brighter than the rest. */
     highlight: Int? = null,
     /**
@@ -177,7 +190,6 @@ fun SeriesChart(
     val drawnDefault = PowerDrawnColor
     val earnedDefault = PowerEarnedColor
     val colourOf = barColor ?: { _, value -> if (value >= 0) drawnDefault else earnedDefault }
-    val known = buckets.filter { it.coarsestTier != null }
     // What each bar will read as, the last one included: the axis has to hold
     // the projection or the bar it belongs to would run off the top.
     val shown = buckets.map { projected(it, projectFrom) }
@@ -200,12 +212,12 @@ fun SeriesChart(
     val scale = fixedScale ?: when {
         knownShown.isNotEmpty() -> {
             val fresh = if (signed) Scale.forRange(knownShown.min(), knownShown.max())
-            else Scale.forPeak(knownShown.maxOf { abs(it) })
+            else Scale.forPeak(maxOf(knownShown.maxOf { abs(it) }, minTop))
             held[0] = fresh
             fresh
         }
         held[0] != null -> held[0]!!
-        else -> if (signed) Scale.forRange(0.0, 0.0) else Scale.forPeak(0.0)
+        else -> if (signed) Scale.forRange(0.0, 0.0) else Scale.forPeak(minTop)
     }
     val energy = left(scale)
     val money = right?.invoke(scale)
