@@ -21,7 +21,9 @@ import com.pearlnode.model.mergeFinest
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -248,25 +250,33 @@ class SensorViewModel(
             }.collectLatest { blocks ->
                 val selected = window.value
                 val edges = selected.edges(nowUtc(), zone())
-                val segments = mergeFinest(
-                    blocks.map { it.asSegmentSource() }, edges.first(), edges.last()
-                )
-                // MEAN, not SUM: a bucket of a level series is what it stood at,
-                // weighted by how long it stood there.
-                val buckets = bucketize(segments, edges, BucketAggregate.MEAN)
-                // The extremes come from the blocks themselves, which is what
-                // the sensor really said, rather than from the averaged bars.
-                val inWindow = blocks.filter {
-                    it.endUtc > edges.first() && it.startUtc < edges.last()
+                // Folded on a worker thread rather than on the one that draws;
+                // there are two of these charts, so the draw thread would carry
+                // it twice over. See PowerViewModel.observeHistory.
+                val built = withContext(Dispatchers.Default) {
+                    val segments = mergeFinest(
+                        blocks.map { it.asSegmentSource() }, edges.first(), edges.last()
+                    )
+                    // MEAN, not SUM: a bucket of a level series is what it stood
+                    // at, weighted by how long it stood there.
+                    Triple(
+                        bucketize(segments, edges, BucketAggregate.MEAN),
+                        // A reading rather than a rate, so nothing to spread
+                        // over an hour, and signed, so a frost stays a frost.
+                        barRanges(segments, edges, scale = 1.0, magnitude = false),
+                        // The extremes come from the blocks themselves, which is
+                        // what the sensor really said, rather than from the
+                        // averaged bars.
+                        blocks.filter { it.endUtc > edges.first() && it.startUtc < edges.last() },
+                    )
                 }
+                val (buckets, ranges, inWindow) = built
                 _uiState.update { state ->
                     val series = state.series(kind).copy(
                         buckets = buckets,
                         lowMilli = inWindow.minOfOrNull { it.milliValue },
                         highMilli = inWindow.maxOfOrNull { it.milliValue },
-                        // A reading rather than a rate, so nothing to spread
-                        // over an hour, and signed, so a frost stays a frost.
-                        ranges = barRanges(segments, edges, scale = 1.0, magnitude = false),
+                        ranges = ranges,
                     )
                     state.withSeries(series).copy(
                         window = selected,

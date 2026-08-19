@@ -18,7 +18,9 @@ import com.pearlnode.model.mergeFinest
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -421,11 +423,22 @@ class PowerViewModel(
             }.collectLatest { blocks ->
                 val selected = window.value
                 val edges = selected.edges(nowUtc(), zone)
-                val segments = mergeFinest(blocks, edges.first(), edges.last())
+                // Folded on a worker thread, not on the one that draws.
+                //
+                // A year of a plug that files quarter hours is tens of thousands
+                // of blocks, and turning them into twelve bars is real work.
+                // Done here, the whole interface stood still for it, and a
+                // second tap while it stood queued another one behind the first.
+                // Off the draw thread, collectLatest can also drop the fold
+                // nobody is waiting for any more, which is the point of it.
+                val built = withContext(Dispatchers.Default) {
+                    val segments = mergeFinest(blocks, edges.first(), edges.last())
+                    bucketize(segments, edges) to barRanges(segments, edges)
+                }
                 _uiState.update { it.copy(
                     window = selected,
-                    buckets = bucketize(segments, edges),
-                    barRanges = barRanges(segments, edges),
+                    buckets = built.first,
+                    barRanges = built.second,
                     atLatest = selected.atLatest(now()),
                     zone = zone,
                 ) }
@@ -480,7 +493,14 @@ class PowerViewModel(
                         .map { parent to it }
                 }
             }.collectLatest { (parent, blocks) ->
-                _uiState.update { it.copy(picker = parent?.let { p -> buildPicker(p, blocks) }) }
+                // The same fold as the chart's, over a wider span: the year page
+                // divides up everything the archive holds. It is the largest one
+                // in the app and has even less business on the draw thread --
+                // this runs while a sheet is opening.
+                val built = parent?.let { p ->
+                    withContext(Dispatchers.Default) { buildPicker(p, blocks) }
+                }
+                _uiState.update { it.copy(picker = built) }
             }
         }
     }
