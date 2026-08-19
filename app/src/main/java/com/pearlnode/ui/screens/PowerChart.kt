@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -44,6 +45,17 @@ val PowerDrawnColor: Color @Composable get() = MaterialTheme.colorScheme.primary
 val PowerEarnedColor = Color(0xFF4CAF50)
 
 private val CHART_HEIGHT = 160.dp
+
+/**
+ * How much is taken off a bar's corners, at most.
+ *
+ * Small and fixed. Enough to stop an edge looking cut with scissors, not enough
+ * to be a shape of its own on a bar as wide as a week's.
+ */
+private val CORNER = 2.dp
+
+/** How much of its slot a bar fills, the rest being the gap to its neighbour. */
+private const val BAR_SHARE = 0.7f
 // Wide enough for four figures at this text size and no wider. It was set for
 // the longest thing an energy axis can say and left there, which spent a
 // noticeable slice of a phone screen on air.
@@ -99,14 +111,11 @@ fun SeriesChart(
      */
     signed: Boolean = false,
     /**
-     * What colour a bar is, from the value it stands for.
+     * The colour of one bar, from its position as well as its value.
      *
      * A function rather than a colour because the two charts mean different
      * things by it: energy uses it for direction, and temperature for how warm
      * it was, which is a scale rather than a pair.
-     */
-    /**
-     * The colour of one bar, from its position as well as its value.
      *
      * The index is there for a series whose meaning depends on another one.
      * Outdoor humidity is the case: how muggy it felt follows the dew point,
@@ -173,12 +182,31 @@ fun SeriesChart(
     // the projection or the bar it belongs to would run off the top.
     val shown = buckets.map { projected(it, projectFrom) }
     val knownShown = buckets.indices.filter { buckets[it].coarsestTier != null }.map { shown[it] }
-    val scale = fixedScale
-        ?: if (signed) Scale.forRange(
-            knownShown.minOrNull() ?: 0.0,
-            knownShown.maxOrNull() ?: 0.0,
-        )
-        else Scale.forPeak(knownShown.maxOfOrNull { abs(it) } ?: 0.0)
+    // The last axis that had something to measure, kept for the pages that have
+    // nothing.
+    //
+    // An empty chart used to work its axis out from no bars at all, and that
+    // came out two different kinds of wrong: for energy a step of nought, which
+    // makes the whole plot bail out -- no zero line, no striping, blank figures
+    // down the side, a page that reads as broken rather than as empty. For
+    // temperature a step of one thousandth, so the axis was headed "0,001 °C",
+    // a figure precise to a thousandth of a degree describing nothing. Both
+    // jumped back the moment a bar appeared.
+    //
+    // A page with no data has no opinion about its own axis, so it keeps the one
+    // it was just looking at. Scrolling across a gap in the archive then leaves
+    // the chart standing still, and the emptiness is the whole of what changed.
+    val held = remember { arrayOfNulls<Scale>(1) }
+    val scale = fixedScale ?: when {
+        knownShown.isNotEmpty() -> {
+            val fresh = if (signed) Scale.forRange(knownShown.min(), knownShown.max())
+            else Scale.forPeak(knownShown.maxOf { abs(it) })
+            held[0] = fresh
+            fresh
+        }
+        held[0] != null -> held[0]!!
+        else -> if (signed) Scale.forRange(0.0, 0.0) else Scale.forPeak(0.0)
+    }
     val energy = left(scale)
     val money = right?.invoke(scale)
 
@@ -241,7 +269,7 @@ fun SeriesChart(
                     )
 
                     val slot = size.width / buckets.size
-                    val barWidth = max(2f, slot * 0.7f)
+                    val barWidth = max(2f, slot * BAR_SHARE)
                     buckets.forEachIndexed { index, bucket ->
                         if (bucket.coarsestTier == null) return@forEachIndexed
                         // Against the rounded top of the axis, not against the
@@ -257,6 +285,20 @@ fun SeriesChart(
                         val down = signed && value < 0
                         val colour = colourOf(index, value)
                         val solid = if (index == highlight) colour else colour.copy(alpha = 0.75f)
+                        // Never rounder than the bar is tall, and never rounder
+                        // than CORNER whatever the bar's width.
+                        //
+                        // A quarter of the width was the only rule, and it only
+                        // ever looked right because bars are usually narrow --
+                        // at a day of hours it comes to a couple of pixels and
+                        // nobody notices it. A week is seven bars across a
+                        // phone, and a quarter of that is a lozenge; a bar two
+                        // pixels high with the same rule is a pill. The corner
+                        // is meant to take the hardness off an edge, which is a
+                        // fixed small distance, not a share of anything.
+                        val corner = CornerRadius(
+                            minOf(barWidth / 4f, length / 2f, CORNER.toPx())
+                        )
                         // The whole bar first, faintly, then the measured part
                         // over it. Where nothing is being projected the two are
                         // the same height and only the second one shows.
@@ -265,7 +307,7 @@ fun SeriesChart(
                                 color = colour.copy(alpha = 0.3f),
                                 topLeft = Offset(left, if (down) baseline else baseline - length),
                                 size = Size(barWidth, length),
-                                cornerRadius = CornerRadius(barWidth / 4f),
+                                cornerRadius = corner,
                             )
                         }
                         val ladder = bands?.invoke(index)
@@ -274,7 +316,7 @@ fun SeriesChart(
                                 color = solid,
                                 topLeft = Offset(left, if (down) baseline else baseline - measured),
                                 size = Size(barWidth, measured),
-                                cornerRadius = CornerRadius(barWidth / 4f),
+                                cornerRadius = corner,
                             )
                         } else {
                             // One rounded bar per band, each clipped to the
@@ -298,7 +340,7 @@ fun SeriesChart(
                                         color = colour.copy(alpha = colour.alpha * fade),
                                         topLeft = Offset(left, top),
                                         size = Size(barWidth, measured),
-                                        cornerRadius = CornerRadius(barWidth / 4f),
+                                        cornerRadius = corner,
                                     )
                                 }
                             }
@@ -397,8 +439,20 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
         /** Rounding at the edge of a step should not cost a whole extra one. */
         private const val SLACK = 1e-9
 
+        /**
+         * The axis for a chart with nothing on it: nought at the bottom, one
+         * whole unit at the top.
+         *
+         * A step of nought was what forPeak used to return, and a step of one
+         * thousandth what forRange did. The first makes the plot bail out
+         * altogether, the second heads the axis with a thousandth of a degree.
+         * The charts carry thousandths throughout, so a whole unit is a thousand
+         * of them -- one watt, or one degree.
+         */
+        private val EMPTY = Scale(1_000.0, 1, 0)
+
         fun forPeak(peak: Double): Scale {
-            if (peak <= 0.0) return Scale(0.0, MIN_STEPS)
+            if (peak <= 0.0) return EMPTY
             var best: Scale? = null
             for (step in roundSteps(peak)) {
                 for (count in MIN_STEPS..MAX_STEPS) {
@@ -411,7 +465,7 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
                     break
                 }
             }
-            return best ?: Scale(0.0, MIN_STEPS)
+            return best ?: EMPTY
         }
 
         /**
@@ -425,7 +479,7 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
          */
         fun forRange(min: Double, max: Double): Scale {
             val reach = maxOf(abs(min), abs(max))
-            if (reach <= 0.0) return Scale(1.0, 1, 0)
+            if (reach <= 0.0) return EMPTY
             var best: Scale? = null
             for (step in roundSteps(reach)) {
                 val above = ceil(max / step - SLACK).toInt().coerceAtLeast(0)
@@ -437,7 +491,7 @@ data class Scale(val step: Double, val steps: Int, val stepsBelow: Int = 0) {
                 }
             }
             // Something has to be on the axis even if every reading is zero.
-            return best ?: Scale(reach, 1, 0)
+            return best ?: EMPTY
         }
 
         /** Shorter wins; equal length, fewer lines. */
