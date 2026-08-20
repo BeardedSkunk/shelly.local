@@ -93,6 +93,24 @@ let CFG = {
   // A storage value holds 1022 bytes; pages close early to leave room for the
   // longest block that could still arrive.
   page_limit: 1010,
+  // How much of a response is built up before it is added to the whole.
+  //
+  // Every `+` on a string in mJS copies the string, so a reply built one block
+  // at a time costs something of the square of its length. Collecting a few
+  // blocks in a short string first turns most of those copies into copies of
+  // something small.
+  //
+  // Worth far less than it looks. Measured on a real plug, 132 blocks went
+  // from 6,5 s to about 5,4 -- and on a plug that is also sampling, that
+  // difference is barely outside the scatter. The cost of a read is roughly
+  // thirty milliseconds a block and very nearly linear, which is not string
+  // copying but the interpreter itself. There is no cheap win to be had in
+  // here; the answer is to ask for fewer blocks at a time, and that is the
+  // reader's decision, not this one's.
+  //
+  // Kept because it is free and helps exactly the case that hurts: the long
+  // catch-up read after an outage.
+  chunk_chars: 64,
   // One row per tier: grid in seconds, energy unit in mWh, how many pages the
   // tier may hold, and how many grid steps one block may be merged across.
   //
@@ -1390,7 +1408,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":6,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":8,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
@@ -1441,7 +1459,8 @@ function httpTier(tier, from, max) {
   let more = false;
   let first = -1;
   let at = from;
-  let i, text, duration, energy;
+  let chunk = '';
+  let i, text, duration, energy, cursor, peek, ahead;
   for (i = 0; i < pages.length; i++) {
     if (more) break;
     text = stGet(pages[i]);
@@ -1451,20 +1470,47 @@ function httpTier(tier, from, max) {
     at = dec(text);
     if (!DEC.ok) continue;
     if (first < 0) first = at;
+    // Where this page's blocks begin, kept because the peek below moves the
+    // shared cursor.
+    cursor = DEC.i;
+    // A page whose successor already begins at or before the moment asked for
+    // holds nothing inside the window, and can be stepped over without being
+    // read at all.
+    //
+    // Worth doing because walking past a block is not free: the format is
+    // delta-coded, so finding a position means decoding everything before it,
+    // and on a plug that costs about thirty milliseconds a block whether the
+    // block is sent or skipped. Reading a tier in slices therefore used to
+    // re-walk the same page from its start for every slice -- six requests of
+    // twenty-five blocks each took 1,2 s, 1,8 s, 2,9 s, 3,4 s, 4,4 s, 5,5 s,
+    // all returning the same amount. Pages this can rule out no longer cost
+    // anything; what remains is the one page the answer is actually in.
+    if (i + 1 < pages.length) {
+      peek = stGet(pages[i + 1]);
+      if (peek !== null) {
+        DEC.i = 1;
+        DEC.ok = true;
+        ahead = dec(peek);
+        if (DEC.ok && ahead <= from) { at = ahead; continue; }
+      }
+    }
+    DEC.i = cursor;
+    DEC.ok = true;
     while (DEC.i < text.length) {
       duration = dec(text) * grid;
       energy = decZ(text) * unit;
       if (!DEC.ok) break;
       if (at + duration > from) {
         if (sent >= max) { more = true; break; }
-        if (sent > 0) out = out + ',';
-        out = out + '[' + at + ',' + duration + ',' + energy + ']';
+        if (sent > 0) chunk = chunk + ',';
+        chunk = chunk + '[' + at + ',' + duration + ',' + energy + ']';
         sent = sent + 1;
+        if (chunk.length >= CFG.chunk_chars) { out = out + chunk; chunk = ''; }
       }
       at = at + duration;
     }
   }
-  return out + '],"returned":' + sent + ',"next":' + at +
+  return out + chunk + '],"returned":' + sent + ',"next":' + at +
     ',"more":' + (more ? 'true' : 'false') +
     ',"tier_start":' + (first < 0 ? 'null' : first) + '}';
 }

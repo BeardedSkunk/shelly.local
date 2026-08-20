@@ -67,10 +67,40 @@ class PowerJournalRepository(
 
     // A page can hold well over two hundred blocks and the script builds the
     // response in the same 25 KB it lives in, so it comes in slices.
+    /**
+     * How many blocks one read asks for.
+     *
+     * A hundred, which is where it started, and both directions from here are
+     * worse.
+     *
+     * **Smaller is worse.** A plug does not look an answer up: the format is
+     * delta-coded, so it decodes from the start of a page until it reaches the
+     * moment asked for, at roughly thirty milliseconds a block whether the
+     * block is sent or walked past. Slicing a page finely re-walks it from the
+     * beginning every time -- measured on the solar plug on 20.08.2026, six
+     * requests of twenty-five took 1,0 / 1,8 / 2,6 / 3,5 / 4,4 / 5,3 seconds,
+     * every one returning the same amount.
+     *
+     * **Larger is fatal.** A reply is built in the plug's own 25 KB heap.
+     * Asking for five hundred blocks killed the recorder outright --
+     * `errors:["out_of_memory"]`, script stopped, and it had to be started by
+     * hand. Every test on the PC passed first: node has no such limit, which
+     * is exactly why the limit has to be respected here rather than found.
+     *
+     * A hundred is about 2,3 KB of reply and a few seconds at worst. What
+     * carries the slow case is not this number but the journal's own patience
+     * (45 s, see ShellyClientFactory) and the plug stepping over pages it can
+     * rule out (script code 8).
+     */
     private val readSlice = 100
 
     // A slice that made no progress would loop for ever. The archive is ten
     // pages of a thousand bytes, so nothing honest gets near this.
+    /**
+     * How many slices one tier may take in a single sync. The loop stops as
+     * soon as the tier says there is no more, so an ordinary sync spends one
+     * of these and the rest is only there for a plug out of touch for a week.
+     */
     private val maxSlices = 40
 
     private fun clientFor(device: Device): PowerJournalClient {
