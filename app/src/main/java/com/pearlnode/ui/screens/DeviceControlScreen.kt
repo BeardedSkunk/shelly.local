@@ -195,7 +195,11 @@ fun DeviceControlScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
+                            // Weighted, so a sentence wraps at the switch
+                            // instead of running underneath it. The row only
+                            // ever held a word and a wattage before, and both
+                            // fit without asking for room.
+                            Column(Modifier.weight(1f).padding(end = 8.dp)) {
                                 Text(
                                     if (channels.size > 1) stringResource(R.string.channel_n, idx + 1)
                                     else stringResource(R.string.power),

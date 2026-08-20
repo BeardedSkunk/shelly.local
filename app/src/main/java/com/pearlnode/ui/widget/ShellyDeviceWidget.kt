@@ -267,7 +267,7 @@ private fun DevicePickerScreen(
             items(devices, key = { it.id }) { device ->
                 ListItem(
                     headlineContent = { Text(device.name) },
-                    supportingContent = { Text("${device.ipAddress} · ${device.type.label}") },
+                    supportingContent = { Text("${device.ipAddress} · ${device.type.label(device.reportedGeneration)}") },
                     modifier = Modifier
                         .clickable { onPick(device) }
                         .fillMaxWidth(),

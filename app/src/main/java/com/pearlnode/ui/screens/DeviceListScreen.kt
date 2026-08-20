@@ -170,9 +170,9 @@ private fun DeviceRow(
                     if (device.isBluSensor)
                         listOfNotNull(
                             hostName?.let { stringResource(R.string.blu_via, it) },
-                            device.type.label,
+                            device.type.label(device.reportedGeneration),
                         ).joinToString(" • ")
-                    else "${device.ipAddress} • ${device.type.label}",
+                    else "${device.ipAddress} • ${device.type.label(device.reportedGeneration)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (!isOnline && !device.isBluSensor) {
