@@ -75,7 +75,7 @@ class PowerJournalRepository(
 
     private fun clientFor(device: Device): PowerJournalClient {
         val (user, pass) = credentials(device.id).let { it?.first to it?.second }
-        return PowerJournalClient(device.ipAddress, ShellyClientFactory.buildHttpClient(user, pass))
+        return PowerJournalClient(device.ipAddress, ShellyClientFactory.buildJournalClient(user, pass))
     }
 
     fun observeRange(deviceId: String, fromUtc: Long, toUtc: Long): Flow<List<PowerBlock>> =
@@ -298,6 +298,38 @@ class PowerJournalRepository(
         val anythingStored = dao.count(device.id) > 0
         val reached = HashMap<Int, Long>()
 
+        // The attic first, before the tiers, because it is the cheapest read
+        // here and the one that must not be lost.
+        //
+        // A tier read is not cheap: the script walks its pages to find where
+        // `from` lands, and on a plug with a busy finest tier that took 4,3 s
+        // for 181 bytes -- measured on the solar plug, 20.08.2026, against a
+        // client timeout of five seconds. From a phone on a weak link it goes
+        // over, the sync throws, and everything after it never runs. With the
+        // attic behind the tiers, the deepest history in the archive was
+        // hostage to the flakiest request in the sync.
+        //
+        // Read only when its size has changed. It is a whole script's source,
+        // up to twenty kilobytes, and it only ever grows at the far end. The
+        // size comes free with the index.
+        val lastAttic = settings.readAttic(device.id)
+        if (lastAttic < 0 || index.atticBytes > lastAttic) {
+            val atticId = client.installation().atticId
+            if (atticId != null) {
+                val source = runCatching { client.code(atticId) }.getOrDefault("")
+                val old = atticPages(source).flatMap { decodeJournalPage(it, device.id) }
+                if (old.isNotEmpty()) dao.upsertAll(old)
+                // Written straight out rather than added to `blocks`: the point
+                // of doing this first is that it survives a later failure, and
+                // rows still sitting in a list would not.
+                //
+                // The length actually seen, not the one the script claims --
+                // see readAttic. Noted whatever came of it, including nothing:
+                // an attic holding only its own header is a settled answer.
+                settings.setReadAttic(device.id, source.length)
+            }
+        }
+
         index.tiers.forEachIndexed { tier, row ->
             if (fresh) {
                 // From where this tier was last read rather than from the
@@ -359,33 +391,6 @@ class PowerJournalRepository(
             val now = if (index.unixtime > 0) index.unixtime else System.currentTimeMillis() / 1000
             val span = if (duration > 0) duration else now - start
             if (span > 0) blocks.add(PowerBlock(device.id, TIER_NATIVE, start, span, energy))
-        }
-
-        // The attic, which is where the day pages go once the twelve storage
-        // slots are full and the oldest has to leave. Nothing else reads it --
-        // the script only ever appends -- so without this the deepest history a
-        // plug keeps is the one thing the app never sees, and it would go
-        // missing on the very first overflow rather than loudly.
-        //
-        // Read only when its size has changed. It is a whole script's source,
-        // up to twenty kilobytes, and it only ever grows at the far end: asking
-        // for it on every sync would spend that on a file that is the same as
-        // last time. The size comes free with the index.
-        if (index.atticBytes > 0 && index.atticBytes != settings.readAttic(device.id)) {
-            val atticId = client.installation().atticId
-            if (atticId != null) {
-                val pages = runCatching { atticPages(client.code(atticId)) }.getOrDefault(emptyList())
-                val old = pages.flatMap { decodeJournalPage(it, device.id) }
-                if (old.isNotEmpty()) {
-                    dao.upsertAll(old)
-                    blocks.addAll(old)
-                }
-                // Noted whatever came of it, including nothing: a source that
-                // holds no readable page will not hold one next time either,
-                // and re-reading it every sync would be a standing cost for a
-                // standing answer.
-                settings.setReadAttic(device.id, index.atticBytes)
-            }
         }
 
         dao.upsertAll(blocks)

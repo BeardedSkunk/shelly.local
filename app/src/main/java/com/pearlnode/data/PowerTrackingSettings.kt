@@ -81,13 +81,20 @@ class PowerTrackingSettings(context: Context) {
         }
 
     /**
-     * How big the attic was when its pages were last read in.
+     * How long the attic source was when it was last read in, or -1 for a
+     * device whose attic has never been looked at.
      *
-     * The attic only grows, and only at its far end, so an unchanged size means
-     * an unchanged file -- and reading a whole script's source out of a plug is
-     * not something to do on every sync for an answer that cannot have moved.
+     * The length this app measured itself, not the `attic_bytes` the script
+     * reports. The two can disagree: the script counts only what *it* appended,
+     * so history written into the attic from outside -- a backfill of days from
+     * before the plug existed -- leaves its counter at nought while the file
+     * holds kilobytes. Trusting the counter meant never looking at all.
+     *
+     * So the counter is a hint that something grew, and -1 is what guarantees
+     * one look. Reading a whole script's source is not something to do on every
+     * sync, but it is worth doing once.
      */
-    fun readAttic(deviceId: String): Int = prefs.getInt("${deviceId}_attic_read", 0)
+    fun readAttic(deviceId: String): Int = prefs.getInt("${deviceId}_attic_read", -1)
 
     fun setReadAttic(deviceId: String, bytes: Int) {
         prefs.edit().putInt("${deviceId}_attic_read", bytes).apply()

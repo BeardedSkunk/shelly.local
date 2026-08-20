@@ -17,6 +17,33 @@ object ShellyClientFactory {
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * For the journal, which answers slowly and gets slower as it fills.
+     *
+     * A tier read is not a lookup: the script walks its pages block by block to
+     * find where `from` lands, in mJS, on a processor that is also sampling.
+     * Measured on the solar plug on 20.08.2026, with the watermark four days
+     * back: **6,4 s for 2967 bytes**. Against the ordinary ten-second read that
+     * is close enough that a busy moment goes over -- and it did. The sync to
+     * that plug had been failing since 16.08 without anyone noticing, because a
+     * failed sync leaves the last good chart standing.
+     *
+     * So the journal gets its own patience. It is always background work or an
+     * explicit request, never something a screen is waiting on to draw. Raising
+     * this treats the symptom; making the script skip whole pages it can rule
+     * out by their start time is the cure, and it is not written yet.
+     */
+    private val journalBase = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .build()
+
+    fun buildJournalClient(username: String?, password: String?): OkHttpClient =
+        if (username != null && password != null)
+            journalBase.newBuilder().authenticator(ShellyAuthenticator(username, password)).build()
+        else
+            journalBase
+
     private val firmwareBase = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
