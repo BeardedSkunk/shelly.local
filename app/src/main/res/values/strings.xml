@@ -152,6 +152,7 @@
     <string name="device_card_expand">Show device details</string>
     <string name="device_card_collapse">Hide device details</string>
     <!-- Energy history -->
+    <string name="power_no_meter">%1$s is built without a power meter, so there is nothing to measure or record here. The PM versions of this model have one.</string>
     <string name="power_title">Energy</string>
     <string name="power_settings">Settings</string>
     <string name="power_settings_expand">Show settings</string>

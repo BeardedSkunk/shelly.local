@@ -23,4 +23,8 @@ interface DeviceDao {
 
     @Query("UPDATE devices SET reportedGeneration = :gen WHERE id = :id")
     suspend fun updateReportedGeneration(id: String, gen: Int)
+
+    /** Only ever used to lift a device out of UNKNOWN -- see DeviceRepository. */
+    @Query("UPDATE devices SET type = :type WHERE id = :id")
+    suspend fun updateType(id: String, type: String)
 }

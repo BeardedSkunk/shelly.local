@@ -4,9 +4,11 @@ import com.pearlnode.data.api.BluClient
 import com.pearlnode.data.api.ShellyApiClient
 import com.pearlnode.data.api.ShellyClientFactory
 import com.pearlnode.data.db.DeviceDao
+import com.pearlnode.data.discovery.detectDeviceType
 import com.pearlnode.model.BluDevice
 import com.pearlnode.model.Device
 import com.pearlnode.model.DeviceInfo
+import com.pearlnode.model.DeviceType
 import com.pearlnode.model.DeviceState
 import com.pearlnode.model.KvsEntry
 import com.pearlnode.model.RgbColor
@@ -145,6 +147,15 @@ class DeviceRepository(
         // reached it is still described as what it is.
         info.reportedGeneration?.let {
             if (it != device.reportedGeneration) dao.updateReportedGeneration(device.id, it)
+        }
+        // And the model, but only where nothing is known yet. A device added
+        // while its identifier was missing from the table keeps UNKNOWN for
+        // good otherwise -- detection runs when a device is added and never
+        // again. Only out of UNKNOWN: a type somebody picked by hand in the
+        // editor is an answer, and this must not overwrite it.
+        if (device.type == DeviceType.UNKNOWN) {
+            val detected = detectDeviceType(info.shellyTypeId, info.generation)
+            if (detected != DeviceType.UNKNOWN) dao.updateType(device.id, detected.name)
         }
         info
     }

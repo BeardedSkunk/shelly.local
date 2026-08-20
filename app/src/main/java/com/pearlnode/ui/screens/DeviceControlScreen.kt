@@ -180,6 +180,14 @@ fun DeviceControlScreen(
                     val hasJournal = idx == 0 &&
                         device.generation == ShellyGeneration.GEN2 &&
                         (channel.power != null || (awaitingDevice && switchLike))
+                    // A device that has answered and reports no power has no
+                    // meter in it -- a Shelly 1 Mini has none, its 1PM sibling
+                    // does. That is worth saying out loud rather than leaving as
+                    // a missing icon: someone looking for the chart otherwise
+                    // hunts for what they did wrong, when the answer is that
+                    // this model was built without the part.
+                    val cannotMeter = idx == 0 && !awaitingDevice && switchLike &&
+                        channel.power == null
                     val cardModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                     val body: @Composable () -> Unit = {
                         Row(
@@ -197,6 +205,17 @@ fun DeviceControlScreen(
                                     Text("${String.format(Locale.ROOT, "%.1f", w)} W",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (cannotMeter) {
+                                    Text(
+                                        stringResource(
+                                            R.string.power_no_meter,
+                                            device.type.label(uiState.reportedGeneration
+                                                ?: device.reportedGeneration),
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -97,13 +97,14 @@ fun DeviceCard(
                                 Text("IP: ", style = MaterialTheme.typography.bodySmall)
                                 IpLink(device.ipAddress, onOpenWebUi)
                             }
-                            Text("Type: ${device.type.label}", style = MaterialTheme.typography.bodySmall)
+                            Text("Type: ${device.type.label(reportedGeneration)}",
+                                style = MaterialTheme.typography.bodySmall)
                             Text("Generation: $generation", style = MaterialTheme.typography.bodySmall)
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IpLink(device.ipAddress, onOpenWebUi)
                                 Text(
-                                    " · ${device.type.label} · $generation",
+                                    " · ${device.type.label(reportedGeneration)} · $generation",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

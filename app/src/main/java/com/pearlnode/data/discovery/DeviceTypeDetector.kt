@@ -1,8 +1,22 @@
 package com.pearlnode.data.discovery
 
 import com.pearlnode.model.DeviceType
+import com.pearlnode.model.ShellyGeneration
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * The same mapping from the identifier alone, for a device already on file.
+ *
+ * A type is worked out once, when a device is added, and then stored -- so a
+ * device added before this app knew its model keeps whatever it was guessed to
+ * be, however often it is seen afterwards. The lamp in the hall was a "Generic
+ * Switch" for that reason: the Gen4 identifier was missing from the table, and
+ * adding it changed nothing for the device already in the list.
+ */
+fun detectDeviceType(typeId: String, generation: ShellyGeneration): DeviceType =
+    if (generation == ShellyGeneration.GEN1) mapGen1TypeToDevice(typeId)
+    else mapAppToType(typeId)
 
 /** Maps the JSON returned by a device's /shelly endpoint to the closest known DeviceType. */
 fun detectDeviceTypeFromJson(json: JsonObject): DeviceType {
@@ -66,12 +80,17 @@ private fun mapAppToType(app: String): DeviceType = when (app) {
     "HTG3"                           -> DeviceType.PLUS_HT
     "FloodG3"                        -> DeviceType.PLUS_FLOOD
     "EMXG3"                          -> DeviceType.SHELLY_EM_MINI
-    // Gen4
-    "S1G4"                           -> DeviceType.PLUS_1
-    "S1MiniG4"                       -> DeviceType.PLUS_1_MINI
-    "S1PMG4"                         -> DeviceType.PLUS_1PM
-    "S1PMMiniG4"                     -> DeviceType.PLUS_1PM_MINI
-    "S2PMG4"                         -> DeviceType.PLUS_2PM
+    // Gen4. Two spellings each: the S-prefixed ones that were guessed from the
+    // model numbers, and the ones the devices actually send, which follow the
+    // Gen3 pattern instead. A Shelly 1 Mini Gen4 reports "Mini1G4" -- only
+    // "S1MiniG4" was listed, so it fell through to UNKNOWN and showed up as a
+    // generic switch.
+    "S1G4", "1G4"                    -> DeviceType.PLUS_1
+    "S1MiniG4", "Mini1G4"            -> DeviceType.PLUS_1_MINI
+    "S1PMG4", "1PMG4"                -> DeviceType.PLUS_1PM
+    "S1PMMiniG4", "Mini1PMG4",
+    "PMMiniG4"                       -> DeviceType.PLUS_1PM_MINI
+    "S2PMG4", "2PMG4"                -> DeviceType.PLUS_2PM
     "PlugSG4"                        -> DeviceType.PLUS_PLUG_S
     "PlugMG4"                        -> DeviceType.PLUG_M
     // Gen4: dimmers & sensors
@@ -80,11 +99,14 @@ private fun mapAppToType(app: String): DeviceType = when (app) {
     "HTG4"                           -> DeviceType.PLUS_HT
     "FloodG4"                        -> DeviceType.PLUS_FLOOD
     "EMMiniG4"                       -> DeviceType.SHELLY_EM_MINI
-    // Prefix fallback for unknown future variants
+    // Prefix fallback for variants that do not exist yet. "Mini" is in here
+    // because Gen3 and Gen4 name their small switches that way and a future
+    // MiniXG5 should land on a switch rather than on nothing.
     else -> when {
         app.startsWith("Plus", ignoreCase = true) -> DeviceType.PLUS_1
         app.startsWith("Pro",  ignoreCase = true) -> DeviceType.PRO_1
         app.startsWith("Plug", ignoreCase = true) -> DeviceType.PLUS_PLUG_S
+        app.startsWith("Mini", ignoreCase = true) -> DeviceType.PLUS_1_MINI
         else                                      -> DeviceType.UNKNOWN
     }
 }

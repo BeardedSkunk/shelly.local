@@ -112,7 +112,28 @@ enum class DeviceType(
     BLU_GENERIC("Shelly BLU", DeviceCapability.BLU),
     // Special
     DOOR("Door / Gate (pulse)", DeviceCapability.DOOR),
-    UNKNOWN("Generic Switch", DeviceCapability.RELAY),
+    UNKNOWN("Generic Switch", DeviceCapability.RELAY);
+
+    /**
+     * What to call this device to someone holding it, which depends on when it
+     * was made.
+     *
+     * "Plus" was Shelly's name for the second generation and they dropped it
+     * afterwards: the third and fourth generations are sold as a Shelly 1 Mini
+     * and a Shelly Plug M, with no Plus anywhere on the box. One type here
+     * covers several generations because the API does, so the stored label
+     * carries a word that is wrong for most of the devices in this house -- and
+     * a list that calls a Gen4 relay by a Gen2 name reads like a guess even
+     * when it is right.
+     *
+     * The generation is printed beside this, so nothing is lost by dropping the
+     * word; what is left is the model name as it is actually sold.
+     */
+    fun label(generation: Int?): String {
+        if (generation == null || generation < 3) return label
+        val withoutPlus = label.removePrefix("Shelly Plus ")
+        return if (withoutPlus == label) label else "Shelly $withoutPlus"
+    }
 }
 
 /**
