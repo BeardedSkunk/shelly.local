@@ -53,6 +53,11 @@ let CFG = {
   // them every few seconds, which the detector used to cut a block at. The
   // energy is unaffected -- it comes from the meter, not from apower -- so a
   // low block records what really flowed without inventing the changes.
+  //
+  // An open relay is not one of these levels, however low it reads. Nothing can
+  // pass it, which is a fact and not a measurement, and it gets a block of its
+  // own -- see deviates. Without that a switched plug merged its nights into
+  // its days and reported the average of both.
   low_mw: 1500,
   // The energy counter does not move continuously either: it advances in whole
   // packets of about 206 mWh (measured on a Plug M Gen3). Nothing smaller
@@ -740,6 +745,11 @@ function kvsPayload(now) {
   if (ST.dropped > 0) payload.dropped_mwh = Math.round(ST.dropped);
   if (block.low && block.energy === 0) {
     payload.watt = 0;
+    // Which of the two kinds of nothing this is. A reboot has to resume an off
+    // stretch as an off stretch or the boundary at switch-on never comes: a
+    // transformer idling at a watt is low just as an open relay is, and the two
+    // would merge back into one block.
+    if (block.off) payload.off = 1;
     return payload;
   }
   let duration = now - block.start;
@@ -810,7 +820,18 @@ function levelChanged(ref, power) {
   return gap >= Math.max(Math.round(magnitude * CFG.change_ratio), CFG.min_change_mw);
 }
 
-function deviates(block, power) {
+// An open relay is its own kind of stretch, and the first thing asked about.
+// Nothing can pass it, so a nought read there is a fact rather than a reading
+// too small to trust -- and it must not be filed under the same heading as a
+// doorbell transformer idling at a watt. Both are "low", and that is exactly
+// how a block came to run for nine days without a boundary: an evening
+// switch-off and a morning switch-on left no mark, and the energy of the hours
+// that were on got spread flat across the nights as well.
+function deviates(block, power, off) {
+  if (off !== block.off) return true;
+  // Nothing else can end it. What happens behind an open relay is nothing, and
+  // nothing has no levels to change between.
+  if (off) return false;
   if (isLow(power) !== block.low) return true;
   if (block.low) return false;
   return levelChanged(block.ref, power);
@@ -836,12 +857,12 @@ function accumulate(block, meter) {
   block.energy = block.energy + d;
 }
 
-function onSample(now, power, meter) {
+function onSample(now, power, meter, off) {
   if (ST.blk === null) {
-    bootstrap(now, power, meter);
+    bootstrap(now, power, meter, off);
     return;
   }
-  if (!deviates(ST.blk, power)) {
+  if (!deviates(ST.blk, power, off)) {
     if (ST.cand.length > 0) {
       // Back inside the tolerance before the change was confirmed. The energy
       // held back during the candidacy is picked up by this one difference,
@@ -864,7 +885,7 @@ function onSample(now, power, meter) {
   }
   // While candidates collect, the block's meter deliberately stays put, so the
   // energy of these samples is still unassigned. Whichever side wins gets it.
-  ST.cand.push({ t: now, p: power, m: meter });
+  ST.cand.push({ t: now, p: power, m: meter, o: off });
   if (ST.cand.length < CFG.confirm_samples) return;
   switchBlock(now, meter);
 }
@@ -894,7 +915,7 @@ function switchBlock(now, meter) {
   // is where the level actually changed. Its reference comes from the last
   // one: the first sample is often still half inside the old level, or a spike
   // that happens to be what started the run.
-  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, low: isLow(last.p), pt: 0, pm: 0 };
+  ST.blk = { start: first.t, ref: last.p, energy: 0, meter: handover, low: isLow(last.p), off: last.o, pt: 0, pm: 0 };
   ST.cand = [];
   accumulate(ST.blk, meter);
   log(2, 'new block at ' + first.t + ', reference ' + last.p + ' mW');
@@ -934,6 +955,19 @@ function closeBlock(endTime) {
       ST.credit = ST.credit + energy - claim;
       energy = claim;
     }
+  } else if (block.off && span > 0) {
+    // The relay was open, so nothing passed it, and a block that records that
+    // has to report nothing. The counter should not move here at all -- what
+    // the plug draws for itself sits before the relay and is not metered -- so
+    // anything that does turn up accrued where current really flowed and is
+    // carried on like any other surplus.
+    //
+    // Credit is deliberately not drawn on. A stretch with no room for energy
+    // would take nothing and drop the rest, which is how a night could quietly
+    // swallow a whole quiet phase's worth of it.
+    if (energy > 0) ST.credit = ST.credit + energy;
+    else if (energy < 0) ST.dropped = ST.dropped - energy;
+    energy = 0;
   } else if (block.low && span > 0) {
     // The same misattribution seen from below. apower says nothing above the
     // threshold was flowing in here, so a low block cannot honestly report more
@@ -968,15 +1002,18 @@ function closeBlock(endTime) {
 // nothing has just happened here -- there is no transition for the early
 // samples to be contaminated by -- so the reference is their mean, which is
 // the steadier estimate of the level.
-function bootstrap(now, power, meter) {
-  ST.boot.push({ t: now, p: power, m: meter });
+function bootstrap(now, power, meter, off) {
+  ST.boot.push({ t: now, p: power, m: meter, o: off });
   if (ST.boot.length < CFG.confirm_samples) return;
   let first = ST.boot[0];
   let sum = 0;
   let i;
   for (i = 0; i < ST.boot.length; i++) sum = sum + ST.boot[i].p;
   let ref = Math.round(sum / ST.boot.length);
-  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, low: isLow(ref), pt: 0, pm: 0 };
+  // The switch state comes from the newest sample rather than the mean: it is
+  // not a level to be averaged, and what counts is how the relay stands now.
+  let latest = ST.boot[ST.boot.length - 1];
+  ST.blk = { start: first.t, ref: ref, energy: 0, meter: first.m, low: isLow(ref), off: latest.o, pt: 0, pm: 0 };
   ST.boot = [];
   accumulate(ST.blk, meter);
   fillGap(ST.blk.start);
@@ -1081,7 +1118,8 @@ function sample() {
     return;
   }
 
-  let power = sw.output === false ? 0 : orient(Math.round(sw.apower * 1000));
+  let off = sw.output === false;
+  let power = off ? 0 : orient(Math.round(sw.apower * 1000));
   let reading = netMeter(sw);
 
   // The gross counter cannot fall. If it did, it was reset, and the running
@@ -1093,8 +1131,8 @@ function sample() {
   }
   ST.gross = reading.gross;
 
-  log(3, now + ': ' + power + ' mW, net ' + reading.net + ' mWh');
-  onSample(now, power, reading.net);
+  log(3, now + ': ' + power + ' mW, net ' + reading.net + ' mWh' + (off ? ' (relay open)' : ''));
+  onSample(now, power, reading.net, off);
   // Again, because this sample may have closed a block. Here it costs nothing:
   // the sample has already returned to this frame, so the archive still runs
   // shallow, and a block reaches the archive in the same sample that ended it
@@ -1158,7 +1196,7 @@ function onKvsRead(result, code) {
 function curParse(value) {
   if (typeof value !== 'object' || value === null) return null;
   if (!isNum(value.start_time) || value.start_time < CFG.min_valid_unix) return null;
-  if (!isNum(value.duration_sec)) return { start: value.start_time, low: true };
+  if (!isNum(value.duration_sec)) return { start: value.start_time, low: true, off: value.off === 1 };
   if (!isNum(value.energy_mwh) || !isNum(value.meter_net_mwh) || !isNum(value.watt)) return null;
   // Everything signed turns together, or none of it does. The gross counter is
   // not signed and stays as it is.
@@ -1166,6 +1204,7 @@ function curParse(value) {
   return {
     start: value.start_time,
     low: false,
+    off: false,
     dur: value.duration_sec,
     energy: sign * value.energy_mwh,
     meter: sign * value.meter_net_mwh,
@@ -1214,7 +1253,7 @@ function recover(now) {
     // was away, which is precisely what a null block records, so the outage
     // belongs to it and its start stays where it was. Normal detection closes
     // it as soon as something happens.
-    ST.blk = { start: cur.start, ref: 0, energy: 0, meter: reading.net, low: true };
+    ST.blk = { start: cur.start, ref: 0, energy: 0, meter: reading.net, low: true, off: cur.off === true };
     log(2, 'continuing the null block that started at ' + cur.start);
   } else if (cur.start + cur.dur >= bootTs - 5) {
     // The checkpoint is younger than this boot, so the script restarted but
@@ -1224,7 +1263,7 @@ function recover(now) {
     // Taking what is flowing right now beats resuming with a reference of
     // zero, which would disagree with the load immediately.
     if (isLow(ref)) ref = power;
-    ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, low: false };
+    ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, low: false, off: false };
     accumulate(ST.blk, reading.net);
     log(2, 'script restart, continuing the block that started at ' + cur.start);
     kvsWrite(now, 'recovery');
@@ -1268,9 +1307,12 @@ function recoverAfterReboot(now, bootTs, cur, reading) {
     log(1, 'energy counters were reset while away, closing the block at the checkpoint');
   }
 
-  ST.blk = { start: cur.start, ref: refMw, energy: energy, meter: reading.net, low: false };
+  ST.blk = { start: cur.start, ref: refMw, energy: energy, meter: reading.net, low: false, off: false };
   closeBlock(endTs);
-  ST.blk = { start: endTs, ref: 0, energy: 0, meter: reading.net, low: true };
+  // Not an off block: the plug was away, which is not the same as its relay
+  // having been open. If the switch is in fact off, the next samples say so and
+  // cut the boundary there.
+  ST.blk = { start: endTs, ref: 0, energy: 0, meter: reading.net, low: true, off: false };
   log(2, 'reboot recovery: block closed at ' + endTs + ', the outage is a null phase');
   kvsWrite(now, 'recovery');
 }
@@ -1348,7 +1390,7 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":5,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  let out = '{"api":2,"code":6,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that

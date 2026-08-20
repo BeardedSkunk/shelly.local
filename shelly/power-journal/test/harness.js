@@ -271,6 +271,15 @@ function createPlug(options) {
     feed(watt, Math.round(seconds / (timer.ms / 1000)));
   }
 
+  // The relay open for this many seconds. The script keeps sampling and the
+  // clock keeps running, but nothing can pass an open relay: apower reads
+  // nought and the counters stand still, which advance() already models.
+  function offFor(seconds) {
+    const timer = sampleTimer();
+    plug.output = false;
+    tick(Math.round(seconds / (timer.ms / 1000)));
+  }
+
   function boot() {
     let source = fs.readFileSync(SOURCE, 'utf8');
     // PJ_STRIPPED=1 runs the tests against what the device actually gets,
@@ -331,7 +340,7 @@ function createPlug(options) {
   }
 
   return Object.assign(plug, {
-    boot, tick, feed, feedFor, advance, settle, drain, powerCut, restartScript,
+    boot, tick, feed, feedFor, offFor, advance, settle, drain, powerCut, restartScript,
     request, tierBlocks, logsMatching, sampleTimer, netMwh, setMeters,
   });
 }
