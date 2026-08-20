@@ -150,7 +150,7 @@
     <string name="device_card_expand">Gerätedetails anzeigen</string>
     <string name="device_card_collapse">Gerätedetails ausblenden</string>
     <!-- Energie-Verlauf -->
-    <string name="power_no_meter">Der %1$s hat ab Werk kein Messwerk — hier gibt es nichts zu messen und nichts aufzuzeichnen.</string>
+    <string name="power_no_meter">Der %1$s hat ab Werk kein Messwerk.</string>
     <string name="power_title">Energie</string>
     <string name="power_settings">Einstellungen</string>
     <string name="power_settings_expand">Einstellungen anzeigen</string>
