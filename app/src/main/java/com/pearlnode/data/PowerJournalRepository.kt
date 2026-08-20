@@ -99,7 +99,7 @@ class PowerJournalRepository(
      */
     suspend fun enable(device: Device) = withContext(Dispatchers.IO) {
         deploy(clientFor(device), device.id)
-        settings.setEnabled(device.id, true)
+        settings.setEnabled(device.id, true, TrackingCause.ASKED)
         PowerSyncWorker.enqueue(context, device.id)
     }
 
@@ -176,7 +176,7 @@ class PowerJournalRepository(
     suspend fun disable(device: Device) = withContext(Dispatchers.IO) {
         val client = clientFor(device)
         client.installation().scriptId?.let { client.setEnabled(it, false) }
-        settings.setEnabled(device.id, false)
+        settings.setEnabled(device.id, false, TrackingCause.ASKED)
         PowerSyncWorker.cancel(context, device.id)
     }
 
@@ -191,7 +191,10 @@ class PowerJournalRepository(
      */
     fun reconcile(deviceId: String, running: Boolean) {
         if (settings.isEnabled(deviceId) == running) return
-        settings.setEnabled(deviceId, running)
+        // Recorded as adopted rather than asked for, and dated. Giving way to
+        // the plug is right -- it is the one that knows -- but a switch that
+        // moved on its own must not read afterwards like one somebody chose.
+        settings.setEnabled(deviceId, running, TrackingCause.ADOPTED)
         if (running) PowerSyncWorker.enqueue(context, deviceId)
         else PowerSyncWorker.cancel(context, deviceId)
     }

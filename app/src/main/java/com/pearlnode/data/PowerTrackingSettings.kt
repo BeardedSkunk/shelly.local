@@ -11,14 +11,52 @@ import java.time.ZoneId
  * one tariff, and asking for it again on every plug would be a worse question
  * than a wrong default.
  */
+/**
+ * What moved the tracking switch.
+ *
+ * [ASKED] is a person using the switch on the energy screen. [ADOPTED] is this
+ * app finding the plug disagreeing with its note and giving way -- which is how
+ * a recorder the firmware killed becomes, silently, a setting that says the user
+ * wanted it off.
+ */
+enum class TrackingCause { ASKED, ADOPTED }
+
+/** How the switch came to stand where it does. */
+data class TrackingChange(val enabled: Boolean, val cause: TrackingCause, val atUtc: Long)
+
 class PowerTrackingSettings(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences("power_tracking", Context.MODE_PRIVATE)
 
     fun isEnabled(deviceId: String): Boolean = prefs.getBoolean("${deviceId}_enabled", false)
 
-    fun setEnabled(deviceId: String, enabled: Boolean) {
-        prefs.edit().putBoolean("${deviceId}_enabled", enabled).apply()
+    /**
+     * Moves the switch, and writes down what moved it.
+     *
+     * Without the reason the switch is a statement with no author. A recorder
+     * that the plug's own firmware disabled after a crash, and one the user
+     * turned off on purpose, end up looking exactly alike -- and the first is a
+     * fault to chase while the second is a decision to respect. That happened on
+     * the doorbell plug in August 2026: it stopped recording for days and the
+     * only trace anywhere was a boolean reading false.
+     */
+    fun setEnabled(deviceId: String, enabled: Boolean, cause: TrackingCause) {
+        prefs.edit()
+            .putBoolean("${deviceId}_enabled", enabled)
+            .putString("${deviceId}_enabled_why", cause.name)
+            .putLong("${deviceId}_enabled_at", System.currentTimeMillis() / 1000)
+            .apply()
+    }
+
+    /** What last moved the switch, or null on a device nobody has ever set. */
+    fun lastTrackingChange(deviceId: String): TrackingChange? {
+        val name = prefs.getString("${deviceId}_enabled_why", null) ?: return null
+        val cause = runCatching { TrackingCause.valueOf(name) }.getOrNull() ?: return null
+        return TrackingChange(
+            enabled = isEnabled(deviceId),
+            cause = cause,
+            atUtc = prefs.getLong("${deviceId}_enabled_at", 0L),
+        )
     }
 
     /** Cents per kilowatt hour. Roughly the German household price in 2026. */

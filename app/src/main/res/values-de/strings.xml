@@ -165,6 +165,8 @@
     <string name="power_script_error">Die Aufzeichnung meldet: %1$s</string>
     <string name="power_offline_hint">Die Statistik funktioniert offline. Ein- und Ausschalten braucht das Gerät.</string>
     <string name="power_history">Verlauf</string>
+    <string name="power_tracking_adopted_off">Nicht hier abgeschaltet: am %1$s stand die Aufzeichnung auf dem Gerät still, und der Schalter ist mitgegangen. Meist hat die Firmware das Skript nach einem Absturz deaktiviert.</string>
+    <string name="power_tracking_asked_off">Am %1$s hier ausgeschaltet.</string>
     <string name="power_history_dormant">Aufzeichnung einschalten, um einen Verlauf zu sammeln. Für dieses Gerät liegt noch nichts vor.</string>
     <string name="power_all_years">Alle Jahre</string>
     <string name="power_earlier">Früher</string>

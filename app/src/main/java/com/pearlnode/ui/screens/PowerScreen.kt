@@ -73,6 +73,7 @@ import com.pearlnode.data.Formats
 import com.pearlnode.R
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.PowerTrackingSettings
+import com.pearlnode.data.TrackingCause
 import com.pearlnode.model.PowerBucket
 import com.pearlnode.model.PowerLevel
 import com.pearlnode.model.PowerWindow
@@ -160,6 +161,7 @@ fun PowerScreen(
             }
             SettingsCard(
                 state = uiState,
+                formats = formats,
                 onTracking = vm::setTracking,
                 onUpdateScript = vm::updateScript,
             )
@@ -199,6 +201,7 @@ fun PowerScreen(
 @Composable
 private fun SettingsCard(
     state: PowerUiState,
+    formats: Formats,
     onTracking: (Boolean) -> Unit,
     onUpdateScript: () -> Unit,
 ) {
@@ -246,6 +249,17 @@ private fun SettingsCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // Where a switched-off recorder came from. Only when it is
+                    // off, because that is the state worth explaining: on is
+                    // what one asked for, off might be a fault nobody saw.
+                    trackingProvenance(state, formats)?.let { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
                 if (state.deploying || state.checkingDevice) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -902,6 +916,28 @@ private val MONTH_MARKS = listOf(5, 10, 15, 20, 25, 30)
  */
 private fun everyThird(buckets: List<PowerBucket>): List<Int> =
     if (buckets.size < 3) emptyList() else (1..buckets.size - 2 step 3).toList()
+
+/**
+ * Why the recorder is off, where that can be said, and null where there is
+ * nothing to explain.
+ *
+ * A switch reading false says nothing about how it got there, and the two ways
+ * it can are not alike: one is a decision, the other is a recorder the plug's
+ * own firmware killed after a crash -- which is what happened on the doorbell
+ * plug in August 2026 and went unnoticed for days, because the only trace was a
+ * boolean. Adopted is therefore the loud case; asked for is merely dated, so a
+ * switch flipped months ago does not read as fresh news.
+ */
+@Composable
+private fun trackingProvenance(state: PowerUiState, formats: Formats): String? {
+    val change = state.trackingChange ?: return null
+    if (state.trackingEnabled || change.enabled) return null
+    val whenText = formats.dateTime(change.atUtc * 1000)
+    return when (change.cause) {
+        TrackingCause.ADOPTED -> stringResource(R.string.power_tracking_adopted_off, whenText)
+        TrackingCause.ASKED -> stringResource(R.string.power_tracking_asked_off, whenText)
+    }
+}
 
 @Composable
 private fun trackingSubtitle(state: PowerUiState): String = when {

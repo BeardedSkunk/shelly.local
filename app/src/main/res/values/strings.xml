@@ -167,6 +167,8 @@
     <string name="power_script_error">The recorder reported: %1$s</string>
     <string name="power_offline_hint">Statistics work offline. Switching recording on or off needs the device.</string>
     <string name="power_history">History</string>
+    <string name="power_tracking_adopted_off">Not switched off here: on %1$s the recorder was found stopped on the device, and this switch followed it. Usually the firmware disabled the script after a crash.</string>
+    <string name="power_tracking_asked_off">Switched off here on %1$s.</string>
     <string name="power_history_dormant">Switch recording on to collect a history. Nothing has been recorded for this device yet.</string>
     <string name="power_all_years">All years</string>
     <string name="power_earlier">Earlier</string>

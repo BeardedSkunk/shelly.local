@@ -7,6 +7,7 @@ import com.pearlnode.data.AppSettings
 import com.pearlnode.data.DeviceRepository
 import com.pearlnode.data.Formats
 import com.pearlnode.data.PowerJournalRepository
+import com.pearlnode.data.TrackingChange
 import com.pearlnode.model.Device
 import com.pearlnode.model.PowerBlock
 import com.pearlnode.model.PowerBucket
@@ -150,6 +151,11 @@ data class PowerUiState(
     val device: Device? = null,
     /** Whether the user has asked for tracking, which is what the switch shows. */
     val trackingEnabled: Boolean = false,
+    /**
+     * What last moved that switch and when, so a recorder that stopped on its
+     * own can be told from one somebody switched off.
+     */
+    val trackingChange: TrackingChange? = null,
     /** Whether the plug is actually running the script right now. */
     val scriptRunning: Boolean = false,
     val scriptInstalled: Boolean = false,
@@ -268,6 +274,7 @@ class PowerViewModel(
     private val _uiState = MutableStateFlow(
         PowerUiState(
             trackingEnabled = journal.settings.isEnabled(deviceId),
+            trackingChange = journal.settings.lastTrackingChange(deviceId),
                 scriptAge = journal.scriptAge(deviceId),
             priceCentsPerKwh = settings.current.priceCentsPerKwh,
             feedInCentsPerKwh = settings.current.feedInCentsPerKwh,
@@ -632,6 +639,7 @@ class PowerViewModel(
                 checkingDevice = false,
                 reachable = installation.isSuccess,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
+                trackingChange = journal.settings.lastTrackingChange(deviceId),
                 scriptAge = journal.scriptAge(deviceId),
                     scriptInstalled = installation.getOrNull()?.installed ?: false,
                 scriptRunning = running,
@@ -707,6 +715,7 @@ class PowerViewModel(
             _uiState.update { it.copy(
                 deploying = false,
                 trackingEnabled = journal.settings.isEnabled(deviceId),
+                trackingChange = journal.settings.lastTrackingChange(deviceId),
                 scriptAge = journal.scriptAge(deviceId),
                 error = result.exceptionOrNull()?.failure(PowerTask.TRACKING),
             ) }
