@@ -4,14 +4,6 @@ import android.content.Context
 import java.time.ZoneId
 
 /**
- * What the user chose, as opposed to what the plug is doing.
- *
- * Tracking is per device: it says whether this app should keep the journal
- * running there and pull its archive in. The price is not -- one household has
- * one tariff, and asking for it again on every plug would be a worse question
- * than a wrong default.
- */
-/**
  * What moved the tracking switch.
  *
  * [ASKED] is a person using the switch on the energy screen. [ADOPTED] is this
@@ -24,6 +16,14 @@ enum class TrackingCause { ASKED, ADOPTED }
 /** How the switch came to stand where it does. */
 data class TrackingChange(val enabled: Boolean, val cause: TrackingCause, val atUtc: Long)
 
+/**
+ * What the user chose, as opposed to what the plug is doing.
+ *
+ * Tracking is per device: it says whether this app should keep the journal
+ * running there and pull its archive in. The price is not -- one household has
+ * one tariff, and asking for it again on every plug would be a worse question
+ * than a wrong default.
+ */
 class PowerTrackingSettings(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences("power_tracking", Context.MODE_PRIVATE)
@@ -79,6 +79,19 @@ class PowerTrackingSettings(context: Context) {
                 if (value == null) remove(KEY_FEED_IN) else putFloat(KEY_FEED_IN, value.toFloat())
             }.apply()
         }
+
+    /**
+     * How big the attic was when its pages were last read in.
+     *
+     * The attic only grows, and only at its far end, so an unchanged size means
+     * an unchanged file -- and reading a whole script's source out of a plug is
+     * not something to do on every sync for an answer that cannot have moved.
+     */
+    fun readAttic(deviceId: String): Int = prefs.getInt("${deviceId}_attic_read", 0)
+
+    fun setReadAttic(deviceId: String, bytes: Int) {
+        prefs.edit().putInt("${deviceId}_attic_read", bytes).apply()
+    }
 
     /**
      * Which archive format the stored blocks for this device came from.

@@ -2,6 +2,8 @@ package com.pearlnode.data
 
 import android.content.Context
 import com.pearlnode.data.api.JournalInstallation
+import com.pearlnode.data.api.atticPages
+import com.pearlnode.data.api.decodeJournalPage
 import com.pearlnode.data.api.PowerJournalClient
 import com.pearlnode.data.api.ShellyClientFactory
 import com.pearlnode.data.db.PowerBlockDao
@@ -357,6 +359,33 @@ class PowerJournalRepository(
             val now = if (index.unixtime > 0) index.unixtime else System.currentTimeMillis() / 1000
             val span = if (duration > 0) duration else now - start
             if (span > 0) blocks.add(PowerBlock(device.id, TIER_NATIVE, start, span, energy))
+        }
+
+        // The attic, which is where the day pages go once the twelve storage
+        // slots are full and the oldest has to leave. Nothing else reads it --
+        // the script only ever appends -- so without this the deepest history a
+        // plug keeps is the one thing the app never sees, and it would go
+        // missing on the very first overflow rather than loudly.
+        //
+        // Read only when its size has changed. It is a whole script's source,
+        // up to twenty kilobytes, and it only ever grows at the far end: asking
+        // for it on every sync would spend that on a file that is the same as
+        // last time. The size comes free with the index.
+        if (index.atticBytes > 0 && index.atticBytes != settings.readAttic(device.id)) {
+            val atticId = client.installation().atticId
+            if (atticId != null) {
+                val pages = runCatching { atticPages(client.code(atticId)) }.getOrDefault(emptyList())
+                val old = pages.flatMap { decodeJournalPage(it, device.id) }
+                if (old.isNotEmpty()) {
+                    dao.upsertAll(old)
+                    blocks.addAll(old)
+                }
+                // Noted whatever came of it, including nothing: a source that
+                // holds no readable page will not hold one next time either,
+                // and re-reading it every sync would be a standing cost for a
+                // standing answer.
+                settings.setReadAttic(device.id, index.atticBytes)
+            }
         }
 
         dao.upsertAll(blocks)
