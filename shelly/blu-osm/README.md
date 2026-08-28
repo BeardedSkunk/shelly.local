@@ -330,6 +330,44 @@ disabled here; it belongs on `192.168.178.23`, where it has a plug to itself.
 `Script.GetStatus` is where this shows up. `enable:true, running:false` means
 crashed, not switched off, and `errors` names which kind.
 
+## Where the RAM actually goes
+
+Getting this file lean taught three lessons, all measured on the plug rather
+than deduced. The instrument is `Script.GetStatus`: `mem_used` is what the
+script holds right now, garbage included, so it breathes -- 9.1 KB just after
+start, 7.4 KB a minute later; `mem_peak` is the high-water mark of the running
+instance and never goes down; `mem_free` is the shared pool. `tools/upload.js`
+prints the status four seconds after starting the script, which is exactly the
+start-up peak.
+
+**Starting is the most expensive thing the script does.** The parse, the
+component walk and the first full update -- first backfill attempt included --
+all land inside one garbage-collection window: 15 KB peak with 11.3 KB of
+code. A second script on the same plug has to leave room for that moment, not
+for the steady state, and the most dangerous second is a script starting next
+to a neighbour that is already busy.
+
+**Transient churn beats standing structures.** Every `Script.storage.getItem`
+materialises the whole value on the heap, a kilobyte per archive page. Two
+paths multiplied that: `arcOldest` walked up to eleven pages for a number that
+only changes at a page turn, once per backlog tick -- once a *minute* while
+openSenseMap was down, which is half the story of the 28.08. death next to
+`power-journal`. And `arcRead` fetched its page once per record, 96 reads for
+a day's query. The first is now cached and invalidated on page turns, the
+second reads once per page change; a backlog tick touches at most three pages,
+and a test with a read counter keeps it that way.
+
+**Property chains cannot be shortened, so route them through names that can.**
+The stripper renames every top-level name and every local, but must leave
+`JSON.stringify`, `Math.floor`, `Script.storage.getItem` and
+`Shelly.getComponentStatus` exactly as written. One-purpose wrappers -- `jstr`,
+`flo`, `stoGet`, `stoSet`, `cstat` -- turn 34 occurrences of
+`JSON.stringify(` into 34 occurrences of a one-letter name: 775 bytes off the
+stripped file in one commit. The rule when adding one: the wrapper's name must
+not appear as a property anywhere in the file, or `strip.js` refuses the whole
+build. The price is one stack frame at the deepest call chain, which is why
+the frame budget is written out next to the wrappers.
+
 ## JSON.parse is a loaded gun
 
 **In mJS a failing `JSON.parse` cannot be caught. It kills the script.** So it
