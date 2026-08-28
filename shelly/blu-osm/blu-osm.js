@@ -473,8 +473,9 @@ function arcAppend(text, quarter) {
     ST.start = quarter;
     stoSet(ARC.slots[ST.page], '');
     arcSaveMeta();
+    oldestKnown = null;
   }
-  if (arcFilled() === 0) ST.start = quarter;
+  if (arcFilled() === 0) { ST.start = quarter; oldestKnown = null; }
   ST.buf = ST.buf + text;
   if (flo(ST.buf.length / 3) >= ARC.flush_every) arcFlush();
 }
@@ -534,6 +535,7 @@ function arcSample(now, t, h, at) {
       stoSet(ARC.slots[0], '');
       arcSaveMeta();
       ST.quarter = q;
+      oldestKnown = null;
     }
     ST.ready = true;
   }
@@ -871,7 +873,19 @@ function bfSend() {
 // Ohne from kommt die Uebersicht: welche Viertelstunden ueberhaupt dastehen.
 // Mit from ein Stueck der Reihe, hoechstens ein Tag auf einmal -- mehr baut der
 // Stecker nicht zusammen, ohne sich am eigenen Speicher zu verschlucken.
+// Das Ergebnis aendert sich nur, wenn eine Seite geleert wird oder das Raster
+// neu ansetzt -- alle 28 Stunden also. Gefragt wird aber im Minutentakt:
+// bfSend bei jedem Durchlauf mit offenem Nachtrag, der Endpunkt bei jeder
+// Abfrage. Jeder dieser Durchlaeufe las bis zu elf Seiten zu je einem Kilobyte
+// aus dem Storage -- elf Kilobyte Zwischenmuell fuer eine Zahl, die seit
+// Stunden feststeht. Am 28.08. war genau das der Minutentakt neben den
+// Spitzen von power-journal, als der Speicher ausging: openSenseMap weg,
+// Nachtrag offen, elf Seiten je Minute. Deshalb wird sie gemerkt und nur
+// verworfen, wenn sich am Seitenbestand wirklich etwas aendert.
+let oldestKnown = null;
+
 function arcOldest() {
+  if (oldestKnown !== null) return oldestKnown;
   // Die Seite nach der laufenden ist die aelteste, sofern schon einmal
   // umgelaufen wurde; sonst ist es die erste.
   let n = ARC.slots.length;
@@ -883,16 +897,20 @@ function arcOldest() {
       // Verwaltung aufzublaehen -- er ergibt sich aus dem Abstand zur
       // laufenden Seite, die vollen Seiten dazwischen mitgezaehlt.
       let ahead = (ST.page - ((ST.page + i) % n) + n) % n;
-      return ST.start - ahead * ARC.per_page;
+      oldestKnown = ST.start - ahead * ARC.per_page;
+      return oldestKnown;
     }
   }
-  return ST.start;
+  oldestKnown = ST.start;
+  return oldestKnown;
 }
 
 function arcRead(from, count) {
   let t = [];
   let h = [];
   let n = ARC.slots.length;
+  let text = '';
+  let have = -1; // Seite, die text gerade haelt
   for (let i = 0; i < count; i++) {
     let q = from + i;
     // In welcher Seite steht diese Viertelstunde? Rueckwaerts von der
@@ -905,11 +923,19 @@ function arcRead(from, count) {
       page = (ST.page - steps + n * 2) % n;
       pos = q - (ST.start - steps * ARC.per_page);
     }
-    let text = stoGet(ARC.slots[page]);
-    if (text === null || text === undefined) text = '';
-    // Die laufende Seite hat einen Schwanz im RAM, der noch nicht im Flash
-    // steht. Wer ihn beim Lesen auslaesst, sieht die letzte halbe Stunde nicht.
-    if (page === ST.page) text = text + ST.buf;
+    if (page !== have) {
+      // Eine Abfrage laeuft fast immer ueber ein und dieselbe Seite. Sie fuer
+      // jede Viertelstunde neu aus dem Storage zu holen hiess: 96 Leseaufrufe
+      // zu je einem Kilobyte fuer eine Tagesabfrage der App. Einmal je
+      // Seitenwechsel reicht.
+      text = stoGet(ARC.slots[page]);
+      if (text === null || text === undefined) text = '';
+      // Die laufende Seite hat einen Schwanz im RAM, der noch nicht im Flash
+      // steht. Wer ihn beim Lesen auslaesst, sieht die letzte halbe Stunde
+      // nicht.
+      if (page === ST.page) text = text + ST.buf;
+      have = page;
+    }
     if (pos < 0 || (pos + 1) * 3 > text.length) {
       t.push(null); h.push(null);
       continue;

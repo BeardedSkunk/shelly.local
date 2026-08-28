@@ -29,6 +29,7 @@ function createPlug(seed) {
   const plug = {
     now: 0,
     storage: Object.assign({}, seed || {}),
+    reads: {},
     values: { temperature: null, humidity: null },
     stale: false,
     spokeAt: 0,
@@ -50,7 +51,10 @@ function createPlug(seed) {
       }
       plug.storage[key] = value;
     },
-    getItem: (key) => (key in plug.storage ? plug.storage[key] : null),
+    getItem: (key) => {
+      plug.reads[key] = (plug.reads[key] || 0) + 1;
+      return key in plug.storage ? plug.storage[key] : null;
+    },
     removeItem: (key) => { delete plug.storage[key]; },
   };
 
@@ -517,6 +521,40 @@ test('rubbish in the query string is not a way to stop the script', () => {
   sample(plug, (q + 7) * Q, 27.0, 55.0);
   check('and it is still running afterwards', overview(plug).count > 0, true);
 });
+test('a backlog tick reads two pages, not the whole ring', () => {
+  // openSenseMap is down, so every update carries an open backlog -- the
+  // situation of 28.08., when this path ran once a minute next to
+  // power-journal's peaks. Finding the oldest quarter used to walk all eleven
+  // pages, and arcRead fetched its page from storage once per record on top:
+  // together more transient garbage per minute than the script owns for good.
+  const plug = createPlug();
+  plug.httpReply = { code: 0, ec: -104, em: 'Timed out' };
+  const q = Math.floor(NOON / Q);
+  const per = plug.api.ARC.per_page;
+  // Two pages of history, so the ring has something old to walk through.
+  for (let i = 0; i <= per + 40; i++) sample(plug, (q + i) * Q, 20 + (i % 9) / 10, 50);
+  plug.reads = {};
+  sample(plug, (q + per + 41) * Q, 21.0, 51.0);
+  let pageReads = 0;
+  for (const key of plug.api.ARC.slots) pageReads += plug.reads[key] || 0;
+  check('page reads in one backlog tick stay small', pageReads <= 3, true);
+  check('while the backlog is real', overview(plug).next - overview(plug).sent > per, true);
+});
+
+test('after a wrap the oldest moves on, cache or no cache', () => {
+  // The service answers here, so the pointer keeps up and arcOldest is asked
+  // on every tick -- the cache is primed long before the ring wraps. Exact
+  // equality, not a range: a stale cache would still sit inside the window
+  // the wrap test above allows, but it cannot match the page arithmetic.
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  const per = plug.api.ARC.per_page;
+  const pages = plug.api.ARC.slots.length;
+  for (let i = 0; i <= per * pages + 10; i++) sample(plug, (q + i) * Q, 20, 50);
+  const view = overview(plug);
+  check('oldest is exactly ten full pages behind', view.oldest, view.next - view.count - 10 * per);
+});
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
 
