@@ -333,6 +333,32 @@ Losing power before the metadata write leaves the old page valid, losing it
 after leaves the new one valid; there is no moment at which the archive is
 neither.
 
+## What a reply costs in RAM
+
+The journal and its replies live in the same shared script heap of about
+25 KB. That heap has two rules, both measured on 29.08.2026.
+
+First: `mem_peak` sitting near the ceiling is normal. The garbage collector
+lets allocations run up to just short of the pool and then sweeps, so a busy
+script pins its high-water mark around 23 of 25 KB without being in any
+danger. What kills a script is only what the collector cannot take: the live
+set, plus the temporaries of the one expression that is currently running.
+
+Second: a reply built as one growing string is exactly such an expression
+waiting to happen. Every append copied the whole reply, and the closing line
+glued half a dozen pieces onto the nearly finished string in a single
+statement -- with `max` defaulting to 250 blocks and nothing bounding the
+bytes, a plain `?tier=1&from=0` built seven kilobytes that way on a busy heap
+and died of `out_of_memory` mid-request, taking the endpoint with it. Armed
+since the endpoint existed; our own read test finally pressed it.
+
+So replies are now collected as an array of short pieces and joined once,
+and `CFG.reply_chars` puts a hard ceiling of about 3 KB on any single body.
+A read that would exceed it stops early and says `more:true` -- slices exist
+for exactly this, and the app already follows `next`. Verified by reading all
+four tiers end to end in slices while the journal kept sampling, and by test
+28, which holds the budget in place.
+
 ## Tests
 
 ```bash
