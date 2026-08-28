@@ -916,6 +916,42 @@ test('27  the clock is the plug\'s own, and the day grid never breaks', () => {
   eq(index.utc_offset, 7200, 'and the offset it is currently keeping');
 });
 
+test('28  a reply never outgrows the memory it is built in', () => {
+  // 300 quarter hours of alternating power, so nothing merges and the tier
+  // genuinely holds hundreds of rows. Asked for in one go, the old endpoint
+  // would happily build a seven kilobyte reply out of whole-string copies in
+  // the same heap the journal lives in -- which is exactly how the plug at the
+  // solar plant lost this script to out_of_memory on 29.08.2026.
+  const plug = running();
+  for (let i = 0; i < 300; i++) {
+    plug.pj.tierWrite(1, 1785870000 + i * 900, 900, i % 2 === 0 ? 1 : 50);
+    plug.drain();
+  }
+  const first = JSON.parse(plug.request('tier=1&from=0').body);
+  ok(first.blocks.length > 50, 'a capped read still returns a real slice');
+  eq(first.more, true, 'and says there is more');
+  ok(plug.request('tier=1&from=0').body.length <= 4096,
+    'the body stays inside the budget however much is stored');
+
+  // The slices join up: walk next until more is false and check order.
+  let got = first.blocks.length;
+  let last = first.blocks[first.blocks.length - 1][0];
+  let from = first.next;
+  let guard = 0;
+  let part = first;
+  while (part.more && guard < 20) {
+    part = JSON.parse(plug.request('tier=1&from=' + from).body);
+    ok(part.blocks.length === 0 || part.blocks[0][0] >= last,
+      'a later slice starts after the earlier one');
+    if (part.blocks.length > 0) last = part.blocks[part.blocks.length - 1][0];
+    got += part.blocks.length;
+    from = part.next;
+    guard++;
+  }
+  ok(guard < 20, 'the slices end');
+  eq(got, plug.tierBlocks(1).length, 'and together they are the whole tier');
+});
+
 // ---------------------------------------------------------------------------
 
 console.log('\n' + '-'.repeat(64));

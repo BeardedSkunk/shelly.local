@@ -110,7 +110,21 @@ let CFG = {
   //
   // Kept because it is free and helps exactly the case that hurts: the long
   // catch-up read after an outage.
-  chunk_chars: 64,
+  //
+  // 256 rather than 64 since 29.08.2026. The time is the interpreter's, but
+  // the *memory* is the copies: every append to the growing response copies
+  // it whole, and those copies are the read path's biggest transient
+  // allocation. Four times fewer of them costs nothing.
+  chunk_chars: 256,
+  // The hard ceiling on one reply's body. The reply is built in the same 25 KB
+  // the journal lives in, and while it grows every append copies it whole, so
+  // a reply costs about twice its own length on top of the script's keep. The
+  // old cap was max=250 blocks -- seven kilobytes -- and nothing bounded the
+  // bytes: on 29.08.2026 a plain ?tier=1&from=0 read built that on a busy heap
+  // and the script died of out_of_memory. Pressed by our own read test, but
+  // armed all along. Slices exist for exactly this, so the reply now stops
+  // early and says more:true instead of gambling on the heap.
+  reply_chars: 3072,
   // One row per tier: grid in seconds, energy unit in mWh, how many pages the
   // tier may hold, and how many grid steps one block may be merged across.
   //
@@ -157,6 +171,10 @@ let KVS_VALUE_LIMIT = 253;
 // JSON responses -- so the alphabet is two runs, 35..91 and 93..99, which
 // still decodes with a single comparison.
 let A64 = '#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abc';
+
+// Asked for on every sample; built where it was used, it made a fresh string
+// every ten seconds for the life of the plug.
+let SWK = 'switch:' + CFG.switch_id;
 
 // -------------------------------------------------------------------- state
 
@@ -207,13 +225,24 @@ function mn(a, b) {
   return a < b ? a : b;
 }
 
+// Math.round and Shelly.getComponentStatus cannot be shortened by the
+// stripper: property names have to stay as written, and the 23 spelled-out
+// rounds alone were a fifth of a kilobyte. Routed through a one-purpose
+// function the name becomes renamable. Stripped bytes are paid for twice --
+// once against the 20480 byte flash slot, once as bytecode in the shared
+// script heap, which grows roughly with the code. (The loader does NOT hold
+// the source itself on that heap: this 18.5 KB file starts with a 10.5 KB
+// peak, measured 29.08.2026.) Same trick as in blu-osm.
+function rnd(v) { return Math.round(v); }
+function cstat(k) { return Shelly.getComponentStatus(k); }
+
 // Number('') is 0 and Number('abc') is NaN, neither of which may pass for a
 // field that should hold a count. Nothing in here can throw.
 function toInt(text) {
   if (typeof text !== 'string' || text.length === 0) return null;
   let n = Number(text);
   if (!isNum(n)) return null;
-  return Math.round(n);
+  return rnd(n);
 }
 
 // ------------------------------------------------------------------- codec
@@ -223,7 +252,7 @@ function toInt(text) {
 // separator.
 function enc(n) {
   if (!isNum(n) || n < 0) n = 0;
-  n = Math.round(n);
+  n = rnd(n);
   let out = '';
   let g;
   while (true) {
@@ -239,7 +268,7 @@ function enc(n) {
 // plant runs the meter backwards.
 function encZ(n) {
   if (!isNum(n)) n = 0;
-  n = Math.round(n);
+  n = rnd(n);
   return enc(n < 0 ? -n * 2 - 1 : n * 2);
 }
 
@@ -350,7 +379,7 @@ function metaParse(text) {
   let rows = fields[4].split(';');
   if (rows.length !== CFG.tiers.length) return null;
   let tiers = [];
-  let i, j, parts, names, pages, nums, ok;
+  let i, j, parts, names, pages, nums, ok, v;
   for (i = 0; i < rows.length; i++) {
     parts = rows[i].split(',');
     if (parts.length !== 8) return null;
@@ -365,8 +394,9 @@ function metaParse(text) {
     nums = [];
     ok = true;
     for (j = 1; j < 8; j++) {
-      if (toInt(parts[j]) === null) ok = false;
-      else nums.push(toInt(parts[j]));
+      v = toInt(parts[j]);
+      if (v === null) ok = false;
+      else nums.push(v);
     }
     if (!ok) return null;
     tiers.push({
@@ -393,12 +423,12 @@ function metaWrite() {
     if (i > 0) text = text + ';';
     row = t.pages.join('.');
     row = row + ',' + t.bs;
-    row = row + ',' + Math.round(t.acc);
+    row = row + ',' + rnd(t.acc);
     row = row + ',' + t.ps;
     row = row + ',' + t.pd;
     row = row + ',' + t.pe;
     row = row + ',' + t.pr;
-    row = row + ',' + Math.round(t.cy);
+    row = row + ',' + rnd(t.cy);
     text = text + row;
   }
   return stPut(META_KEY, text);
@@ -421,7 +451,7 @@ function metaRebuild() {
     if (text === null) continue;
     info = pageInfo(text);
     if (info === null) {
-      log(1, 'page ' + SLOTS[i] + ' is damaged and stays out of the archive');
+      log(1, 'page ' + SLOTS[i] + ' is damaged and left out');
       continue;
     }
     found.push({ key: SLOTS[i], tier: info.tier, start: info.start });
@@ -470,7 +500,7 @@ function archiveEndTime() {
 // is no moment at which the archive is neither.
 function tierWrite(tier, start, durationSec, units) {
   let grid = CFG.tiers[tier][0];
-  let steps = Math.round(durationSec / grid);
+  let steps = rnd(durationSec / grid);
   if (steps < 1) return false;
   let field = enc(steps) + encZ(units);
 
@@ -535,13 +565,13 @@ function retirePage(tier, key) {
 // a comment is the only shape that space can safely take.
 function atticStore(text) {
   if (ST.meta.attic >= CFG.attic_limit) {
-    log(1, 'attic is full at ' + ST.meta.attic + ' bytes, day page dropped');
+    log(1, 'attic is full at ' + ST.meta.attic + ' bytes, page dropped');
     atticDone();
     return;
   }
   Shelly.call('Script.List', {}, function (result, code) {
     if (code !== 0 || !result || !result.scripts) {
-      log(1, 'attic: cannot list scripts, day page dropped');
+      log(1, 'attic: Script.List failed, page dropped');
       atticDone();
       return;
     }
@@ -648,10 +678,10 @@ function emitBucket(tier, start, mwh) {
   let grid = CFG.tiers[tier][0];
   let unit = CFG.tiers[tier][1];
   let span = CFG.tiers[tier][3] * grid;
-  let own = Math.round(mwh / unit);
-  let mw = own === 0 ? 0 : Math.round(mwh * 3600 / grid);
+  let own = rnd(mwh / unit);
+  let mw = own === 0 ? 0 : rnd(mwh * 3600 / grid);
   let total = mwh + row.cy;
-  let units = Math.round(total / unit);
+  let units = rnd(total / unit);
   row.cy = total - units * unit;
   if (row.ps >= 0 && row.ps + row.pd === start && row.pd + grid <= span &&
       !levelChanged(row.pr, mw)) {
@@ -694,7 +724,7 @@ function emitBlock(start, durationSec, mwh) {
 // that is already accounted for.
 function queueBlock(start, durationSec, mwh) {
   if (durationSec <= 0) {
-    log(1, 'block at ' + start + ' had no duration and was not archived');
+    log(1, 'block at ' + start + ' had no duration, not archived');
     return;
   }
   let at = start;
@@ -760,7 +790,7 @@ function kvsPayload(now) {
   // Energy the counter did report but that no block could honestly hold. It is
   // the one figure here that says how far the record is from the meter, so it
   // rides along even on a null block, and only when there is something to say.
-  if (ST.dropped > 0) payload.dropped_mwh = Math.round(ST.dropped);
+  if (ST.dropped > 0) payload.dropped_mwh = rnd(ST.dropped);
   if (block.low && block.energy === 0) {
     payload.watt = 0;
     // Which of the two kinds of nothing this is. A reboot has to resume an off
@@ -776,7 +806,7 @@ function kvsPayload(now) {
   payload.energy_mwh = block.energy;
   payload.meter_net_mwh = block.meter;
   payload.meter_gross_mwh = ST.gross === null ? 0 : ST.gross;
-  payload.watt = Math.round(block.energy * 3600 / duration) / 1000;
+  payload.watt = rnd(block.energy * 3600 / duration) / 1000;
   payload.reference_watt = block.ref / 1000;
   return payload;
 }
@@ -795,7 +825,7 @@ function kvsWrite(now, reason) {
     return;
   }
   if (ST.kvsBusy) {
-    log(1, 'a KVS write is still in flight, this one waits');
+    log(1, 'KVS write in flight, this one waits');
     ST.kvsDirty = true;
     return;
   }
@@ -835,7 +865,7 @@ function levelChanged(ref, power) {
   let magnitude = ref < 0 ? -ref : ref;
   let gap = power - ref;
   if (gap < 0) gap = -gap;
-  return gap >= Math.max(Math.round(magnitude * CFG.change_ratio), CFG.min_change_mw);
+  return gap >= Math.max(rnd(magnitude * CFG.change_ratio), CFG.min_change_mw);
 }
 
 // An open relay is its own kind of stretch, and the first thing asked about.
@@ -1027,7 +1057,7 @@ function bootstrap(now, power, meter, off) {
   let sum = 0;
   let i;
   for (i = 0; i < ST.boot.length; i++) sum = sum + ST.boot[i].p;
-  let ref = Math.round(sum / ST.boot.length);
+  let ref = rnd(sum / ST.boot.length);
   // The switch state comes from the newest sample rather than the mean: it is
   // not a level to be averaged, and what counts is how the relay stands now.
   let latest = ST.boot[ST.boot.length - 1];
@@ -1059,7 +1089,7 @@ function maybeCheckpoint(now) {
 function fillGap(untilTime) {
   if (ST.archiveEnd === null) return;
   if (untilTime <= ST.archiveEnd) return;
-  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s of unrecorded time with a null block');
+  log(1, 'filling ' + (untilTime - ST.archiveEnd) + ' s of gap with a null block');
   queueBlock(ST.archiveEnd, untilTime - ST.archiveEnd, 0);
 }
 
@@ -1070,8 +1100,8 @@ function fillGap(untilTime) {
 // that went back out. So what actually crossed the meter, signed, is
 // total - 2 * returned: positive drawn, negative exported.
 function netMeter(sw) {
-  let gross = Math.round(sw.aenergy.total * 1000);
-  let returned = sw.ret_aenergy && isNum(sw.ret_aenergy.total) ? Math.round(sw.ret_aenergy.total * 1000) : 0;
+  let gross = rnd(sw.aenergy.total * 1000);
+  let returned = sw.ret_aenergy && isNum(sw.ret_aenergy.total) ? rnd(sw.ret_aenergy.total * 1000) : 0;
   // The gross counter is not oriented. It is only ever compared with itself to
   // notice a reset, and it climbs whichever way the energy is going.
   return { gross: gross, net: orient(gross - 2 * returned) };
@@ -1098,12 +1128,12 @@ function orient(mw) {
 // GetConfig already reports the new flag, so a pending restart means the
 // answer on file is the true one and the configured one is a promise.
 function orientation(current) {
-  let sys = Shelly.getComponentStatus('sys');
+  let sys = cstat('sys');
   if (sys && sys.restart_required === true) {
-    log(1, 'a restart is pending, keeping the meter orientation that is in force');
+    log(1, 'a restart is pending, keeping the orientation in force');
     return current;
   }
-  let cfg = Shelly.getComponentConfig('switch:' + CFG.switch_id);
+  let cfg = Shelly.getComponentConfig(SWK);
   if (!cfg || typeof cfg.reverse !== 'boolean') return current;
   return cfg.reverse ? 1 : 0;
 }
@@ -1113,43 +1143,47 @@ function sample() {
   // this sample turns out to be unusable. See queueBlock for why it happens
   // here rather than where the block closed.
   drainBlocks();
-  let sw = Shelly.getComponentStatus('switch:' + CFG.switch_id);
-  let sys = Shelly.getComponentStatus('sys');
+  let sw = cstat(SWK);
+  let sys = cstat('sys');
   if (!sw || !sys) {
-    log(1, 'could not read the component status');
+    log(1, 'component status unreadable');
     return;
   }
   let now = sys.unixtime;
   if (!isNum(now) || now < CFG.min_valid_unix) {
-    log(1, 'unix time is not valid, sample skipped');
+    log(1, 'unixtime invalid, sample skipped');
     return;
   }
   if (now < ST.lastUnix) {
-    log(1, 'unix time jumped backwards, sample skipped');
+    log(1, 'time jumped backwards, sample skipped');
     ST.lastUnix = now;
     return;
   }
   ST.lastUnix = now;
   if (isNum(sys.utc_offset)) ST.offset = sys.utc_offset;
   if (!isNum(sw.apower) || !sw.aenergy || !isNum(sw.aenergy.total)) {
-    log(1, 'measurement is not usable, sample skipped');
+    log(1, 'measurement unusable, sample skipped');
     return;
   }
 
   let off = sw.output === false;
-  let power = off ? 0 : orient(Math.round(sw.apower * 1000));
+  let power = off ? 0 : orient(rnd(sw.apower * 1000));
   let reading = netMeter(sw);
 
   // The gross counter cannot fall. If it did, it was reset, and the running
   // block rebases on the new reading rather than booking the whole lifetime
   // total as a single second of energy.
   if (ST.gross !== null && reading.gross < ST.gross && ST.blk !== null) {
-    log(1, 'energy counters were reset, rebasing');
+    log(1, 'counters were reset, rebasing');
     ST.blk.meter = reading.net;
   }
   ST.gross = reading.gross;
 
-  log(3, now + ': ' + power + ' mW, net ' + reading.net + ' mWh' + (off ? ' (relay open)' : ''));
+  // Built only when somebody will see it: at the default level this line was
+  // assembled and thrown away every ten seconds, five allocations a time.
+  if (CFG.log_level >= 3) {
+    log(3, now + ': ' + power + ' mW, net ' + reading.net + ' mWh' + (off ? ' (relay open)' : ''));
+  }
   onSample(now, power, reading.net, off);
   // Again, because this sample may have closed a block. Here it costs nothing:
   // the sample has already returned to this frame, so the archive still runs
@@ -1181,7 +1215,7 @@ function begin() {
   }
   ST.meta = metaParse(raw);
   if (ST.meta === null) {
-    if (raw !== null) log(1, 'metadata missing or damaged, rebuilding it from the pages');
+    if (raw !== null) log(1, 'metadata unusable, rebuilding from the pages');
     ST.meta = metaRebuild();
   }
   let was = ST.meta.rev;
@@ -1204,8 +1238,8 @@ function begin() {
 
 function onKvsRead(result, code) {
   if (code === 0 && result && !ST.stale) ST.cur = curParse(result.value);
-  if (ST.stale) log(1, 'the running block in the KVS predates this version, starting again');
-  if (ST.cur === null) log(2, 'no usable running block in the KVS');
+  if (ST.stale) log(1, 'the KVS block is from an older version, starting again');
+  if (ST.cur === null) log(2, 'no usable KVS block');
   waitForTime();
 }
 
@@ -1237,7 +1271,7 @@ function curParse(value) {
 // case on every boot, not an exception. Two readings five seconds apart have
 // to agree that time is moving forwards, and neither may predate the archive.
 function waitForTime() {
-  let sys = Shelly.getComponentStatus('sys');
+  let sys = cstat('sys');
   let now = sys && isNum(sys.unixtime) ? sys.unixtime : 0;
   if (sys && isNum(sys.utc_offset)) ST.offset = sys.utc_offset;
   let usable = now >= CFG.min_valid_unix && (ST.archiveEnd === null || now >= ST.archiveEnd);
@@ -1245,45 +1279,45 @@ function waitForTime() {
     recover(now);
     return;
   }
-  if (!usable) log(1, 'waiting for a valid unix time');
+  if (!usable) log(1, 'waiting for valid time');
   ST.timeProbe = usable ? now : 0;
   Timer.set(5000, false, waitForTime);
 }
 
 function recover(now) {
-  let sw = Shelly.getComponentStatus('switch:' + CFG.switch_id);
+  let sw = cstat(SWK);
   let usable = sw && sw.aenergy && isNum(sw.aenergy.total);
   let reading = usable ? netMeter(sw) : { gross: 0, net: 0 };
-  let power = sw && isNum(sw.apower) && sw.output !== false ? orient(Math.round(sw.apower * 1000)) : 0;
+  let power = sw && isNum(sw.apower) && sw.output !== false ? orient(rnd(sw.apower * 1000)) : 0;
   let bootTs = now - Math.floor(Shelly.getUptimeMs() / 1000);
   let cur = ST.cur;
   ST.gross = usable ? reading.gross : null;
 
   if (cur === null) {
-    log(2, 'no block to take over, starting from scratch');
+    log(2, 'no block to take over');
   } else if (ST.archiveEnd !== null && cur.start < ST.archiveEnd) {
     // Power was lost between archiving a block and writing its successor to
     // the KVS. The archive already holds it; this entry is a leftover and
     // archiving it again would double it.
-    log(1, 'the block in the KVS is already archived, dropping it');
+    log(1, 'the KVS block is already archived, dropped');
   } else if (cur.low) {
     // A null block survives a reboot unchanged. Nothing flowed while the plug
     // was away, which is precisely what a null block records, so the outage
     // belongs to it and its start stays where it was. Normal detection closes
     // it as soon as something happens.
     ST.blk = { start: cur.start, ref: 0, energy: 0, meter: reading.net, low: true, off: cur.off === true };
-    log(2, 'continuing the null block that started at ' + cur.start);
+    log(2, 'continuing the null block from ' + cur.start);
   } else if (cur.start + cur.dur >= bootTs - 5) {
     // The checkpoint is younger than this boot, so the script restarted but
     // the device did not: the block never actually stopped.
-    let ref = Math.round(cur.reference * 1000);
+    let ref = rnd(cur.reference * 1000);
     // An entry written before the counter had moved carries no usable level.
     // Taking what is flowing right now beats resuming with a reference of
     // zero, which would disagree with the load immediately.
     if (isLow(ref)) ref = power;
     ST.blk = { start: cur.start, ref: ref, energy: cur.energy, meter: cur.meter, low: false, off: false };
     accumulate(ST.blk, reading.net);
-    log(2, 'script restart, continuing the block that started at ' + cur.start);
+    log(2, 'script restart, continuing block ' + cur.start);
     kvsWrite(now, 'recovery');
   } else {
     recoverAfterReboot(now, bootTs, cur, reading);
@@ -1298,8 +1332,8 @@ function recover(now) {
 // measured energy is preserved either way -- only the moment it stopped is a
 // guess, and it is bounded by the boot.
 function recoverAfterReboot(now, bootTs, cur, reading) {
-  let refMw = Math.round(cur.reference * 1000);
-  let averageMw = Math.round(cur.watt * 1000);
+  let refMw = rnd(cur.reference * 1000);
+  let averageMw = rnd(cur.watt * 1000);
   // The average is the honest rate to divide the leftover energy by. Early in
   // a block it can still be zero because the counters had not moved yet, and
   // then the level the block opened at is the better guess.
@@ -1317,12 +1351,12 @@ function recoverAfterReboot(now, bootTs, cur, reading) {
     energy = energy + delta;
     let magnitude = delta < 0 ? -delta : delta;
     if (rateMw > 0) {
-      endTs = checkpoint + Math.round(magnitude * 3600 / rateMw);
+      endTs = checkpoint + rnd(magnitude * 3600 / rateMw);
       if (endTs > bootTs) endTs = bootTs;
       if (endTs < checkpoint) endTs = checkpoint;
     }
   } else {
-    log(1, 'energy counters were reset while away, closing the block at the checkpoint');
+    log(1, 'counters reset while away, closing at the checkpoint');
   }
 
   ST.blk = { start: cur.start, ref: refMw, energy: energy, meter: reading.net, low: false, off: false };
@@ -1331,7 +1365,7 @@ function recoverAfterReboot(now, bootTs, cur, reading) {
   // having been open. If the switch is in fact off, the next samples say so and
   // cut the boundary there.
   ST.blk = { start: endTs, ref: 0, energy: 0, meter: reading.net, low: true, off: false };
-  log(2, 'reboot recovery: block closed at ' + endTs + ', the outage is a null phase');
+  log(2, 'reboot recovery: block closed at ' + endTs + ', the outage is null');
   kvsWrite(now, 'recovery');
 }
 
@@ -1423,8 +1457,8 @@ function httpIndex() {
       ',"pages":' + (row.pages.length === 0 ? '[]' : '["' + row.pages.join('","') + '"]') +
       ',"pending":' + (row.ps < 0 ? 'null' : '[' + row.ps + ',' + row.pd + ',' + row.pe * CFG.tiers[i][1] + ']') +
       ',"open_bucket":' + (row.bs < 0 ? 'null' : row.bs) +
-      ',"open_mwh":' + Math.round(row.acc) +
-      ',"carry_mwh":' + Math.round(row.cy) + '}';
+      ',"open_mwh":' + rnd(row.acc) +
+      ',"carry_mwh":' + rnd(row.cy) + '}';
   }
   return out + '],"reversed":' + (ST.meta.rev === 1 ? 'true' : 'false') +
     ',"archive_end":' + (ST.archiveEnd === null ? 'null' : ST.archiveEnd) +
@@ -1452,18 +1486,31 @@ function httpTier(tier, from, max) {
   let grid = CFG.tiers[tier][0];
   let unit = CFG.tiers[tier][1];
   let pages = ST.meta.tiers[tier].pages;
-  let out = '{"api":2,"tier":' + tier + ',"generation":' + ST.meta.g +
+  // The reply is collected as an array of short pieces and joined once at the
+  // end. It used to grow as one string, and every append copied the whole of
+  // it -- worse, the closing line glued half a dozen pieces onto the nearly
+  // finished reply in a single expression, and the temporaries of an
+  // expression cannot be collected while it runs. On 29.08.2026 that was an
+  // out_of_memory that took the script down mid-request. A join allocates the
+  // reply once, next to its pieces, and nothing else.
+  let parts = ['{"api":2,"tier":' + tier + ',"generation":' + ST.meta.g +
     ',"grid_sec":' + grid +
-    ',"fields":["start_time","duration_sec","energy_mwh"],"blocks":[';
+    ',"fields":["start_time","duration_sec","energy_mwh"],"blocks":['];
+  let size = 0;
   let sent = 0;
   let more = false;
   let first = -1;
   let at = from;
   let chunk = '';
+  // The peek below reads the next page to see where it starts, and the next
+  // turn of the loop used to read the very same page again -- a kilobyte from
+  // storage twice for every page boundary. Carried over instead.
+  let carried = null;
   let i, text, duration, energy, cursor, peek, ahead;
   for (i = 0; i < pages.length; i++) {
     if (more) break;
-    text = stGet(pages[i]);
+    text = carried === null ? stGet(pages[i]) : carried;
+    carried = null;
     if (text === null) continue;
     DEC.i = 1;
     DEC.ok = true;
@@ -1488,6 +1535,7 @@ function httpTier(tier, from, max) {
     if (i + 1 < pages.length) {
       peek = stGet(pages[i + 1]);
       if (peek !== null) {
+        carried = peek;
         DEC.i = 1;
         DEC.ok = true;
         ahead = dec(peek);
@@ -1501,18 +1549,19 @@ function httpTier(tier, from, max) {
       energy = decZ(text) * unit;
       if (!DEC.ok) break;
       if (at + duration > from) {
-        if (sent >= max) { more = true; break; }
+        if (sent >= max || size >= CFG.reply_chars) { more = true; break; }
         if (sent > 0) chunk = chunk + ',';
         chunk = chunk + '[' + at + ',' + duration + ',' + energy + ']';
         sent = sent + 1;
-        if (chunk.length >= CFG.chunk_chars) { out = out + chunk; chunk = ''; }
+        if (chunk.length >= CFG.chunk_chars) { parts.push(chunk); size = size + chunk.length; chunk = ''; }
       }
       at = at + duration;
     }
   }
-  return out + chunk + '],"returned":' + sent + ',"next":' + at +
+  parts.push(chunk + '],"returned":' + sent + ',"next":' + at +
     ',"more":' + (more ? 'true' : 'false') +
-    ',"tier_start":' + (first < 0 ? 'null' : first) + '}';
+    ',"tier_start":' + (first < 0 ? 'null' : first) + '}');
+  return parts.join('');
 }
 
 // --------------------------------------------------------------------- main

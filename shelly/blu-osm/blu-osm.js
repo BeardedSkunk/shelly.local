@@ -157,8 +157,10 @@ let DIG = '0123456789';
 
 // ------------------------------------------------------ Kurznamen fuer Ketten
 //
-// Der Lader braucht ungefaehr so viel freien Skript-RAM, wie die Datei Bytes
-// hat -- jedes gesparte Byte gestrippten Codes senkt die Ladespitze mit. Der
+// Gestrippte Bytes kosten zweimal: Flash (20480 je Slot) und Bytecode im
+// gemeinsamen Skript-Heap, dessen Dauerbestand ungefaehr mit der Codegroesse
+// waechst. (Die Quelle selbst haelt der Lader NICHT im Heap -- das 18,5-KB-
+// power-journal startet mit 10,5 KB Spitze, gemessen 29.08.2026.) Der
 // Minifizierer kuerzt jeden Namen der obersten Ebene auf ein, zwei Buchstaben,
 // an Eigenschaftsnamen wie JSON.stringify darf er aber nicht ruehren. Der
 // Umweg ueber eine eigene Funktion macht sie kuerzbar: aus 34x JSON.stringify(
