@@ -151,6 +151,10 @@ let ARC = {
 
 let A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
+// Fuer arcNum. Eine Kette und ein indexOf, weil das in mJS und in node dasselbe
+// heisst -- siehe dort.
+let DIG = '0123456789';
+
 // Laufende Verwaltung: welche Seite gerade beschrieben wird, wo sie anfaengt,
 // wieviel drinsteht, und der zuletzt gesehene Stand des Sensors.
 //
@@ -335,30 +339,82 @@ function arcHumCode(h) {
   return c;
 }
 
-// "<version>|<seite>|<start>|<anzahl>|<gesendet>"
+// Eine nicht-negative ganze Zahl aus einem Feld, oder -1, wenn da etwas
+// anderes steht.
+//
+// Ausdruecklich NICHT JSON.parse. Das faellt bei kaputter Eingabe nicht auf
+// eine Nase, die man abfangen koennte -- in mJS toetet es das ganze Skript,
+// unabfangbar. Wo die Eingabe von aussen kommt oder einen Absturz ueberlebt
+// hat, ist das keine Fehlerbehandlung, sondern ein Selbstmordknopf.
+//
+// Am 28.08.2026 ist genau das passiert: der Speicher ging aus, waehrend der
+// Merker geschrieben wurde, und der halbe Satz machte das Skript beim naechsten
+// Start unstartbar -- ein halber Tag Messwerte weg, und aus der Ferne war nicht
+// einmal zu sehen, was drinsteht, weil Script.storage ueber RPC nicht lesbar
+// ist. Ziffern selbst zu pruefen sind zwoelf Zeilen und koennen nichts anrichten.
+//
+// Gelesen wird zeichenweise ueber indexOf in eine Ziffernkette -- dieselbe
+// Machart wie beim Auspacken des Archivs weiter unten, und aus demselben Grund:
+// sie bedeutet in mJS und in node dasselbe. `t.at(i)` tut das NICHT. In mJS
+// kommt der Bytewert heraus, in node das Zeichen, und `zeichen - 48` ist dort
+// NaN. NaN ist weder kleiner null noch groesser neun, rutscht also durch jede
+// Bereichspruefung und wird stillschweigend zur Seitennummer. Die Testsuite hat
+// genau das abgefangen, bevor es auf die Dose ging.
+function arcNum(t) {
+  if (t === null || t === undefined) return -1;
+  if (t.length < 1 || t.length > 12) return -1;
+  let n = 0;
+  for (let i = 0; i < t.length; i++) {
+    let d = DIG.indexOf(t.slice(i, i + 1));
+    if (d < 0) return -1;
+    n = n * 10 + d;
+  }
+  return n;
+}
+
+// "<version>|<seite>|<start>|<anzahl>|<gesendet>|z"
 //
 // gesendet ist die erste Zeitscheibe, die openSenseMap noch nicht hat. Sie
 // steht hier und nicht im RAM, weil sie einen Neustart ueberleben muss: sonst
 // wuerde nach jedem Stromausfall alles noch einmal geschickt, oder gar nichts.
+//
+// Das 'z' am Ende ist der Nachweis, dass der Satz vollstaendig ist. Ein
+// Schreiben, das mittendrin abbricht, hinterlaesst sonst eine Zeile, die sich
+// anstandslos lesen laesst und falsch ist -- lauter Ziffern, nur zu wenige, und
+// dann wird der Nachtrag an der falschen Stelle fortgesetzt. Ein Zeichen, das
+// nur ganz am Ende steht, macht den Unterschied zwischen "abgerissen" und
+// "fertig" sichtbar.
 function arcSaveMeta() {
   Script.storage.setItem(
     ARC.meta,
     JSON.stringify(ARC.version) + '|' + JSON.stringify(ST.page) + '|' +
       JSON.stringify(ST.start) + '|' + JSON.stringify(ST.count) + '|' +
-      JSON.stringify(ST.sent)
+      JSON.stringify(ST.sent) + '|z'
   );
 }
 
+// Faellt der Satz durch, faengt das Archiv eine frische Seite an. Das kostet
+// eine Seite Verlauf und nicht das Skript, und das ist der ganze Punkt.
+//
+// ST wird erst beschrieben, wenn alles geprueft ist. Feldweise zuzuweisen und
+// spaeter abzubrechen liesse einen halb geaenderten Zustand stehen, auf dem der
+// Rest des Skripts dann weiterrechnet.
 function arcLoadMeta() {
   let raw = Script.storage.getItem(ARC.meta);
   if (raw === null || raw === undefined) return false;
   let f = raw.split('|');
-  if (f.length < 5 || JSON.parse(f[0]) !== ARC.version) return false;
-  ST.page = JSON.parse(f[1]);
-  ST.start = JSON.parse(f[2]);
-  ST.count = JSON.parse(f[3]);
-  ST.sent = JSON.parse(f[4]);
-  if (ST.page < 0 || ST.page >= ARC.slots.length) return false;
+  if (f.length < 6 || f[5] !== 'z') return false;
+  if (arcNum(f[0]) !== ARC.version) return false;
+  let page = arcNum(f[1]);
+  let start = arcNum(f[2]);
+  let count = arcNum(f[3]);
+  let sent = arcNum(f[4]);
+  if (page < 0 || start < 0 || count < 0 || sent < 0) return false;
+  if (page >= ARC.slots.length) return false;
+  ST.page = page;
+  ST.start = start;
+  ST.count = count;
+  ST.sent = sent;
   return true;
 }
 
@@ -864,9 +920,16 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
   for (let i = 0; i < parts.length; i++) {
     let kv = parts[i].split('=');
     if (kv.length !== 2) continue;
-    if (kv[0] === 'from') from = JSON.parse(kv[1]);
-    if (kv[0] === 'count') count = JSON.parse(kv[1]);
+    // arcNum und nicht JSON.parse: was hier ankommt, hat irgendwer in eine
+    // Adresszeile geschrieben. Mit JSON.parse war ein "?from=x" von irgendwo im
+    // Netz ein Ausschalter fuer dieses Skript -- unabfangbar, ohne Meldung, und
+    // wieder hochzubekommen war es nur ueber einen Deploy. Unsinn wird jetzt zu
+    // -1 und damit zur Vorgabe.
+    if (kv[0] === 'from') from = arcNum(kv[1]);
+    if (kv[0] === 'count') count = arcNum(kv[1]);
   }
+  if (from < 0) from = 0;
+  if (count < 0) count = 0;
   // code is the version of this file, written out as a plain number so it
   // survives the squeeze into the app's asset as readable text. The app finds
   // what it ships by looking for this literal in its own copy and what a plug
@@ -902,3 +965,15 @@ Shelly.addStatusHandler(function (ev) {
 });
 
 buildMap(0);
+
+// Der Griff, an dem die Testsuite das Skript anfasst.
+//
+// Der Name steht in KEEP von strip.js und ueberlebt das Straffen; die
+// Schluessel sind in Anfuehrungszeichen, weil der Minifizierer Zeichenketten in
+// Ruhe laesst, jeden Namen der obersten Ebene aber auf ein oder zwei Buchstaben
+// zusammenzieht. Beides zusammen ist der Grund, dass `BLU_STRIPPED=1` die
+// gleichen Tests gegen genau die Fassung laufen lassen kann, die auf die Dose
+// geht -- und nicht nur gegen die kommentierte daneben.
+function selftest() {
+  return { 'update': update, 'ST': ST, 'ARC': ARC, 'arcNum': arcNum };
+}

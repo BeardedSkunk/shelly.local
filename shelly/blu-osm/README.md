@@ -278,3 +278,84 @@ the same corrected number and cannot drift apart. What is already in the
 archive stays as it was: those are finished records, not raw readings. A
 correction therefore works from now on and not backwards, which also means the
 series has a step in it on the day it is set.
+
+## Uploading
+
+    node tools/upload.js 192.168.178.24              upload and start
+    node tools/upload.js 192.168.178.24 --no-start   upload only
+    node tools/upload.js 192.168.178.24 --status     show what is there
+
+The file is stripped on the way up — comments gone, names squeezed — because a
+script may be 20480 bytes on the device and all of it counts. 36 KB of source
+become about 12 KB uploaded, and the upload is read back and compared.
+
+The four placeholders are filled from **the plug's own copy**, read back before
+anything is written. That is not a trick: the plug is where a token
+legitimately lives, an upgrade is by far the commonest reason to run this, and
+it means the tool needs no secret of its own and none can leak into the
+repository. A plug with nothing on it yet has to be told once, with `--url`,
+`--token`, `--temperature` and `--humidity`.
+
+Tests run twice, and the second run is the one that matters:
+
+    node test/quarters.js                what the repository holds
+    BLU_STRIPPED=1 node test/quarters.js what the plug gets
+
+The stripper renames local variables as well as top-level ones, so the squeezed
+file is genuinely a different file. `selftest()` is the handle the tests hold it
+by — the name is in `strip.js`'s `KEEP` list and the keys it returns are quoted,
+so one line serves both passes.
+
+## Two scripts do not fit on one plug
+
+A Shelly has **about 25 KB of script memory for everything that runs**, shared.
+It has nothing to do with the space for the code: that is flash, 20480 bytes per
+slot, ten slots or more, and the plug will happily *store* far more than it can
+*run*.
+
+Measured on the pump plug, `192.168.178.24`:
+
+| | steady | peak |
+|---|---|---|
+| `blu-osm` | 6.9 KB | **12.7 KB** |
+| `power-journal` | 8.5 KB | **13.3 KB** |
+
+Two peaks together are 26 KB and the pool is 25.2. They fit almost always,
+which is worse than not fitting at all: for weeks nothing happens, and then one
+script's daily rollover lands on the other's send and whichever asked next is
+killed. On **28.08.2026** that was `blu-osm`, and it was killed in the middle of
+writing its meta record — see below. `power-journal` has since been stopped and
+disabled here; it belongs on `192.168.178.23`, where it has a plug to itself.
+
+`Script.GetStatus` is where this shows up. `enable:true, running:false` means
+crashed, not switched off, and `errors` names which kind.
+
+## JSON.parse is a loaded gun
+
+**In mJS a failing `JSON.parse` cannot be caught. It kills the script.** So it
+must never see anything that is not known-good — and two places in this file
+were doing exactly that:
+
+- the meta record in `Script.storage`, which survives a crash and can therefore
+  be *half* written, and
+- the `from` and `count` of the `quarters` endpoint, which anybody who can reach
+  the plug gets to choose.
+
+The first one happened. The record was cut short, `JSON.parse` met a field
+starting with `.`, and the script died on that line at every start — permanently
+and out of reach, because `Script.storage` is per-script and not readable over
+RPC at all. Only a deploy could clear it. The second one never happened, but a
+single `?from=x` from anywhere on the network would have done the same.
+
+Both now go through `arcNum`, which walks the digits itself and answers −1 to
+anything else. A bad record costs a page of archive; a bad query string costs
+nothing. Reading is done with `DIG.indexOf(t.slice(i, i + 1))` and **not** with
+`t.at(i)`: `at` gives a byte value in mJS and a character in node, so
+`t.at(i) - 48` is `NaN` under the tests — and `NaN` is neither below zero nor
+above nine, so it slips through every range check and quietly becomes the page
+number. The test suite caught that before it reached the plug.
+
+`arcSaveMeta` also ends the record with `|z`. A write cut short is otherwise
+perfectly readable and simply wrong — all digits, just fewer of them — and the
+backfill would carry on from a place it never reached. A character that only
+ever appears last is what tells "finished" from "torn".

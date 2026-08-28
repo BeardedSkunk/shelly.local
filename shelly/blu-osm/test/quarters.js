@@ -18,10 +18,17 @@ const SOURCE = path.join(__dirname, '..', 'blu-osm.js');
 const VALUE_LIMIT = 1022;
 const ITEM_LIMIT = 12;
 
-function createPlug() {
+/**
+ * A plug, with the script loaded and running on it.
+ *
+ * `seed` is what its storage already holds when the script starts, which is
+ * the only way to test what the script makes of a record it did not write in
+ * this run -- a reboot, an upgrade, or a write that was cut short.
+ */
+function createPlug(seed) {
   const plug = {
     now: 0,
-    storage: {},
+    storage: Object.assign({}, seed || {}),
     values: { temperature: null, humidity: null },
     stale: false,
     spokeAt: 0,
@@ -87,15 +94,26 @@ function createPlug() {
     registerEndpoint(name, fn) { plug.endpoints[name] = fn; },
   };
 
-  const code = fs.readFileSync(SOURCE, 'utf8')
+  let code = fs.readFileSync(SOURCE, 'utf8')
     .replace(/\{\{OSM_URL\}\}/g, 'https://example.invalid/data')
     .replace(/\{\{OSM_TOKEN\}\}/g, 'x')
     .replace(/\{\{OSM_TEMPERATURE\}\}/g, 't')
     .replace(/\{\{OSM_HUMIDITY\}\}/g, 'h');
 
+  // BLU_STRIPPED=1 runs the same tests against what the plug actually gets:
+  // comments gone, every name squeezed to a letter or two. That pass is not a
+  // formality -- the stripper renames locals as well, so it is the only place a
+  // rename that changes the meaning can be caught before it reaches a roof.
+  if (process.env.BLU_STRIPPED === '1') {
+    code = require('../../power-journal/tools/strip').strip(code);
+  }
+
+  // selftest() rather than a hand-written return: the name is in strip.js's
+  // KEEP list and the keys inside it are quoted, so the one line works for the
+  // commented source and the squeezed one alike.
   const factory = new Function(
     'Shelly', 'Script', 'Timer', 'HTTPServer', 'print',
-    code + '\nreturn { update: update, ST: ST, ARC: ARC };',
+    code + '\nreturn selftest();',
   );
   plug.api = factory(Shelly, { storage }, Timer, HTTPServer, (m) => plug.logs.push(m));
   return plug;
@@ -445,6 +463,60 @@ test('one request never carries more than it can build', () => {
   check('which stays under two kilobytes', last.body.length < 2048, true);
 });
 
+// ---------------------------------------------------------------------------
+// What happened on 28.08.2026, kept so it cannot happen twice.
+//
+// The plug ran out of script memory while the meta record was being written.
+// What was left could not be read back -- and because JSON.parse cannot be
+// caught in mJS, the script died on that same line every time it started, for
+// good and from a distance, with Script.storage unreadable over RPC. Half a
+// day of readings went missing behind two lines of parsing.
+
+/** Seven samples, so six records reach the flash and one waits. */
+function sevenRecords() {
+  const plug = createPlug();
+  const q = Math.floor(NOON / Q);
+  for (let i = 0; i < 7; i++) sample(plug, (q + i) * Q, 20 + i, 50);
+  return plug;
+}
+
+test('a meta record cut short is refused rather than believed', () => {
+  const kept = Object.assign({}, sevenRecords().storage);
+  check('there is a record to break', typeof kept.m, 'string');
+  // The tear that is hardest to notice: everything still parses, there is just
+  // less of it. Without the sentinel this reads as a valid record, and the
+  // backfill carries on from a place it never reached.
+  const torn = Object.assign({}, kept, { m: kept.m.slice(0, kept.m.length - 1) });
+  const plug = createPlug(torn);
+  check('it started', typeof plug.endpoints.quarters, 'function');
+  check('and it did not adopt the torn record', plug.api.ST.count, 0);
+});
+
+test('rubbish in a meta field costs a page, not the script', () => {
+  const kept = Object.assign({}, sevenRecords().storage);
+  const fields = kept.m.split('|');
+  // A leading dot is what the plug actually held that evening.
+  fields[2] = '.5';
+  const plug = createPlug(Object.assign({}, kept, { m: fields.join('|') }));
+  check('it started', typeof plug.endpoints.quarters, 'function');
+  check('and it began a fresh page', plug.api.ST.count, 0);
+  const q = Math.floor(NOON / Q);
+  for (let i = 0; i < 7; i++) sample(plug, (q + 20 + i) * Q, 25 + i, 60);
+  check('and it is recording again', overview(plug).count > 0, true);
+});
+
+test('rubbish in the query string is not a way to stop the script', () => {
+  const plug = sevenRecords();
+  // With JSON.parse in the endpoint, anyone who could reach the plug could end
+  // this script with a single request, and only a deploy would bring it back.
+  const res = { body: '', code: 0, headers: null, send() {} };
+  plug.endpoints.quarters({ query: 'from=x&count=;' }, res);
+  const got = JSON.parse(res.body);
+  check('it answered', typeof got.step_s, 'number');
+  const q = Math.floor(NOON / Q);
+  sample(plug, (q + 7) * Q, 27.0, 55.0);
+  check('and it is still running afterwards', overview(plug).count > 0, true);
+});
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
 
