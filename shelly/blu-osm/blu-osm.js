@@ -155,6 +155,23 @@ let A64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 // heisst -- siehe dort.
 let DIG = '0123456789';
 
+// ------------------------------------------------------ Kurznamen fuer Ketten
+//
+// Der Lader braucht ungefaehr so viel freien Skript-RAM, wie die Datei Bytes
+// hat -- jedes gesparte Byte gestrippten Codes senkt die Ladespitze mit. Der
+// Minifizierer kuerzt jeden Namen der obersten Ebene auf ein, zwei Buchstaben,
+// an Eigenschaftsnamen wie JSON.stringify darf er aber nicht ruehren. Der
+// Umweg ueber eine eigene Funktion macht sie kuerzbar: aus 34x JSON.stringify(
+// wird 34x j( -- zusammen rund 0,8 KB weniger Code. Der Preis ist ein
+// Funktionsaufruf mehr in der Tiefe; die engste Stelle (Timer -> update ->
+// arcSample -> arcCloseUpTo -> arcAppend -> arcFlush -> arcSaveMeta -> jstr)
+// bleibt mit 8 von ~15 Rahmen unter dem Stack-Limit von mJS.
+function jstr(v) { return JSON.stringify(v); }
+function flo(v) { return Math.floor(v); }
+function stoGet(k) { return Script.storage.getItem(k); }
+function stoSet(k, v) { Script.storage.setItem(k, v); }
+function cstat(k) { return Shelly.getComponentStatus(k); }
+
 // Laufende Verwaltung: welche Seite gerade beschrieben wird, wo sie anfaengt,
 // wieviel drinsteht, und der zuletzt gesehene Stand des Sensors.
 //
@@ -190,7 +207,7 @@ let lastWriteAt = 0; // Systemzeit des letzten Schreibvorgangs
 // ---------------------------------------------------------------- Hilfsmittel
 
 function sysTime() {
-  let st = Shelly.getComponentStatus('sys');
+  let st = cstat('sys');
   if (st === null || typeof st.unixtime !== 'number') return 0;
   return st.unixtime;
 }
@@ -222,7 +239,7 @@ function foundOffset(name) {
 // jemand das Script neu starten muss.
 function offsetOf(entry) {
   if (entry.okey === null) return 0;
-  let st = Shelly.getComponentStatus(entry.okey);
+  let st = cstat(entry.okey);
   if (st === null || typeof st.value !== 'number') return 0;
   return st.value;
 }
@@ -241,6 +258,24 @@ function round1(v) {
 
 let osmPending = null;
 let osmBusy = false;
+
+// Live-Push und Nachtrag schicken denselben POST an dieselbe Adresse und
+// unterscheiden sich nur in Rumpf und Inhaltstyp. Einmal gebaut, zweimal
+// benutzt -- der Parameterblock ist gestrippt gut 100 Byte schwer.
+function osmPost(ctype, body, cb) {
+  Shelly.call(
+    'HTTP.Request',
+    {
+      method: 'POST',
+      url: OSM.url,
+      headers: { 'Content-Type': ctype, Authorization: OSM.token },
+      body: body,
+      ssl_ca: OSM.ssl_ca,
+      timeout: OSM.timeout_s,
+    },
+    cb
+  );
+}
 
 function osmPublish() {
   if (!OSM.enable) return;
@@ -264,32 +299,21 @@ function osmPublish() {
 
 function osmSend(batch) {
   osmBusy = true;
-  Shelly.call(
-    'HTTP.Request',
-    {
-      method: 'POST',
-      url: OSM.url,
-      headers: { 'Content-Type': 'application/json', Authorization: OSM.token },
-      body: JSON.stringify(batch),
-      ssl_ca: OSM.ssl_ca,
-      timeout: OSM.timeout_s,
-    },
-    function (res, ec, em) {
+  osmPost('application/json', jstr(batch), function (res, ec, em) {
       osmBusy = false;
       if (ec !== 0) {
         print('openSenseMap: Aufruf fehlgeschlagen: ' + em);
       } else if (res.code < 200 || res.code > 299) {
-        print('openSenseMap: HTTP ' + JSON.stringify(res.code) + ' ' + res.body);
+        print('openSenseMap: HTTP ' + jstr(res.code) + ' ' + res.body);
       } else if (CFG.log) {
-        print('openSenseMap: ' + JSON.stringify(batch.length) + ' Wert(e) gesendet');
+        print('openSenseMap: ' + jstr(batch.length) + ' Wert(e) gesendet');
       }
       if (osmPending !== null) {
         let next = osmPending;
         osmPending = null;
         osmSend(next);
       }
-    }
-  );
+    });
 }
 
 // -------------------------------------------------------------------- KVS
@@ -309,7 +333,7 @@ function writeKvs(value) {
     if (ec !== 0) {
       print('KVS.Set ' + CFG.key + ' fehlgeschlagen: ' + em);
     } else if (CFG.log) {
-      print('KVS ' + CFG.key + ' = ' + JSON.stringify(value));
+      print('KVS ' + CFG.key + ' = ' + jstr(value));
     }
   });
 }
@@ -318,14 +342,15 @@ function writeKvs(value) {
 
 function arcEncode(tc, hc) {
   let v = tc * 256 + hc;
-  return A64.slice(Math.floor(v / 4096), Math.floor(v / 4096) + 1) +
-    A64.slice(Math.floor(v / 64) % 64, Math.floor(v / 64) % 64 + 1) +
+  let a = flo(v / 4096);
+  let b = flo(v / 64) % 64;
+  return A64.slice(a, a + 1) + A64.slice(b, b + 1) +
     A64.slice(v % 64, v % 64 + 1);
 }
 
 function arcTempCode(t) {
   if (t === null) return 1023;
-  let c = Math.floor((t + 50) * 10 + 0.5);
+  let c = flo((t + 50) * 10 + 0.5);
   if (c < 0) c = 0;
   if (c > 1022) c = 1022;
   return c;
@@ -333,7 +358,7 @@ function arcTempCode(t) {
 
 function arcHumCode(h) {
   if (h === null) return 255;
-  let c = Math.floor(h * 2 + 0.5);
+  let c = flo(h * 2 + 0.5);
   if (c < 0) c = 0;
   if (c > 200) c = 200;
   return c;
@@ -385,11 +410,11 @@ function arcNum(t) {
 // nur ganz am Ende steht, macht den Unterschied zwischen "abgerissen" und
 // "fertig" sichtbar.
 function arcSaveMeta() {
-  Script.storage.setItem(
+  stoSet(
     ARC.meta,
-    JSON.stringify(ARC.version) + '|' + JSON.stringify(ST.page) + '|' +
-      JSON.stringify(ST.start) + '|' + JSON.stringify(ST.count) + '|' +
-      JSON.stringify(ST.sent) + '|z'
+    jstr(ARC.version) + '|' + jstr(ST.page) + '|' +
+      jstr(ST.start) + '|' + jstr(ST.count) + '|' +
+      jstr(ST.sent) + '|z'
   );
 }
 
@@ -400,7 +425,7 @@ function arcSaveMeta() {
 // spaeter abzubrechen liesse einen halb geaenderten Zustand stehen, auf dem der
 // Rest des Skripts dann weiterrechnet.
 function arcLoadMeta() {
-  let raw = Script.storage.getItem(ARC.meta);
+  let raw = stoGet(ARC.meta);
   if (raw === null || raw === undefined) return false;
   let f = raw.split('|');
   if (f.length < 6 || f[5] !== 'z') return false;
@@ -420,7 +445,7 @@ function arcLoadMeta() {
 
 // Wieviel in dieser Seite steht, den wartenden Puffer eingerechnet.
 function arcFilled() {
-  return ST.count + Math.floor(ST.buf.length / 3);
+  return ST.count + flo(ST.buf.length / 3);
 }
 
 // Legt ab, was im RAM wartet. Der einzige Punkt, an dem der Flash beschrieben
@@ -428,10 +453,10 @@ function arcFilled() {
 function arcFlush() {
   if (ST.buf.length === 0) return;
   let key = ARC.slots[ST.page];
-  let old = Script.storage.getItem(key);
+  let old = stoGet(key);
   if (old === null || old === undefined) old = '';
-  Script.storage.setItem(key, old + ST.buf);
-  ST.count = ST.count + Math.floor(ST.buf.length / 3);
+  stoSet(key, old + ST.buf);
+  ST.count = ST.count + flo(ST.buf.length / 3);
   ST.buf = '';
   arcSaveMeta();
 }
@@ -446,12 +471,12 @@ function arcAppend(text, quarter) {
     ST.page = (ST.page + 1) % ARC.slots.length;
     ST.count = 0;
     ST.start = quarter;
-    Script.storage.setItem(ARC.slots[ST.page], '');
+    stoSet(ARC.slots[ST.page], '');
     arcSaveMeta();
   }
   if (arcFilled() === 0) ST.start = quarter;
   ST.buf = ST.buf + text;
-  if (Math.floor(ST.buf.length / 3) >= ARC.flush_every) arcFlush();
+  if (flo(ST.buf.length / 3) >= ARC.flush_every) arcFlush();
 }
 
 // Schreibt alles bis ausschliesslich der laufenden Viertelstunde weg. Was
@@ -493,7 +518,7 @@ function arcCloseUpTo(quarter) {
 // Sekunde nach Viertel nach eintrifft, als der Stand von Viertel nach abgelegt.
 function arcSample(now, t, h, at) {
   if (now <= 0) return;
-  let q = Math.floor(now / ARC.step_s);
+  let q = flo(now / ARC.step_s);
   if (!ST.ready) {
     if (arcLoadMeta()) {
       // Nach einem Neustart geht es dort weiter, wo die Seite aufhoert -- und
@@ -506,7 +531,7 @@ function arcSample(now, t, h, at) {
       ST.buf = '';
     } else {
       ST.page = 0; ST.start = q; ST.count = 0; ST.sent = q;
-      Script.storage.setItem(ARC.slots[0], '');
+      stoSet(ARC.slots[0], '');
       arcSaveMeta();
       ST.quarter = q;
     }
@@ -531,7 +556,7 @@ function update() {
   let newest = 0;
 
   for (let i = 0; i < MAP.length; i++) {
-    let st = Shelly.getComponentStatus(MAP[i].ckey);
+    let st = cstat(MAP[i].ckey);
     if (st === null) continue;
     if (typeof st.last_updated_ts === 'number' && st.last_updated_ts > newest) {
       newest = st.last_updated_ts;
@@ -666,8 +691,8 @@ function ensureOffsets(i) {
         // und das Script tut, was es vorher auch getan hat.
         print('Konnte ' + o.name + ' nicht anlegen: ' + em);
       } else {
-        FOUND.push({ name: o.name, ckey: NUMBER_PREFIX + JSON.stringify(res.id) });
-        print(o.name + ' angelegt als ' + NUMBER_PREFIX + JSON.stringify(res.id));
+        FOUND.push({ name: o.name, ckey: NUMBER_PREFIX + jstr(res.id) });
+        print(o.name + ' angelegt als ' + NUMBER_PREFIX + jstr(res.id));
       }
       ensureOffsets(i + 1);
     }
@@ -687,7 +712,7 @@ function finishInit() {
   }
   MAP = ordered;
 
-  print('Ueberwache ' + JSON.stringify(MAP.length) + ' Sensorwerte.');
+  print('Ueberwache ' + jstr(MAP.length) + ' Sensorwerte.');
   update();
   Timer.set(CFG.poll_ms, true, update);
 }
@@ -726,29 +751,29 @@ let bfNote = 'noch nichts versucht';
 let NL = String.fromCharCode(10);
 
 function two(n) {
-  return n < 10 ? '0' + JSON.stringify(n) : JSON.stringify(n);
+  return n < 10 ? '0' + jstr(n) : jstr(n);
 }
 
 // Unixsekunde als RFC 3339. mJS kennt kein Date, also von Hand -- die
 // Kalenderrechnung nach Hinnant, die ohne Sonderfaelle fuer Schaltjahre
 // auskommt, weil sie das Jahr im Maerz beginnen laesst.
 function isoTime(t) {
-  let days = Math.floor(t / 86400);
+  let days = flo(t / 86400);
   let secs = t - days * 86400;
   let z = days + 719468;
-  let era = Math.floor(z / 146097);
+  let era = flo(z / 146097);
   let doe = z - era * 146097;
-  let yoe = Math.floor(
-    (doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365
+  let yoe = flo(
+    (doe - flo(doe / 1460) + flo(doe / 36524) - flo(doe / 146096)) / 365
   );
   let y = yoe + era * 400;
-  let doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
-  let mp = Math.floor((5 * doy + 2) / 153);
-  let d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  let doy = doe - (365 * yoe + flo(yoe / 4) - flo(yoe / 100));
+  let mp = flo((5 * doy + 2) / 153);
+  let d = doy - flo((153 * mp + 2) / 5) + 1;
   let m = mp < 10 ? mp + 3 : mp - 9;
   if (m <= 2) y = y + 1;
-  return JSON.stringify(y) + '-' + two(m) + '-' + two(d) + 'T' +
-    two(Math.floor(secs / 3600)) + ':' + two(Math.floor(secs / 60) % 60) + ':' +
+  return jstr(y) + '-' + two(m) + '-' + two(d) + 'T' +
+    two(flo(secs / 3600)) + ':' + two(flo(secs / 60) % 60) + ':' +
     two(secs % 60) + 'Z';
 }
 
@@ -781,11 +806,11 @@ function bfSend() {
   for (let i = 0; i < count; i++) {
     let stamp = isoTime((ST.sent + i) * ARC.step_s);
     if (got.t[i] !== null && tid !== null) {
-      body = body + tid + ',' + JSON.stringify(got.t[i]) + ',' + stamp + NL;
+      body = body + tid + ',' + jstr(got.t[i]) + ',' + stamp + NL;
       lines = lines + 1;
     }
     if (got.h[i] !== null && hid !== null) {
-      body = body + hid + ',' + JSON.stringify(got.h[i]) + ',' + stamp + NL;
+      body = body + hid + ',' + jstr(got.h[i]) + ',' + stamp + NL;
       lines = lines + 1;
     }
   }
@@ -793,7 +818,7 @@ function bfSend() {
   // Nur Luecken in diesem Stueck: nichts zu senden, aber erledigt.
   if (lines === 0) {
     ST.sent = ST.sent + count;
-    bfNote = 'nur Luecken, ' + JSON.stringify(count) + ' uebersprungen';
+    bfNote = 'nur Luecken, ' + jstr(count) + ' uebersprungen';
     arcSaveMeta();
     return;
   }
@@ -801,17 +826,7 @@ function bfSend() {
   bfBusy = true;
   let advance = count;
   let first = body.slice(0, body.indexOf(NL));
-  Shelly.call(
-    'HTTP.Request',
-    {
-      method: 'POST',
-      url: OSM.url,
-      headers: { 'Content-Type': 'text/csv', Authorization: OSM.token },
-      body: body,
-      ssl_ca: OSM.ssl_ca,
-      timeout: OSM.timeout_s,
-    },
-    function (res, ec, em) {
+  osmPost('text/csv', body, function (res, ec, em) {
       bfBusy = false;
       if (ec !== 0) {
         bfNote = 'Aufruf fehlgeschlagen: ' + em;
@@ -825,28 +840,27 @@ function bfSend() {
         // oder gehoert von Hand behoben, und da waere Wegwerfen das Falsche.
         let hopeless = res.code === 400 || res.code === 422;
         bfFails = hopeless ? bfFails + 1 : 0;
-        bfNote = 'HTTP ' + JSON.stringify(res.code) + ' ' +
+        bfNote = 'HTTP ' + jstr(res.code) + ' ' +
           (res.body ? res.body.slice(0, 120) : '') +
-          ' [ab ' + JSON.stringify(ST.sent) + ', erste Zeile: ' + first + ']';
+          ' [ab ' + jstr(ST.sent) + ', erste Zeile: ' + first + ']';
         print('Nachtrag: ' + bfNote);
         if (hopeless && bfFails >= ARC.give_up) {
           ST.sent = ST.sent + advance;
           bfFails = 0;
           arcSaveMeta();
-          print('Nachtrag: ' + JSON.stringify(advance) + ' Felder aufgegeben.');
+          print('Nachtrag: ' + jstr(advance) + ' Felder aufgegeben.');
         }
         return;
       }
       bfFails = 0;
-      bfNote = JSON.stringify(lines) + ' Werte bestaetigt';
+      bfNote = jstr(lines) + ' Werte bestaetigt';
       ST.sent = ST.sent + advance;
       arcSaveMeta();
       if (CFG.log) {
-        print('Nachtrag: ' + JSON.stringify(lines) + ' Werte bis ' +
-          JSON.stringify(ST.sent) + ' bestaetigt');
+        print('Nachtrag: ' + jstr(lines) + ' Werte bis ' +
+          jstr(ST.sent) + ' bestaetigt');
       }
-    }
-  );
+    });
 }
 
 // ---------------------------------------------------------------- Auslesen
@@ -863,7 +877,7 @@ function arcOldest() {
   let n = ARC.slots.length;
   for (let i = 1; i <= n; i++) {
     let key = ARC.slots[(ST.page + i) % n];
-    let text = Script.storage.getItem(key);
+    let text = stoGet(key);
     if (text !== null && text !== undefined && text.length >= 3) {
       // Der Anfang dieser Seite laesst sich nicht speichern, ohne die
       // Verwaltung aufzublaehen -- er ergibt sich aus dem Abstand zur
@@ -887,11 +901,11 @@ function arcRead(from, count) {
     let page = ST.page;
     let pos = q - ST.start;
     if (back > 0) {
-      let steps = Math.floor((back + ARC.per_page - 1) / ARC.per_page);
+      let steps = flo((back + ARC.per_page - 1) / ARC.per_page);
       page = (ST.page - steps + n * 2) % n;
       pos = q - (ST.start - steps * ARC.per_page);
     }
-    let text = Script.storage.getItem(ARC.slots[page]);
+    let text = stoGet(ARC.slots[page]);
     if (text === null || text === undefined) text = '';
     // Die laufende Seite hat einen Schwanz im RAM, der noch nicht im Flash
     // steht. Wer ihn beim Lesen auslaesst, sieht die letzte halbe Stunde nicht.
@@ -904,7 +918,7 @@ function arcRead(from, count) {
     let b = A64.indexOf(text.slice(pos * 3 + 1, pos * 3 + 2));
     let c = A64.indexOf(text.slice(pos * 3 + 2, pos * 3 + 3));
     let v = a * 4096 + b * 64 + c;
-    let tc = Math.floor(v / 256);
+    let tc = flo(v / 256);
     let hc = v % 256;
     t.push(tc === 1023 ? null : (tc / 10) - 50);
     h.push(hc === 255 ? null : hc / 2);
@@ -936,31 +950,28 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
   // runs by reading it back from here, so it can say which of the two is the
   // newer instead of only whether they differ. Bumped by hand when a change is
   // worth pushing.
-  let head = '{"api":1,"code":1,"step_s":' + JSON.stringify(ARC.step_s) +
-    ',"oldest":' + JSON.stringify(arcOldest()) +
-    ',"next":' + JSON.stringify(ST.start + arcFilled()) +
-    ',"page":' + JSON.stringify(ST.page) +
-    ',"count":' + JSON.stringify(arcFilled()) +
-    ',"sent":' + JSON.stringify(ST.sent) +
-    ',"note":' + JSON.stringify(bfNote);
+  let head = '{"api":1,"code":1,"step_s":' + jstr(ARC.step_s) +
+    ',"oldest":' + jstr(arcOldest()) +
+    ',"next":' + jstr(ST.start + arcFilled()) +
+    ',"page":' + jstr(ST.page) +
+    ',"count":' + jstr(arcFilled()) +
+    ',"sent":' + jstr(ST.sent) +
+    ',"note":' + jstr(bfNote);
   if (from <= 0) {
     res.body = head + '}';
   } else {
     if (count <= 0 || count > 96) count = 96;
     let got = arcRead(from, count);
-    res.body = head + ',"from":' + JSON.stringify(from) +
-      ',"t":' + JSON.stringify(got.t) + ',"h":' + JSON.stringify(got.h) + '}';
+    res.body = head + ',"from":' + jstr(from) +
+      ',"t":' + jstr(got.t) + ',"h":' + jstr(got.h) + '}';
   }
   res.code = 200;
   res.headers = { 'Content-Type': 'application/json' };
   res.send();
 });
 
-let LAST_EV = null; // nur zur Diagnose via Script.Eval
-
 Shelly.addStatusHandler(function (ev) {
   if (ev.component.slice(0, SENSOR_PREFIX.length) !== SENSOR_PREFIX) return;
-  LAST_EV = ev;
   scheduleUpdate();
 });
 
