@@ -343,9 +343,12 @@ start-up peak.
 **Starting is the most expensive thing the script does.** The parse, the
 component walk and the first full update -- first backfill attempt included --
 all land inside one garbage-collection window: 15 KB peak with 11.3 KB of
-code. A second script on the same plug has to leave room for that moment, not
-for the steady state, and the most dangerous second is a script starting next
-to a neighbour that is already busy.
+code, before the backfill learned to sit the start out. Its first attempt now
+waits for the second update -- one minute, which the retry loop was going to
+spend anyway -- and the start-up peak fell to 13.3 KB. A second script on the
+same plug has to leave room for that moment, not for the steady state, and the
+most dangerous second is a script starting next to a neighbour that is already
+busy.
 
 **Transient churn beats standing structures.** Every `Script.storage.getItem`
 materialises the whole value on the heap, a kilobyte per archive page. Two

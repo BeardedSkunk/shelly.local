@@ -748,6 +748,13 @@ let bfBusy = false;
 let bfFails = 0;
 let bfNote = 'noch nichts versucht';
 
+// Der allererste Durchlauf nach dem Start wird ausgelassen. Parse,
+// Komponentenlauf und erster Komplettdurchlauf liegen in einem einzigen
+// GC-Fenster -- der Nachtrag mit seinem Seiten-Lesen obendrauf machte daraus
+// eine Startspitze von 15 KB. Eine Minute spaeter ist der Startschub
+// eingesammelt, und der naechste Poll holt den Nachtrag ohnehin.
+let bfWarm = false;
+
 // Ein Zeilenumbruch als Zeichen statt als Escape: der Minifier arbeitet
 // zeilenweise, und ein Escape im Quelltext hat ihn schon einmal gestolpert.
 let NL = String.fromCharCode(10);
@@ -790,6 +797,7 @@ function bfSensorId(name) {
 // werden uebersprungen, zaehlen aber als erledigt -- eine Luecke bleibt eine
 // Luecke, und sie noch einmal anzusehen wuerde den Zeiger nie weiterbringen.
 function bfSend() {
+  if (!bfWarm) { bfWarm = true; bfNote = 'wartet den Start ab'; return; }
   if (!OSM.enable) { bfNote = 'abgeschaltet'; return; }
   if (bfBusy) { bfNote = 'wartet auf die letzte Antwort'; return; }
   if (osmBusy) { bfNote = 'der Live-Push ist dran'; return; }
