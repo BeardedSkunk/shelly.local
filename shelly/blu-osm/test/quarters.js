@@ -555,6 +555,49 @@ test('after a wrap the oldest moves on, cache or no cache', () => {
   check('oldest is exactly ten full pages behind', view.oldest, view.next - view.count - 10 * per);
 });
 
+test('a fresh start leaves no old page behind to be mistaken for history', () => {
+  // The trap this closes: the meta record is rejected -- an older archive
+  // format, a write torn in half -- and the archive begins again. It used to
+  // clear only the page it was about to write, and the other ten kept their
+  // records. arcOldest walks the ring looking for a page with anything in it,
+  // finds them, and reports an oldest from twelve days back. The records are
+  // real readings; they simply sit on positions that now mean other hours, so
+  // a reader gets entirely plausible temperatures filed under the wrong time
+  // and nothing anywhere says so.
+  //
+  // Measured on the garden plug on 29.08.2026 against the app's own
+  // openSenseMap copy of the same hours: below the running page nought to
+  // thirty-seven per cent of the values matched, above it every one.
+  const first = createPlug();
+  const q = Math.floor(NOON / Q);
+  const per = first.api.ARC.per_page;
+  const pages = first.api.ARC.slots.length;
+  // Fill the whole ring twice over, so every slot holds real records.
+  for (let i = 0; i <= per * pages + 10; i++) sample(first, (q + i) * Q, 20, 50);
+  const full = Object.assign({}, first.storage);
+  let held = 0;
+  for (const key of first.api.ARC.slots) if ((full[key] || '').length > 0) held++;
+  check('every page really is holding something', held, pages);
+
+  // Same storage, but the meta record no longer parses -- which is exactly
+  // what an archive from an older format version looks like.
+  const again = createPlug();
+  Object.assign(again.storage, full);
+  again.storage[again.api.ARC.meta] = '1|0|0|0|0|z';
+  sample(again, (q + per * pages + 20) * Q, 18.0, 60.0);
+
+  // oldest and the start of the running page are now the same quarter, which
+  // is the whole claim: there is nothing behind the page any more.
+  const view = overview(again);
+  check('the archive claims nothing older than its own page', view.oldest, view.next - view.count);
+  let leftovers = 0;
+  for (const key of again.api.ARC.slots) {
+    if (key === again.api.ARC.slots[again.api.ST.page]) continue;
+    if ((again.storage[key] || '').length > 0) leftovers++;
+  }
+  check('and no page was left holding the old grid', leftovers, 0);
+});
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
 

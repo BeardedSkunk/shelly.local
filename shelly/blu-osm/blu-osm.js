@@ -534,7 +534,19 @@ function arcSample(now, t, h, at) {
       ST.buf = '';
     } else {
       ST.page = 0; ST.start = q; ST.count = 0; ST.sent = q;
-      stoSet(ARC.slots[0], '');
+      // Alle Seiten leeren, nicht nur die erste. Bisher blieben die anderen
+      // zehn liegen, und das war schlimmer als es aussieht: arcOldest laeuft
+      // den Ring ab, findet sie, haelt sie fuer gueltig und meldet ein oldest
+      // von vor zwoelf Tagen. Die Saetze darin sind echte Messwerte -- sie
+      // liegen nur auf Stellen, die jetzt andere Uhrzeiten bedeuten. Wer das
+      // liest, bekommt vollkommen plausible Temperaturen unter falschen
+      // Stunden, und niemand merkt es. Am 29.08.2026 auf der .24 gegen die
+      // openSenseMap-Kopie derselben Stunden nachgemessen: unterhalb der
+      // laufenden Seite stimmten 0 bis 37 Prozent, oberhalb 100.
+      //
+      // Elf Schreibvorgaenge, einmal im Leben eines Archivs. Danach sagt
+      // arcOldest die Wahrheit.
+      for (let i = 0; i < ARC.slots.length; i++) stoSet(ARC.slots[i], '');
       arcSaveMeta();
       ST.quarter = q;
       oldestKnown = null;
@@ -986,7 +998,16 @@ HTTPServer.registerEndpoint('quarters', function (req, res) {
   // runs by reading it back from here, so it can say which of the two is the
   // newer instead of only whether they differ. Bumped by hand when a change is
   // worth pushing.
-  let head = '{"api":1,"code":1,"step_s":' + jstr(ARC.step_s) +
+  //
+  // Es ist NICHT ARC.version. Die sagt, wie die Seiten im Speicher aufgebaut
+  // sind, und sie zu bewegen wirft das Archiv weg -- diese hier zu bewegen
+  // kostet nichts. Wer eine Aenderung ausrollen will, bewegt diese.
+  //
+  // 2 seit dem 29.08.2026: JSON.parse nicht mehr auf Ungeprueftes (ein
+  // "?from=x" von irgendwo im Netz war ein Ausschalter fuer dieses Skript),
+  // der Minutentakt-Churn im Nachtrag weg, und die alten Seiten werden beim
+  // Neuanfang geleert statt liegengelassen.
+  let head = '{"api":1,"code":2,"step_s":' + jstr(ARC.step_s) +
     ',"oldest":' + jstr(arcOldest()) +
     ',"next":' + jstr(ST.start + arcFilled()) +
     ',"page":' + jstr(ST.page) +
