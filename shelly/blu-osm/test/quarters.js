@@ -598,6 +598,30 @@ test('a fresh start leaves no old page behind to be mistaken for history', () =>
   check('and no page was left holding the old grid', leftovers, 0);
 });
 
+test('the copy the app ships is the script in this directory', () => {
+  // The one failure this whole file cannot otherwise see. The app does not
+  // bundle blu-osm.js; it bundles the squeezed copy under app/src/main/assets,
+  // which is generated and deliberately not checked in. Nothing in git can go
+  // stale, so nothing in git can warn either -- and on 29.08.2026 that copy
+  // turned out to be seventeen days old, from before the JSON.parse fix. An
+  // app built from it would have written that script onto a plug and then,
+  // comparing its own unchanged version number against the plug's, reported
+  // everything as current.
+  const { build, TARGET, fill, MAX_SCRIPT_BYTES } = require('../tools/asset');
+  const fs = require('fs');
+  const fresh = build();
+  check('the app carries a copy of the script', fs.existsSync(TARGET), true);
+  check(
+    'and it is up to date -- run node tools/asset.js if this fails',
+    fs.existsSync(TARGET) && fs.readFileSync(TARGET, 'utf8') === fresh,
+    true
+  );
+  // Filled in, because that is the length a plug has to accept: the holes are
+  // shorter than the box id and token that replace them.
+  check('and it still fits a flash slot once filled in',
+    Buffer.byteLength(fill(fresh)) <= MAX_SCRIPT_BYTES, true);
+});
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
 
