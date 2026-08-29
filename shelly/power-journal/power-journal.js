@@ -1442,7 +1442,11 @@ function httpIndex() {
   // itself about what it last sent, which said nothing at all about a plug
   // somebody had flashed by hand -- and nothing about which of the two was the
   // newer.
-  let out = '{"api":2,"code":8,"version":' + VERSION + ',"generation":' + ST.meta.g +
+  // 9 seit dem 29.08.2026: der Lesepfad baute seine Antwort in Ketten aus
+  // ganzen Zeichenketten und starb auf der Solardose an out_of_memory, mitten
+  // in einer Antwort. Das ist genau der Fall, fuer den diese Zahl da ist --
+  // am Archivformat aendert sich nichts, an der Ueberlebensfaehigkeit alles.
+  let out = '{"api":2,"code":9,"version":' + VERSION + ',"generation":' + ST.meta.g +
     ',"unixtime":' + ST.lastUnix + ',"utc_offset":' + ST.offset +
     ',"attic_bytes":' + ST.meta.attic + ',"tiers":[';
   // A coarse tier's most recent stretch is not on a page yet: the bucket that
