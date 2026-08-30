@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">pearlnode</string>
+    <string name="app_name">shelly.local</string>
     <string name="widget_description">Basculer les appareils Shelly depuis l\'écran d\'accueil</string>
     <string name="widget_device_description">Contrôler un appareil Shelly depuis l\'écran d\'accueil</string>
 

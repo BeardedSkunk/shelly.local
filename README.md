@@ -90,8 +90,8 @@ A local-only Android app for controlling Shelly smart home devices. No cloud acc
 ## Architecture overview
 
 ```
-app/src/main/java/com/pearlnode/
-├── PearlnodeApp.kt           # Application: lazy singletons
+app/src/main/java/shelly/local/
+├── ShellyLocalApp.kt           # Application: lazy singletons
 ├── MainActivity.kt
 ├── model/                    # Pure data: Device, DeviceState, Schedule, FirmwareInfo
 ├── data/

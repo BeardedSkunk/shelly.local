@@ -10,6 +10,6 @@
     android:updatePeriodMillis="1800000"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
-    android:configure="com.pearlnode.ui.widget.ShellyDeviceWidgetConfigActivity"
+    android:configure="shelly.local.ui.widget.ShellyDeviceWidgetConfigActivity"
     android:description="@string/widget_device_description"
     tools:targetApi="31" />

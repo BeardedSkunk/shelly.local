@@ -25,17 +25,17 @@ This document covers the internal architecture, data flows, API layer design, an
 
 ## 1. Application entry points
 
-**`PearlnodeApp`** (`PearlnodeApp.kt`) is the `Application` subclass. It owns lazy singletons that are shared across the process:
+**`ShellyLocalApp`** (`ShellyLocalApp.kt`) is the `Application` subclass. It owns lazy singletons that are shared across the process:
 
 ```
-PearlnodeApp
+ShellyLocalApp
  ├── repository: DeviceRepository        # device DB + API calls
  ├── firmwareRepository: FirmwareRepository
  ├── alarmSyncConfigStore: AlarmSyncConfigStore
  └── alarmSyncRepository: AlarmSyncRepository
 ```
 
-These are accessed from ViewModels and from `AlarmSyncWorker` via `applicationContext as PearlnodeApp`.
+These are accessed from ViewModels and from `AlarmSyncWorker` via `applicationContext as ShellyLocalApp`.
 
 **`MainActivity`** creates the `AppNavHost` Composable, which owns the `NavController`.
 
@@ -44,8 +44,8 @@ These are accessed from ViewModels and from `AlarmSyncWorker` via `applicationCo
 ## 2. Package structure
 
 ```
-com.pearlnode
-├── PearlnodeApp.kt
+shelly.local
+├── ShellyLocalApp.kt
 ├── MainActivity.kt
 ├── model/
 │   ├── Device.kt             # Device entity, DeviceType enum (60+ models), ShellyGeneration
@@ -460,7 +460,7 @@ Key settings in `app/build.gradle.kts`:
 | `compileSdk` | 36 |
 | `targetSdk` | 35 |
 | `minSdk` | 26 (Android 8.0) |
-| `applicationId` | `com.pearlnode` |
+| `applicationId` | `shelly.local` |
 | Code shrinking | ProGuard enabled in `release` builds |
 
 Main dependencies and their roles:
@@ -523,11 +523,11 @@ Or to re-sign the current version without bumping:
 ./release.sh --skip-bump
 ```
 
-The script will prompt for the keystore password, then produce `pearlnode-v<version>.apk`.
+The script will prompt for the keystore password, then produce `shelly.local-v<version>.apk`.
 
 **After the script completes:**
 ```bash
-gh release create v<version> pearlnode-v<version>.apk \
+gh release create v<version> shelly.local-v<version>.apk \
   --title "shelly.local <version>" \
   --notes "What changed in this release."
 ```

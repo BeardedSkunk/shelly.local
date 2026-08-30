@@ -17,13 +17,15 @@ JSON.parse-Falle, BLU-Protokoll). Diese Landkarte wiederholt das nicht.
   in der LICENSE, nichts geht upstream zurück; ihr Remote heißt `upstream` und dient nur dem
   Hereinholen. Der Fork ist ein echter GitHub-Fork — **öffentlich** unter
   `github.com/BeardedSkunk/shelly.local`.
-- **Umbenennung Phase 1 (30.08.2026):** sichtbarer Name, Repo, Ordner heißen `shelly.local`.
-  **Package/`applicationId` sind weiterhin `com.pearlnode`** — Phase 2 steht aus und braucht eine
-  Settings-Mitnahme für die Geräte (globales Memory `package-umbenennungen-mittelfristig`).
-  Klassennamen wie `PearlnodeApp` bleiben bis dahin.
+- **Umbenennung komplett (30.08.2026):** Name, Repo, Ordner **und** Package heißen
+  `shelly.local` — `applicationId = "shelly.local"`, Quellbaum `app/src/main/java/shelly/local/`,
+  die Application-Klasse heißt `ShellyLocalApp`. Damit ist die neue App für Android eine
+  **andere App** als das alte `com.pearlnode`: beide laufen nebeneinander, bis die Einstellungen
+  von Hand übernommen sind, dann fliegt die alte runter. Es gibt keinen Datenimport — bewusst so
+  entschieden (Neu-Einrichten war ausdrücklich in Ordnung).
 - **Debug installiert sich NEBEN Release**: `applicationIdSuffix = ".debug"`, eigenes Icon,
   eigener Anzeigename. Absicht — ein Debug-Install darf die produktive App samt Geräteliste nicht
-  verdrängen. Auf dem Pixel laufen deshalb **beide**.
+  verdrängen.
 - `metadata/com.pearlnode.yml` ist **Vandas F-Droid-Datei** (ihr Name, ihr Repo) — Upstream-Erbe,
   nicht anfassen, auch nicht in Phase 2.
 - `release.sh` signiert mit `$HOME/pearlnode.p12`, Key-Alias `pearlnode` — Pfad und Alias zeigen
@@ -150,6 +152,8 @@ gedeckelt, `reply_chars`-Budget, Eigenschafts-Wrapper), davor die Sensor-Strecke
 (blu-osm, Nachtrag, Offsets, Sensor-Screen), davor das Energie-Journal samt Pyramide, Dachboden
 und Preisrechnung, davor KVS-Karte und Update-Fixes auf Vandas Basis.
 
-**Offen:** Phase 2 der Umbenennung (Package + Klassen, mit Settings-Mitnahme) · Lichtschwellen-
-Verhalten des BLU klären · die vier Tage Solar-Sync-Ausfall von Ende August sind nachgetragen,
-die Ursachenkette steht in `c7e43e8`/`1fe4a8a` — bei erneutem Stillstand zuerst dort nachlesen.
+**Offen:** die alten `com.pearlnode`-Apps auf Pixel (Release + Debug) und F101 (Debug) bleiben
+installiert, bis die neue App dort eingerichtet ist — dann deinstallieren; das neue Release muss
+Sascha selbst signieren (`release.sh`, Keystore-Passwort) · Lichtschwellen-Verhalten des BLU
+klären · die vier Tage Solar-Sync-Ausfall von Ende August sind nachgetragen, die Ursachenkette
+steht in `c7e43e8`/`1fe4a8a` — bei erneutem Stillstand zuerst dort nachlesen.

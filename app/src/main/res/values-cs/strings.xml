@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">pearlnode</string>
+    <string name="app_name">shelly.local</string>
     <string name="widget_description">Přepínání zařízení Shelly z domovské obrazovky</string>
     <string name="widget_device_description">Ovládání jednoho zařízení Shelly z domovské obrazovky</string>
 

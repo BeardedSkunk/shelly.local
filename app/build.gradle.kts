@@ -6,12 +6,12 @@ plugins {
 }
 
 android {
-    namespace = "com.pearlnode"
+    namespace = "shelly.local"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "com.pearlnode"
+        applicationId = "shelly.local"
         minSdk = 26
         targetSdk = 35
         versionCode = 7
