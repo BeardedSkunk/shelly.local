@@ -38,3 +38,9 @@ pubkey.pem
 
 # Profiling
 *.hprof
+
+# Claude-Tooling (lokal, nie committen)
+CLAUDE.local.md
+.serena/
+.codegraph/
+.claude/
