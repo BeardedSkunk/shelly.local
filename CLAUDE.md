@@ -128,8 +128,10 @@ diese Box — ihr zweiter Rückfallweg ist das `quarters`-Archiv dieses Skripts 
 - Commit-Messages: anfangs Englisch im Upstream-Ton, seit der Sensor-Arbeit Deutsch mit
   erzählendem Titel („Die Ausnahme war das Einzige, was nicht im Protokoll stand"). Beides ist
   Bestand; aktuell wird Deutsch geschrieben. Committen und pushen laufend, `main` direkt.
-- `versionCode`/`versionName` (aktuell 7 / 1.6) bei ausgelieferten App-Ständen hochzählen;
-  die Skripte zählen ihren eigenen `code`-Zähler.
+- **Jeder Commit, der die App verändert, zählt `versionCode` (+1) und mindestens die dritte
+  Stelle des `versionName` hoch** — größere Umbauten entsprechend mehr (globales Memory
+  `versionsnummer-pro-commit`; die Package-Umbenennung ohne Sprung war der Anlassfall). Reine
+  Doku-Commits dürfen die Nummer stehen lassen. Die Skripte zählen ihren eigenen `code`-Zähler.
 - Keine neuen Laufzeit-Abhängigkeiten ohne Anlass — die Liste in `app/build.gradle.kts` ist
   bewusst kurz und direkt (kein Version-Catalog).
 
