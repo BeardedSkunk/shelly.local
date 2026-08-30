@@ -1,4 +1,4 @@
-Pearlnode lets you control Shelly smart home devices directly over your local Wi-Fi network. No cloud account, no internet connection, no data leaving your home.
+shelly.local lets you control Shelly smart home devices directly over your local Wi-Fi network. No cloud account, no internet connection, no data leaving your home.
 
 FEATURES
 

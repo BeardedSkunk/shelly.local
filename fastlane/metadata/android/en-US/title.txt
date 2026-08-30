@@ -1,1 +1,1 @@
-Pearlnode
+shelly.local

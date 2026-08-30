@@ -81,7 +81,7 @@ pass `--with-attic`.
 
 ## The app
 
-Pearlnode installs and reads this itself. Tapping the watts on a metering Gen2
+shelly.local installs and reads this itself. Tapping the watts on a metering Gen2
 device opens a page whose first card is a single switch: on installs the
 script, creates the attic and starts it; off stops the script and clears its
 enable flag so a reboot does not bring it back, and touches neither the code

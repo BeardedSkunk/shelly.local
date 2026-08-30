@@ -528,7 +528,7 @@ The script will prompt for the keystore password, then produce `pearlnode-v<vers
 **After the script completes:**
 ```bash
 gh release create v<version> pearlnode-v<version>.apk \
-  --title "Pearlnode <version>" \
+  --title "shelly.local <version>" \
   --notes "What changed in this release."
 ```
 

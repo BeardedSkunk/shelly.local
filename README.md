@@ -1,10 +1,15 @@
 <p align="center">
-  <img src="assets/icon.png" width="128" alt="Pearlnode icon">
+  <img src="assets/icon.png" width="128" alt="shelly.local icon">
 </p>
 
-# Pearlnode
+# shelly.local
 
 A local-only Android app for controlling Shelly smart home devices. No cloud account or internet required.
+
+> **Note:** This project was renamed from **Pearlnode**. It is a heavily extended fork of
+> [vandah/pearlnode](https://github.com/vandah/pearlnode) by Vanda Hendrychová — thanks for the
+> excellent foundation. Not affiliated with or endorsed by Shelly Group / Allterco Robotics;
+> the name "Shelly" is used descriptively, for the devices this app talks to.
 
 ## Features
 

@@ -52,7 +52,7 @@ cd "$SCRIPT_DIR"
 ./gradlew assembleRelease
 
 UNSIGNED="$SCRIPT_DIR/app/build/outputs/apk/release/app-release-unsigned.apk"
-SIGNED="$SCRIPT_DIR/pearlnode-v$NEW_NAME.apk"
+SIGNED="$SCRIPT_DIR/shelly.local-v$NEW_NAME.apk"
 
 read -rsp "Keystore password: " KS_PASS
 echo ""

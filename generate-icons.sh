@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SVG="$SCRIPT_DIR/pearlnode-icon.svg"
+SVG="$SCRIPT_DIR/shelly.local-icon.svg"
 RES="$SCRIPT_DIR/app/src/main/res"
 FDROID="$SCRIPT_DIR/fastlane/metadata/android/en-US/images"
 

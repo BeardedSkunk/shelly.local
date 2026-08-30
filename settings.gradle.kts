@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Pearlnode"
+rootProject.name = "shelly.local"
 include(":app")

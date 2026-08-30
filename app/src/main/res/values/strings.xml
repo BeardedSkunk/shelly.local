@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Pearlnode</string>
+    <string name="app_name">shelly.local</string>
     <string name="widget_description">Toggle Shelly devices from your home screen</string>
     <string name="widget_device_description">Control a single Shelly device from your home screen</string>
     <string name="widget_tap_to_configure">Tap to configure</string>
