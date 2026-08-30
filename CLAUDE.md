@@ -20,9 +20,14 @@ JSON.parse-Falle, BLU-Protokoll). Diese Landkarte wiederholt das nicht.
 - **Umbenennung komplett (30.08.2026):** Name, Repo, Ordner **und** Package heißen
   `shelly.local` — `applicationId = "shelly.local"`, Quellbaum `app/src/main/java/shelly/local/`,
   die Application-Klasse heißt `ShellyLocalApp`. Damit ist die neue App für Android eine
-  **andere App** als das alte `com.pearlnode`: beide laufen nebeneinander, bis die Einstellungen
-  von Hand übernommen sind, dann fliegt die alte runter. Es gibt keinen Datenimport — bewusst so
-  entschieden (Neu-Einrichten war ausdrücklich in Ordnung).
+  **andere App** als das alte `com.pearlnode` — die Daten wurden deshalb am 30.08.2026 **per
+  `run-as` umgezogen** (DB-Trio `shelly.db`+`-wal`+`-shm` und die Klartext-Prefs, byte-identisch
+  verifiziert; 13 Geräte, 15 436 Power-Blöcke, 137 908 Sensor-Blöcke). Das Rezept taugt als
+  Vorlage für die videoapp-/HomeShare-Umbenennungen: Quelle einfrieren (`am force-stop`), Trio
+  per `exec-out`/`exec-in` bewegen, md5 auf beiden Seiten, Zielsystem einmal starten und die
+  Zeilen zählen. **Nicht mitnehmbar:** `shelly_credentials.xml` — EncryptedSharedPreferences
+  hängen am Android-Keystore der jeweiligen App; Geräte-Passwörter müssen einmal neu eingegeben
+  werden.
 - **Debug installiert sich NEBEN Release**: `applicationIdSuffix = ".debug"`, eigenes Icon,
   eigener Anzeigename. Absicht — ein Debug-Install darf die produktive App samt Geräteliste nicht
   verdrängen.
@@ -55,8 +60,11 @@ node shelly/blu-osm/test/quarters.js
   vergessenes Regenerieren fällt also durch statt auszuliefern. `assets/blu-osm.js` ist eine
   Kopie von `shelly/blu-osm/blu-osm.js` — von Hand im Gleichlauf halten, die App merkt eine alte
   Fassung inzwischen selbst (Commit `8369610`).
-- Release: `./release.sh` (Versionsabfrage, Build, zipalign-erhaltendes Signieren — Vandas
-  Reproducible-Build-Kette, v1-Signing bewusst aus). Ausgabe `shelly.local-v<version>.apk`.
+- `release.sh` ist **Vandas F-Droid-/Release-Kette** (Keystore `~/pearlnode.p12` — existiert auf
+  diesem Rechner nicht) und wurde hier **nie benutzt**. **Der Alltag läuft auf Debug-Builds**:
+  `assembleDebug`, per adb installiert, wie bei den Geschwisterprojekten. Das nicht-debuggable
+  `com.pearlnode` v1.0 auf dem Pixel ist Vandas Original-Release vom Juli — ein Fossil ohne
+  Journal-Daten.
 
 ## Die drei Schichten
 
@@ -152,8 +160,9 @@ gedeckelt, `reply_chars`-Budget, Eigenschafts-Wrapper), davor die Sensor-Strecke
 (blu-osm, Nachtrag, Offsets, Sensor-Screen), davor das Energie-Journal samt Pyramide, Dachboden
 und Preisrechnung, davor KVS-Karte und Update-Fixes auf Vandas Basis.
 
-**Offen:** die alten `com.pearlnode`-Apps auf Pixel (Release + Debug) und F101 (Debug) bleiben
-installiert, bis die neue App dort eingerichtet ist — dann deinstallieren; das neue Release muss
-Sascha selbst signieren (`release.sh`, Keystore-Passwort) · Lichtschwellen-Verhalten des BLU
-klären · die vier Tage Solar-Sync-Ausfall von Ende August sind nachgetragen, die Ursachenkette
-steht in `c7e43e8`/`1fe4a8a` — bei erneutem Stillstand zuerst dort nachlesen.
+**Offen:** die alten `com.pearlnode`-Apps (Pixel: Vanda-Fossil v1.0 + das bisherige
+Debug-Arbeitstier, eingefroren per force-stop; F101: leeres Debug) können deinstalliert werden,
+sobald Sascha die neue App geprüft und die Geräte-Passwörter neu eingegeben hat ·
+Lichtschwellen-Verhalten des BLU klären · die vier Tage Solar-Sync-Ausfall von Ende August sind
+nachgetragen, die Ursachenkette steht in `c7e43e8`/`1fe4a8a` — bei erneutem Stillstand zuerst
+dort nachlesen.
